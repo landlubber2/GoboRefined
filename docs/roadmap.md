@@ -35,7 +35,10 @@ The order puts cheap, visible, low-risk work first and anything that can lose da
 - A fuller icon set so apps and the launcher stop falling back to a generic icon.
 - Apply both to the desktop, GTK apps and the terminal.
 
-**Checkpoint 2 → ISO 0.3.** Risk: low. Kept separate from stage 3 so a font/icon problem is easy to spot.
+**Keep this stage small (user request, 2026-11-13):** one UI font, one monospace font, one icon set, applied
+once. No comparing alternatives, no fine-tuning. If it is not clearly better at the first try, ship what works.
+
+**Checkpoint 2 → ISO 0.3.** Risk: low. May be folded into the stage 3 ISO to save a build-and-test round.
 
 ## Stage 3 — Missing programs (compiled into the ISO)
 
