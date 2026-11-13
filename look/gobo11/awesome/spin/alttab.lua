@@ -231,7 +231,7 @@ local function draw_icon_and_title(cr, c, w, h, text_color)
    local iconbox_height = iconbox_width
 
    -- Titles
-   cr:select_font_face("DejaVu Sans", "sans", "regular", "normal")
+   cr:select_font_face("Inter", "sans", "regular", "normal")
    cr:set_font_face(cr:get_font_face())
    cr:set_font_size(settings.preview_box.text.font_size)
    

@@ -10,3 +10,4 @@
 /vm/serve/lab-answers.env
 /vm/serve/*.tgz
 /vm/serve/build-iso.sh
+/spin/programs/*.tgz

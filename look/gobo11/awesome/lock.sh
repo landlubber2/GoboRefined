@@ -1,7 +1,7 @@
 #!/bin/sh
 # Lock the screen with XSecureLock, styled to match the desktop.
 # Used by the power menu, Mod4+L, and automatically after a while without input.
-export XSECURELOCK_FONT="DejaVu Sans:size=13"
+export XSECURELOCK_FONT="Inter:size=13"
 export XSECURELOCK_BACKGROUND_COLOR="#0b1630"
 export XSECURELOCK_AUTH_BACKGROUND_COLOR="#0b1630"
 export XSECURELOCK_AUTH_FOREGROUND_COLOR="#ffffff"

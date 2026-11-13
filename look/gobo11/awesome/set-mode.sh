@@ -8,6 +8,7 @@ echo "$mode" > "$dir/mode"
 gtk="$HOME/.config/gtk-3.0/settings.ini"
 if [ -f "$gtk" ]
 then
-   [ "$mode" = dark ] && dark=1 || dark=0
-   sed -i "s/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=$dark/" "$gtk"
+   [ "$mode" = dark ] && dark=1 icons=Papirus-Dark || dark=0 icons=Papirus-Light
+   sed -i -e "s/^gtk-application-prefer-dark-theme=.*/gtk-application-prefer-dark-theme=$dark/" \
+          -e "s/^gtk-icon-theme-name=Papirus.*/gtk-icon-theme-name=$icons/" "$gtk"
 fi

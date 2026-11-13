@@ -66,9 +66,14 @@ end
 
 -- Fonts and base colours -----------------------------------------------
 
-theme.font       = "DejaVu Sans 10"
-theme.font_small = "DejaVu Sans 8"
-theme.font_title = "DejaVu Sans 9"
+theme.font       = "Inter 10"
+theme.font_small = "Inter 8"
+theme.font_title = "Inter Medium 9"
+theme.font_mono  = "JetBrains Mono 10"
+
+-- Application icons (menu, launcher, taskbar) come from Papirus; the
+-- Dark/Light variants differ only in their symbolic and panel icons.
+theme.icon_theme = MODE == "light" and "Papirus-Light" or "Papirus-Dark"
 
 theme.fg_normal  = p.fg
 theme.fg_focus   = p.fg
@@ -251,8 +256,8 @@ theme.hotkeys_fg           = p.fg
 theme.hotkeys_modifiers_fg = p.fg_dim
 theme.hotkeys_border_color = p.border
 theme.hotkeys_shape        = rounded(9)
-theme.hotkeys_font         = "DejaVu Sans Mono Bold 9"
-theme.hotkeys_description_font = "DejaVu Sans 9"
+theme.hotkeys_font         = "JetBrains Mono Bold 9"
+theme.hotkeys_description_font = "Inter 9"
 
 theme.tooltip_bg = p.surface2
 theme.tooltip_fg = p.fg

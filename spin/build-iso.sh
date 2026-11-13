@@ -8,12 +8,14 @@
 #   - /Data/Build/rootfs            unpacked stock gobolinux-live.squashfs (unsquashfs)
 #   - /Data/Build/xorriso-inst      GNU xorriso built from source
 #   - /Programs/XRandR-Tool         xrandr built from source
+#   - /Programs/Inter, /Programs/JetBrains-Mono, /Programs/Papirus-Icon-Theme
+#                                   fonts and icons (snapshot "iso-build-env-3"; tarballs in spin/programs/)
 # and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz and welcome.src.
 set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=0.2
+VERSION=0.3
 OUT=$B/GoboLinux-017.01-spin-$VERSION.iso
 cd $B
 
@@ -25,7 +27,10 @@ bash -n gobo-install
 rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 
 echo "== adding programs to the live image"
-rm -rf $R/Programs/XRandR-Tool && cp -a /Programs/XRandR-Tool $R/Programs/
+EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme"
+for prog in $EXTRA
+do rm -rf $R/Programs/$prog && cp -a /Programs/$prog $R/Programs/
+done
 P=$R/Programs/GoboSpin
 rm -rf $P && mkdir -p $P/1.0/bin $P/1.0/share $P/1.0/Resources
 install -m 755 gobo-install $P/1.0/bin/gobo-install
@@ -34,8 +39,15 @@ echo "Thin installer and desktop look of the modernized GoboLinux spin." > $P/1.
 echo "$VERSION" > $P/1.0/share/spin-version
 ln -sfn 1.0 $P/Current
 mount -t proc proc $R/proc
-chroot $R SymlinkProgram XRandR-Tool | tail -n 1
+for prog in $EXTRA
+do chroot $R SymlinkProgram $prog | tail -n 1
+done
 chroot $R SymlinkProgram GoboSpin | tail -n 1
+echo "== refreshing the font cache and the icon caches"
+chroot $R fc-cache -f > /dev/null
+for t in Papirus Papirus-Dark Papirus-Light
+do chroot $R gtk-update-icon-cache -q -f /System/Index/share/icons/$t
+done
 umount $R/proc
 
 echo "== look for the live user and for new users (both are copied from the skeleton)"

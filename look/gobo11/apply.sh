@@ -16,7 +16,8 @@ mkdir -p "$home/.config/awesome" "$home/.config/gtk-3.0"
 cp -r "$here/awesome/." "$home/.config/awesome/"
 cp "$here/picom.conf" "$home/.config/picom.conf"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
-
+mkdir -p "$home/.config/fontconfig"
+cp "$here/fontconfig/fonts.conf" "$home/.config/fontconfig/fonts.conf"
 # Keep the keyboard layout the user already had unless one is given.
 if [ -z "$layout" ] && [ -e "$home/.xinitrc" ]
 then layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' "$home/.xinitrc" | head -n 1)
@@ -24,7 +25,15 @@ fi
 sed "s|^setxkbmap .*|setxkbmap -model pc104 -layout ${layout:-us}|" "$here/xinitrc" > "$home/.xinitrc"
 
 touch "$home/.Xresources"
-if ! grep -q 'gobo11 look' "$home/.Xresources"
-then cat "$here/Xresources.append" >> "$home/.Xresources"
+# Replace an older copy of the gobo11 block (it runs from its first line to
+# "end of gobo11 look", or to the end of the file for blocks written before
+# that marker existed), then append the current one.
+if grep -q 'gobo11 look (appended' "$home/.Xresources"
+then
+   if grep -q 'end of gobo11 look' "$home/.Xresources"
+   then sed -i '/gobo11 look (appended/,/end of gobo11 look/d' "$home/.Xresources"
+   else sed -i '/gobo11 look (appended/,$d' "$home/.Xresources"
+   fi
 fi
+cat "$here/Xresources.append" >> "$home/.Xresources"
 echo "gobo11 look applied to $home (log out and back in to see all of it)"

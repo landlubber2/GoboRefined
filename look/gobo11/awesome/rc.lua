@@ -210,7 +210,7 @@ end
 local mymainmenu = awful.menu({
    items = awful.util.table.join({
       { "Search applications...", function() launcher.show() end, beautiful.search_icon },
-      { "Terminal", terminal, beautiful.default_app_icon },
+      { "Terminal", terminal, menubar.utils.lookup_icon("utilities-terminal") or beautiful.default_app_icon },
    }),
    theme = { width = beautiful.menu_width, height = beautiful.menu_height },
 })
@@ -326,8 +326,25 @@ mytasklist.buttons = awful.util.table.join(
 
 -- One taskbar button: the window's icon, with a short accent line under it
 -- (longer for the focused window).
+-- Windows without an icon of their own (urxvt, xterm, ...) get one from the
+-- icon theme by window class, so they do not all show the generic icon.
+local class_icon_alias = { urxvt = "utilities-terminal", xterm = "utilities-terminal", zenity = "gnome-info" }
+local class_icons = {}
+local function client_icon(c)
+   if c.icon then return c.icon end
+   local class = (c.class or ""):lower()
+   if class_icons[class] == nil then
+      local names = {}
+      for _, n in ipairs({ class_icon_alias[class] or "", class, (c.instance or ""):lower() }) do
+         if n ~= "" then table.insert(names, n) end
+      end
+      class_icons[class] = find_icon((table.unpack or unpack)(names))
+   end
+   return class_icons[class]
+end
+
 local function update_task(self, c)
-   self:get_children_by_id("icon")[1].image = c.icon or beautiful.default_app_icon
+   self:get_children_by_id("icon")[1].image = client_icon(c)
    local line = self:get_children_by_id("line")[1]
    line.forced_width = (c == client.focus) and 16 or 6
    line.color = c.minimized and "#00000000" or (c == client.focus and beautiful.accent or beautiful.fg_normal .. "80")

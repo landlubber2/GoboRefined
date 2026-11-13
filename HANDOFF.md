@@ -149,3 +149,17 @@ VM snapshots now: `not even installed`, `iso-build-env-2` (build env), `iso-fina
 deleted), `iso-0.2-installed-efi` (**current**, powered off).
 
 Next: user tries ISO 0.2 on the real PC (checkpoint 1). Then stages 2+3 together (fonts/icons kept minimal).
+
+## Stage 2 (fonts and icons) done in the look and build VM — ISO 0.3 not built yet (2026-11-13)
+
+- Fonts: **Inter 4.1** (UI, static TTFs) and **JetBrains Mono 2.304** (terminal, hotkeys). Icons: **Papirus 20260801**,
+  trimmed to sizes 16–64 (no @2x/HiDPI, 8, 18, 42, 84, 96, 128); Papirus-Dark/Papirus-Light follow the dark/light mode.
+- Packaged as `/Programs/Inter/4.1`, `/Programs/JetBrains-Mono/2.304`, `/Programs/Papirus-Icon-Theme/20260801` in the
+  build VM; tarballs in `spin/programs/` (note: `spin/programs/*.tgz` is **not** gitignored; Papirus is 37 MB).
+- `spin/build-iso.sh`: VERSION=0.3, copies + `SymlinkProgram`s the new programs, runs `fc-cache` and
+  `gtk-update-icon-cache` in the rootfs. **Rebuild from snapshot `iso-build-env-3`** (has the programs), not -2.
+- Look: theme fonts, `icon_theme`, taskbar icon fallback by window class, GTK settings, `fontconfig/fonts.conf`
+  (sans-serif -> Inter, monospace -> JetBrains Mono), urxvt font + Ctrl+Alt+0..9 sizes, `apply.sh` now replaces an
+  older `.Xresources` block. Screenshots `docs/screenshots/0.3-*`. Inventory for stage 3: `docs/stage3-inventory.md`.
+- Snapshot `iso-build-env-3` was taken **with the VM powered off**. A live snapshot (`--live`) of this VM never
+  finished (state file kept growing) and the VM had to be killed; do not take live snapshots here.
