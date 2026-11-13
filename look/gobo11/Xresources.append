@@ -1,0 +1,38 @@
+
+! ---- gobo11 look (appended by apply.sh; later lines override earlier ones) ----
+Xcursor.theme: Adwaita
+Xcursor.size: 24
+Xft.antialias: 1
+Xft.hinting: 1
+Xft.hintstyle: hintslight
+Xft.rgba: rgb
+URxvt.font: xft:DejaVu Sans Mono:size=11
+URxvt.boldFont: xft:DejaVu Sans Mono:bold:size=11
+URxvt.italicFont: xft:DejaVu Sans Mono:italic:size=11
+URxvt.boldItalicFont: xft:DejaVu Sans Mono:bold:italic:size=11
+URxvt.letterSpace: -1
+URxvt.depth: 32
+URxvt.background: rgba:0c0c/0c0c/0c0c/f2f2
+URxvt.foreground: #cccccc
+URxvt.cursorColor: #ffffff
+URxvt.cursorBlink: true
+URxvt.internalBorder: 10
+URxvt.scrollBar: false
+URxvt.colorBD: #ffffff
+URxvt.colorIT: #cccccc
+URxvt.color0: #0c0c0c
+URxvt.color1: #c50f1f
+URxvt.color2: #13a10e
+URxvt.color3: #c19c00
+URxvt.color4: #3b78ff
+URxvt.color5: #881798
+URxvt.color6: #3a96dd
+URxvt.color7: #cccccc
+URxvt.color8: #767676
+URxvt.color9: #e74856
+URxvt.color10: #16c60c
+URxvt.color11: #f9f1a5
+URxvt.color12: #6ea8ff
+URxvt.color13: #b4009e
+URxvt.color14: #61d6d6
+URxvt.color15: #f2f2f2

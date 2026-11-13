@@ -1,0 +1,12 @@
+# Large or machine-specific things that do not belong in git
+*.iso
+/vm/GoboLinux-017.01/
+/upstream/
+/dist/*.tgz
+
+# Lab-only secrets and generated files
+/vm/ssh/
+/vm/serve/k
+/vm/serve/lab-answers.env
+/vm/serve/*.tgz
+/vm/serve/build-iso.sh

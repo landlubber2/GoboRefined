@@ -1,0 +1,15 @@
+mkdir -p /Mount/GoboLinux/System/Kernel/Boot/grub
+cat > /Mount/GoboLinux/System/Kernel/Boot/grub/grub.cfg <<'EOF'
+set timeout=5
+set default=0
+
+menuentry "GoboLinux 017.01" {
+    insmod part_msdos
+    insmod ext2
+    set root=(hd0,msdos1)
+    linux /System/Kernel/Boot/kernel root=PARTUUID=810c49c5-01 vt.default_utf8=1 rootwait net.ifnames=0
+    initrd /System/Kernel/Boot/initramfs-6.12.16-Gobo.img
+}
+EOF
+ls -la /Mount/GoboLinux/System/Kernel/Boot/grub/grub.cfg
+umount -R /Mount/GoboLinux

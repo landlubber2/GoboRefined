@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Host → VM clipboard</title>
+  <style>
+    :root {
+      --bg: #12141a;
+      --panel: #1c2030;
+      --text: #e8ecf4;
+      --muted: #9aa3b5;
+      --accent: #3d8bfd;
+      --ok: #3dd68c;
+      --border: #2a3145;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1a2744, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    main { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 6px; }
+    p { color: var(--muted); margin: 0 0 16px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #status { color: var(--muted); min-height: 1.4em; }
+    #status.ok { color: var(--ok); }
+    textarea, pre {
+      width: 100%;
+      min-height: 420px;
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      font: 13px/1.4 ui-monospace, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .hint {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.02);
+      color: var(--muted);
+    }
+    code { color: #c9d4ff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Host → VM clipboard bridge</h1>
+    <p>Open this page in the GoboLinux Firefox. Copy from here into the guest.</p>
+    <div class="row">
+      <button class="primary" id="copyBtn" type="button">Copy all to VM clipboard</button>
+      <button id="reloadBtn" type="button">Reload from host</button>
+      <button id="selectBtn" type="button">Select all</button>
+    </div>
+    <div id="status">Loading…</div>
+    <pre id="content" tabindex="0">Loading…</pre>
+    <div class="hint">
+      <strong>In the Linux terminal, paste with</strong> <code>Ctrl+Shift+V</code>
+      (or <code>Shift+Insert</code>). Plain <code>Ctrl+V</code> usually does not paste.
+      Right-click → Paste only works in some terminals.
+    </div>
+  </main>
+  <script>
+    const contentEl = document.getElementById("content");
+    const statusEl = document.getElementById("status");
+    const copyBtn = document.getElementById("copyBtn");
+
+    async function loadPayload() {
+      statusEl.className = "";
+      statusEl.textContent = "Loading from host…";
+      try {
+        const res = await fetch("./payload.txt?ts=" + Date.now(), { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const text = await res.text();
+        contentEl.textContent = text;
+        statusEl.textContent = "Loaded. Click “Copy all to VM clipboard”, then paste in the terminal with Ctrl+Shift+V.";
+      } catch (err) {
+        contentEl.textContent = "Could not load payload.txt\n" + err;
+        statusEl.textContent = "Load failed. Is Start-ClipboardBridge.ps1 running on the host?";
+      }
+    }
+
+    async function copyAll() {
+      const text = contentEl.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        statusEl.className = "ok";
+        statusEl.textContent = "Copied. Focus the terminal and press Ctrl+Shift+V.";
+      } catch (err) {
+        const range = document.createRange();
+        range.selectNodeContents(contentEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        statusEl.textContent = "Clipboard API blocked — text selected; press Ctrl+C, then Ctrl+Shift+V in the terminal.";
+      }
+    }
+
+    document.getElementById("reloadBtn").addEventListener("click", loadPayload);
+    document.getElementById("selectBtn").addEventListener("click", () => {
+      const range = document.createRange();
+      range.selectNodeContents(contentEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+    copyBtn.addEventListener("click", copyAll);
+    loadPayload();
+  </script>
+</body>
+</html>

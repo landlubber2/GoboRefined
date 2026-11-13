@@ -1,0 +1,15 @@
+
+\033[32;1m ---------------------------- \033[36;1mWELCOME TO GOBOLINUX\033[32;1m ----------------------------\033[0m
+
+This is the GoboLinux live environment with the modernized spin.
+It is a fully-functional system which can also be installed.
+
+ * To install GoboLinux on this computer, type in:
+   \033[33;1mgobo-install\033[0m
+   It asks a few questions, then ERASES the disk you choose.
+
+ * To try the graphical environment first, type in:
+   \033[33;1mstartx\033[0m
+
+ * For more information, visit \033[1mhttps://gobolinux.org\033[0m
+

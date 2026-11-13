@@ -1,0 +1,22 @@
+setxkbmap -model pc104 -layout us
+numlockx &
+xsetroot -solid '#0b1630' -cursor_name left_ptr
+
+# Load user preferences
+[ -e ~/.Xresources ] && xrdb -merge ~/.Xresources
+
+# Update the MIME database
+[ -e /bin/update-mime-database ] && \
+    update-mime-database /Data/Variable/xdg/mime > /dev/null 2>&1 &
+
+# Launch PulseAudio daemon
+[ -e /bin/pulseaudio ] && /bin/pulseaudio --start
+
+# Extend the desktop across every connected display
+sh ~/.config/awesome/displays.sh
+
+# Shadows and fades
+[ -x /bin/picom ] && picom -b --config ~/.config/picom.conf
+
+[ -x /bin/awesome ] && exec awesome
+[ -x /bin/twm ] && exec twm
