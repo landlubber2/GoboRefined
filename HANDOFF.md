@@ -224,3 +224,47 @@ Lab lessons:
   `/Data/Build/inittab.before-lxdm-test`); the snapshot has text login (inittab restored).
 
 VM snapshots: `iso-build-env-4` (= -3 + the six programs, **current**, taken powered off).
+
+## Stage 3 checkpoint — ISO 0.4 built and install-tested in the VM (2026-11-13, evening)
+
+**`dist/GoboLinux-017.01-spin-0.4.iso`** (2,465,333,248 bytes), sha256
+`0c9a21f8d84d6e9b0cd1275faa0a7509ea298a797040a819dc0e611cc68f8946` (`.sha256` next to it, matches the build VM's).
+Built from snapshot `iso-build-env-4` with `spin/build-iso.sh` unchanged (first build succeeded, no fixes needed).
+
+Installs from it, all in the VM:
+- **UEFI, interactive, defaults** (typed by keyboard; layout `pl`, Europe/Warsaw): boots to the LXDM greeter;
+  greeter X uses layout pl (`setxkbmap -query`, AltGr+A gives "ą"); wrong password -> back to "User:", next
+  login works; desktop with Inter/JetBrains Mono/Papirus-Dark; by **simulated mouse clicks**: Files button,
+  volume icon -> PaVuControl, dots left click -> category menu -> Desktop -> Displays... -> LxRandr (Cancel
+  click closes it), dots right click -> search, search's power button -> power menu; Lock (unlocked by typing
+  the password), Light mode / Dark mode, Log out (greeter returns; only PulseAudio stays, and it exits on its
+  own after its 20 s idle time), Restart (fresh boot back to the greeter), Shut down (VM off in ~6 s).
+  Win+E opens PCManFM. `gobonet_backend` is `-rwsr-xr-x`; eth0 gets 10.0.2.15 by DHCP.
+- **BIOS, `--autologin --swap 1024`** (answers file): boots straight to the desktop; `/Data/Variable/swap`
+  1024 MB active. Log out -> the greeter asks for login and password (LXDM autologins only at its first start).
+- **BIOS, `--text-login`**: no LXDM, no inittab line, no keyboard file; tty1 login starts the desktop, Log out
+  returns to the tty1 login prompt.
+
+Not tested: the greeter's Quit button (reboot/shut down from the login screen), real Wi-Fi, PaVuControl with
+playback, LxRandr Apply / a second monitor, interactive answers for the BIOS runs (answers file used), real hardware.
+Observed, not fixed: a fresh install's output volume shows 4% in PaVuControl (VirtualBox HDA; may differ on a
+PC); the installer's closing line says "Log in as 'lab' and the desktop starts" even with `--autologin`, and its
+summary does not mention the login method (cosmetic).
+
+Lab lessons:
+- Git Bash rewrites a lone `/`-path in `VBoxManage ... keyboardputstring` (`Europe/Warsaw` arrived as
+  `EuropeC:/Program Files/Git/Warsaw`). Set `MSYS_NO_PATHCONV=1` for keyboard helpers.
+- The installed system has no sshd at boot: log in as root on tty2 (Ctrl+Alt+F2) and run the `lab-ssh.sh`
+  one-liner, then Ctrl+Alt+F7 back to the greeter/desktop. `/tmp/lab-desktop.sh` must be fetched again after
+  each boot for `vm/lua.sh`.
+- Taskbar buttons move when windows open/close (the centre group re-centres): with no windows, dots=572,
+  Terminal=616, Files=660 at y=776 (1280x800); screenshot before clicking.
+- Before booting the ISO in UEFI mode, the old loader must really be gone: `/System/Kernel/ESP` was not mounted
+  on the build disk, so mount `/dev/sda1` and remove `EFI/BOOT` there. In BIOS mode the VM boots the DVD
+  first even when the disk has GRUB.
+
+VM snapshots now: `not even installed`, `iso-build-env-2`, `iso-final-installed-efi`, `iso-0.2-installed-efi`,
+`iso-build-env-3`, `iso-build-env-4` (build env for 0.4), **`iso-0.4-installed-efi`** (current, powered off:
+UEFI default install of ISO 0.4, user lab, LXDM). Rebuild 0.4 from `iso-build-env-4`.
+
+Next: the user tries ISO 0.4 on the real PC (checkpoint 3), then stage 4 (boot experience).

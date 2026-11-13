@@ -2,7 +2,8 @@
 
 Status (2026-11-13): **works in the build VM.** LXDM starts from `inittab` at boot, shows the gobo11 greeter
 on tty7, logs the lab user into the normal Awesome desktop, and returns to the greeter after "Log out".
-The installer does **not** enable it yet; the steps below are what `installer/gobo-install` would need.
+Since spin 0.4 `gobo-install` enables it by default (steps below); `--text-login` keeps the console login.
+Installs of ISO 0.4 tested in the VM: see "Verified on installs of ISO 0.4" at the end.
 Screenshot: `docs/screenshots/0.4-login-greeter.png`.
 
 ## What is in the package
@@ -82,3 +83,15 @@ Two problems found and fixed on the way (both are in the files above):
 - Lock screen (Win+L / idle) inside a greeter session (xss-lock starts as before; locking itself not tried).
 - Real hardware, multi-monitor greeter, HiDPI.
 - The build VM was put back to text login afterwards (inittab restored) so the lab tools keep working.
+
+## Verified on installs of ISO 0.4 (2026-11-13, VM)
+
+- UEFI install with defaults and layout `pl`: greeter at boot; the greeter's X server uses `pl`
+  (`00-keyboard.conf` works; AltGr+A types "ą"); a wrong password returns to "User:" and the next login works;
+  Lock/unlock, Log out (greeter back, nothing of the session left once PulseAudio's 20 s idle exit has passed),
+  Restart and Shut down from the power menu by simulated mouse clicks.
+- `--autologin` (BIOS): desktop at boot without a password. Log out shows the greeter, which then asks for the
+  password (LXDM only autologins at its first start, i.e. once per boot).
+- `--text-login` (BIOS): no LXDM; tty1 login + `startx` as in 0.2; Log out returns to the tty1 prompt.
+
+Still not tested: the greeter's Quit button, multi-monitor greeter, HiDPI, real hardware.

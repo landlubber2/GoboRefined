@@ -29,7 +29,7 @@ The order puts cheap, visible, low-risk work first and anything that can lose da
 
 **Checkpoint 1 → ISO 0.2.** Risk: low. Everything is config and Lua in `look/`.
 
-## Stage 2 — Fonts and icons (new files, nothing to compile)
+## Stage 2 — Fonts and icons (new files, nothing to compile) — DONE, pending real-PC test
 
 - A modern UI font and a matching monospace font (open licences only).
 - A fuller icon set so apps and the launcher stop falling back to a generic icon.
@@ -40,7 +40,10 @@ once. No comparing alternatives, no fine-tuning. If it is not clearly better at 
 
 **Checkpoint 2 → ISO 0.3.** Risk: low. May be folded into the stage 3 ISO to save a build-and-test round.
 
-## Stage 3 — Missing programs (compiled into the ISO)
+> **Status 2026-11-13:** folded into ISO 0.4 (no separate 0.3). Inter 4.1, JetBrains Mono 2.304, Papirus
+> 20260801 verified on VM installs of 0.4 (BIOS and UEFI). Waiting for the user's real-PC test; no git tag yet.
+
+## Stage 3 — Missing programs (compiled into the ISO) — DONE, pending real-PC test
 
 In this order, each one built and tried before the next:
 
@@ -53,6 +56,12 @@ In this order, each one built and tried before the next:
 **Checkpoint 3 → ISO 0.4.** Risk: **medium to high.** 017.01's libraries date from around 2020, so current
 versions of these programs may not build and older versions may be needed. The login screen is the least
 certain item on the whole roadmap. Each program that fails is dropped or swapped, not debugged for days.
+
+> **Status 2026-11-13:** all five done in ISO 0.4 — [x] PCManFM 1.2.5, [x] PaVuControl 4.0, [x] LxRandr 0.3.1,
+> [x] Wi-Fi: GoboNet widget kept, its backend made setuid again (not tried with real Wi-Fi), [x] LXDM 0.5.3 login
+> screen (default; `--text-login` keeps the console login). ISO 0.4 built and installed in the VM in UEFI
+> (interactive, defaults), BIOS (`--autologin --swap 1024`) and BIOS (`--text-login`); all checks passed, see
+> HANDOFF. Snapshot `iso-0.4-installed-efi`. Waiting for the user's real-PC test; no git tag yet.
 
 ## Stage 4 — Boot experience
 
