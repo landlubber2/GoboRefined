@@ -1,0 +1,17 @@
+#!/bin/bash
+# LXDM session start for the GoboLinux spin (installed as /etc/lxdm/Xsession).
+# The desktop is set up by the user's ~/.xinitrc (keyboard, PulseAudio, screen
+# locker, compositor, then awesome) - the same file `startx` uses on tty1 - so a
+# login from the greeter gives the same desktop as a console login.
+#
+# GoboLinux keeps its environment (LANG, Lua paths for awesome, GTK paths, ...) in
+# /System/Environment/Cache, which interactive zsh loads from /etc/zshrc. LXDM's
+# stock script sourced /etc/xprofile with bash instead (zsh syntax here, it fails)
+# and awesome then died at once with "module 'lgi' not found". Load it here.
+[ -f /System/Environment/Cache ] && . /System/Environment/Cache > /dev/null 2>&1
+if [ -f "$HOME/.xinitrc" ]
+then session='exec dbus-launch --exit-with-session sh "$HOME/.xinitrc"'
+else session="exec dbus-launch --exit-with-session ${1:-awesome}"
+fi
+# through the user's login shell, as on the console
+exec -l "${SHELL:-/bin/zsh}" -c "$session"

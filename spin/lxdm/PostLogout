@@ -1,0 +1,9 @@
+#!/bin/sh
+# LXDM runs this as root after a session ends, with the session's USER set.
+# The screen locker watcher started by ~/.xinitrc (xss-lock) does not exit when
+# its X server goes away; it spins at full CPU. Stop it (and a locker it may
+# have started) so nothing of the old session stays behind.
+[ -n "$USER" ] && [ "$USER" != root ] || exit 0
+pkill -u "$USER" -x xss-lock
+pkill -u "$USER" -x xsecurelock
+exit 0

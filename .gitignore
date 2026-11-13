@@ -11,3 +11,4 @@
 /vm/serve/*.tgz
 /vm/serve/build-iso.sh
 /spin/programs/*.tgz
+/vm/serve/build-programs.sh

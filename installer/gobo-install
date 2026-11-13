@@ -24,7 +24,8 @@ TIMEZONE=""             # asked; default UTC; a path under /System/Index/share/z
 KEYMAP=""               # console keymap; default: same as the X layout if such a map exists, else us
 XKB_LAYOUT=""           # X keyboard layout; asked; default: the live session's
 LANG_NEW="en_US"
-AUTOLOGIN=0             # 1 = log USER_NAME in on tty1 without a password
+AUTOLOGIN=0             # 1 = log USER_NAME in without a password
+LOGIN_SCREEN=1          # 1 = graphical login screen (LXDM) if the image has it; 0 = text login on tty1
 SWAP_MB=0               # size of a swap file; 0 = none
 EXCLUDE_PROGRAMS="LiveCD"
 CLOCK_MODE="GMT"        # hardware clock: GMT (UTC, the Linux norm) or LocalTime (dual boot with Windows)
@@ -70,7 +71,8 @@ Options:
   --timezone ZONE     (default: UTC; e.g. Europe/Warsaw)
   --keymap MAP        console keymap (default: follows --xkb)
   --xkb LAYOUT        X keyboard layout (default: same as the live session)
-  --autologin         log the user in on tty1 without a password
+  --autologin         log the user in without a password
+  --text-login        no graphical login screen: log in on the text console, the desktop starts after it
   --swap MB           create a swap file of this size
   --firmware efi|bios install the bootloader for this firmware (default: what the live session booted with)
   --answers FILE      read settings (shell variables) from FILE
@@ -94,6 +96,7 @@ do
       --firmware)  FIRMWARE="$2"; shift ;;
       --answers)   [ -r "$2" ] || die "cannot read answers file $2"; . "$2"; shift ;;
       --autologin) AUTOLOGIN=1 ;;
+      --text-login) LOGIN_SCREEN=0 ;;
       --yes)       ASSUME_YES=1 ;;
       -h|--help)   usage; exit 0 ;;
       *)           usage >&2; die "unknown option: $1" ;;
@@ -396,9 +399,43 @@ then
    done
 fi
 
-# Start the desktop after login on the first console (there is no display
-# manager on the 017.01 image; the stock "Graphic" boot script wants kdm).
-cat >> "$DEST/Users/$USER_NAME/.zlogin" <<'EOF'
+# How the desktop starts. With the spin's login screen (LXDM, started by init
+# on tty7) the user logs in graphically. Without it - older image, or
+# --text-login - the user logs in on the first text console and the desktop
+# starts from the shell (the stock "Graphic" boot script wants kdm, which is
+# not on the image).
+inittab="$DEST/Programs/BootScripts/Settings/inittab"
+lxdm_conf="$DEST/Programs/LXDM/Settings/lxdm/lxdm.conf"
+[ -x "$DEST/System/Index/sbin/lxdm-binary" ] && [ -f "$lxdm_conf" ] || LOGIN_SCREEN=0
+
+if [ "$LOGIN_SCREEN" = 1 ]
+then
+   step "Enabling the graphical login screen"
+   grep -q 'lxdm-binary' "$inittab" || cat >> "$inittab" <<'EOF'
+
+# Added by gobo-install: graphical login screen (LXDM) on tty7.
+x:2345:respawn:/System/Index/sbin/lxdm-binary
+EOF
+   # The login screen runs before the user's own keyboard setting applies.
+   if [ "$XKB_LAYOUT" != us ]
+   then
+      mkdir -p "$DEST/System/Settings/X11/xorg.conf.d"
+      cat > "$DEST/System/Settings/X11/xorg.conf.d/00-keyboard.conf" <<EOF
+# Written by gobo-install: keyboard layout for the login screen.
+Section "InputClass"
+   Identifier "keyboard"
+   MatchIsKeyboard "on"
+   Option "XkbLayout" "$XKB_LAYOUT"
+EndSection
+EOF
+   fi
+   if [ "$AUTOLOGIN" = 1 ]
+   then
+      sed -i "s|^# *autologin=.*|autologin=$USER_NAME|" "$lxdm_conf"
+      grep -q "^autologin=$USER_NAME\$" "$lxdm_conf" || die "could not set automatic login in $lxdm_conf"
+   fi
+else
+   cat >> "$DEST/Users/$USER_NAME/.zlogin" <<'EOF'
 
 # Added by gobo-install: start the desktop when logging in on the first console.
 # (On GoboLinux the console is reported as /System/Kernel/Devices/tty1.)
@@ -413,12 +450,13 @@ case "$DISPLAY:$(tty)" in
       ;;
 esac
 EOF
-in_target chown "$USER_NAME" "/Users/$USER_NAME/.zlogin"
+   in_target chown "$USER_NAME" "/Users/$USER_NAME/.zlogin"
 
-if [ "$AUTOLOGIN" = 1 ]
-then
-   sed -i "s|^1:2345:respawn:.*|1:2345:respawn:/System/Index/bin/agetty --autologin $USER_NAME --noclear tty1 9600|" \
-      "$DEST/Programs/BootScripts/Settings/inittab"
+   if [ "$AUTOLOGIN" = 1 ]
+   then
+      sed -i "s|^1:2345:respawn:.*|1:2345:respawn:/System/Index/bin/agetty --autologin $USER_NAME --noclear tty1 9600|" \
+         "$inittab"
+   fi
 fi
 
 ### 5. Bootloader ##############################################################

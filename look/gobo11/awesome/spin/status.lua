@@ -142,7 +142,8 @@ local function volume_icon(state)
    end)
 end
 
-function status.volume(terminal)
+-- mixer: command for the sound control window (opened by a left click)
+function status.volume(mixer)
    local widget = wibox.widget.imagebox()
    local state = { valid = false, volume = 0, mute = false, sink = "0" }
    local tip = awful.tooltip({ objects = { widget } })
@@ -176,10 +177,11 @@ function status.volume(terminal)
    end
 
    widget:buttons(awful.util.table.join(
-      awful.button({}, 1, function() widget:toggle_mute() end),
-      awful.button({}, 3, function()
-         awful.spawn((terminal or "urxvt") .. " -title ncpamixer -geometry 90x18 -e ncpamixer")
+      awful.button({}, 1, function()
+         awful.spawn(mixer or "urxvt -title ncpamixer -geometry 90x18 -e ncpamixer")
       end),
+      awful.button({}, 2, function() widget:toggle_mute() end),
+      awful.button({}, 3, function() widget:toggle_mute() end),
       awful.button({}, 4, function() widget:set_volume(5, "+") end),
       awful.button({}, 5, function() widget:set_volume(5, "-") end)
    ))

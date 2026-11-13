@@ -35,6 +35,17 @@ local editor = os.getenv("EDITOR") or "nano"
 local editor_cmd = terminal .. " -e " .. editor
 local browser = "firefox"
 
+-- Programs added by the spin (stage 3). The sound control falls back to ncpamixer in a
+-- terminal on a system without PaVuControl.
+local function have(cmd)
+   local ok = os.execute("command -v " .. cmd .. " > /dev/null 2>&1")
+   return ok == true or ok == 0
+end
+local file_manager = "pcmanfm"
+local mixer = have("pavucontrol") and "pavucontrol"
+   or (terminal .. " -title ncpamixer -geometry 90x18 -e ncpamixer")
+local displays_tool = "lxrandr"
+
 local titlebars_enabled = true
 local sloppy_focus = false
 
@@ -43,7 +54,7 @@ local beautiful = require("beautiful")
 beautiful.init(gears.filesystem.get_configuration_dir() .. "themes/gobo11/theme.lua")
 
 local light_widget = status.brightness()
-local sound_widget = status.volume(terminal)
+local sound_widget = status.volume(mixer)
 
 awful.titlebar.enable_tooltip = false
 hotkeys_popup.group_margin = 20
@@ -146,7 +157,8 @@ local myawesomemenu = {
    { "Hotkeys", function() return false, show_help end},
    { "Manual", terminal .. " -e pinfo awesome" },
    { "Edit Config", editor_cmd .. " " .. awesome.conffile },
-   { "Detect Displays", function() awful.spawn.with_shell("sh ~/.config/awesome/displays.sh") end },
+   { "Displays...", displays_tool },
+   { "Detect Displays", function() awful.spawn.with_shell("sh ~/.config/awesome/displays.sh --auto") end },
    { "Restart Awesome", awesome.restart },
    { "Quit", function() awesome.quit() end }
 }
@@ -225,8 +237,9 @@ menu_gen.generate(function(entries)
    end
 
    for _, entry in ipairs(entries) do
-      if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil and entry.icon ~= nil then
-         table.insert(cat_submenus[entry.category], { entry.name, entry.cmdline, entry.icon })
+      if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil then
+         -- entries whose icon is not found keep their place, with the generic icon
+         table.insert(cat_submenus[entry.category], { entry.name, entry.cmdline, entry.icon or beautiful.default_app_icon })
       end
    end
    table.sort(cat_keys)
@@ -394,6 +407,7 @@ awful.screen.connect_for_each_screen(function(s)
    center_layout.spacing = 4
    center_layout:add(start_button)
    center_layout:add(pinned(find_icon("utilities-terminal", "terminal"), terminal, "Terminal"))
+   center_layout:add(pinned(find_icon("system-file-manager", "folder"), file_manager, "Files"))
    center_layout:add(pinned(find_icon("firefox"), browser, "Firefox"))
    center_layout:add(mytasklist[s])
 
@@ -536,6 +550,12 @@ local globalkeys = awful.util.table.join(
          awful.spawn(terminal)
       end,
       { description = "Open a terminal", group = "launcher" }),
+
+   awful.key({ modkey }, "e",
+      function()
+         awful.spawn(file_manager)
+      end,
+      { description = "Open the file manager", group = "launcher" }),
 
    awful.key({ modkey, "Shift" }, "Return",
       function()
@@ -875,6 +895,10 @@ awful.rules.rules = {
    { rule = { class = "MPlayer" }, properties = { floating = true } },
    { rule = { class = "pinentry" }, properties = { floating = true } },
    { rule = { class = "gimp" }, properties = { floating = true } },
+   -- Sound control opens above the volume icon; display settings in the middle of the screen.
+   { rule = { class = "Pavucontrol" }, properties = { floating = true, width = 660, height = 480,
+      placement = function(c) awful.placement.bottom_right(c, { honor_workarea = true, margins = 8 }) end } },
+   { rule = { class = "Lxrandr" }, properties = { floating = true, placement = awful.placement.centered } },
    -- Add titlebars to normal clients and dialogs
    { rule_any = {type = { "normal", "dialog" } }, properties = { titlebars_enabled = true } },
 }

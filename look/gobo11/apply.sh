@@ -18,6 +18,15 @@ cp "$here/picom.conf" "$home/.config/picom.conf"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
 mkdir -p "$home/.config/fontconfig"
 cp "$here/fontconfig/fonts.conf" "$home/.config/fontconfig/fonts.conf"
+# File manager defaults (PCManFM/libfm); kept if the user already has their own.
+for conf in libfm/libfm.conf pcmanfm/default/pcmanfm.conf
+do
+   if [ ! -e "$home/.config/$conf" ]
+   then
+      mkdir -p "$(dirname "$home/.config/$conf")"
+      cp "$here/$conf" "$home/.config/$conf"
+   fi
+done
 # Keep the keyboard layout the user already had unless one is given.
 if [ -z "$layout" ] && [ -e "$home/.xinitrc" ]
 then layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' "$home/.xinitrc" | head -n 1)

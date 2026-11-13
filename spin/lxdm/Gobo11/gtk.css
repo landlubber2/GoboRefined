@@ -1,0 +1,67 @@
+/* LXDM greeter, gobo11 look: the desktop wallpaper, Inter, dark translucent panels. */
+#lxdm {
+	background-color: #0b1630;
+	background-image: url("wallpaper.png");
+	background-size: cover;
+	background-position: center;
+}
+
+#time {
+	font-family: Inter;
+	font-size: 22px;
+	color: #ffffff;
+	margin-top: 24px;
+}
+
+#prompt {
+	font-family: Inter;
+	font-size: 16px;
+	color: #ffffff;
+	margin-right: 10px;
+}
+
+#login_entry {
+	font-family: Inter;
+	font-size: 15px;
+	min-height: 34px;
+	min-width: 260px;
+	padding: 2px 12px;
+	border-radius: 8px;
+	border: 1px solid rgba(255,255,255,0.18);
+	background-color: rgba(32,32,32,0.88);
+	background-image: none;
+	color: #ffffff;
+	caret-color: #4cc2ff;
+	box-shadow: none;
+}
+
+#login_entry:focus {
+	border-color: #4cc2ff;
+}
+
+#bottom_pane {
+	background-color: rgba(32,32,32,0.88);
+	padding: 6px 12px;
+}
+
+#bottom_pane label {
+	font-family: Inter;
+	font-size: 13px;
+	color: #e0e0e0;
+}
+
+#bottom_pane button, #bottom_pane combobox button {
+	font-family: Inter;
+	font-size: 13px;
+	border-radius: 6px;
+	background-image: none;
+	background-color: rgba(255,255,255,0.08);
+	border: 1px solid rgba(255,255,255,0.12);
+	color: #ffffff;
+	box-shadow: none;
+	text-shadow: none;
+}
+
+#bottom_pane button:hover {
+	background-color: rgba(255,255,255,0.16);
+}

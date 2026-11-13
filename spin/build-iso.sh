@@ -10,12 +10,15 @@
 #   - /Programs/XRandR-Tool         xrandr built from source
 #   - /Programs/Inter, /Programs/JetBrains-Mono, /Programs/Papirus-Icon-Theme
 #                                   fonts and icons (snapshot "iso-build-env-3"; tarballs in spin/programs/)
+#   - /Programs/Menu-Cache, LibFM, PCManFM, PaVuControl, LxRandr, LXDM
+#                                   desktop programs (snapshot "iso-build-env-4"; built with
+#                                   spin/build-programs.sh; tarballs in spin/programs/)
 # and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz and welcome.src.
 set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=0.3
+VERSION=0.4
 OUT=$B/GoboLinux-017.01-spin-$VERSION.iso
 cd $B
 
@@ -27,7 +30,7 @@ bash -n gobo-install
 rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 
 echo "== adding programs to the live image"
-EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme"
+EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM"
 for prog in $EXTRA
 do rm -rf $R/Programs/$prog && cp -a /Programs/$prog $R/Programs/
 done
@@ -48,6 +51,11 @@ chroot $R fc-cache -f > /dev/null
 for t in Papirus Papirus-Dark Papirus-Light
 do chroot $R gtk-update-icon-cache -q -f /System/Index/share/icons/$t
 done
+echo "== refreshing the MIME database (LibFM adds its types)"
+chroot $R update-mime-database /System/Index/share/mime
+# GoboNet's backend must be setuid root (its upstream "make install" does chmod 4755);
+# the 017.01 package lost the bit, so Wi-Fi from the taskbar fails for normal users.
+chmod 4755 $R/Programs/GoboNet/Current/bin/gobonet_backend
 umount $R/proc
 
 echo "== look for the live user and for new users (both are copied from the skeleton)"

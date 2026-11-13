@@ -163,3 +163,64 @@ Next: user tries ISO 0.2 on the real PC (checkpoint 1). Then stages 2+3 together
   older `.Xresources` block. Screenshots `docs/screenshots/0.3-*`. Inventory for stage 3: `docs/stage3-inventory.md`.
 - Snapshot `iso-build-env-3` was taken **with the VM powered off**. A live snapshot (`--live`) of this VM never
   finished (state file kept growing) and the VM had to be killed; do not take live snapshots here.
+
+## Stage 3 (desktop programs) done in the look and build VM — ISO 0.4 not built yet (2026-11-13)
+
+Built by hand (`./configure --prefix=/Programs/<Name>/<Version>`, settings in `/Programs/<Name>/Settings`,
+`SymlinkProgram`) with **`spin/build-programs.sh <step>`** (steps: menu-cache libfm pcmanfm pavucontrol lxrandr lxdm;
+sources in `/Data/Build/src3`). gcc 14 needs `-Wno-error=incompatible-pointer-types` etc. for these 2015–2019 sources.
+Tarballs in `spin/programs/` (gitignored). Together ~9.4 MB installed, ~2.0 MB as tgz.
+
+| Program | Version | Notes |
+|---|---|---|
+| Menu-Cache | 1.0.2 | dependency of LibFM (LibFM is first built "extra only" for it) |
+| LibFM | 1.2.5 | GTK 3, no libexif, no custom actions (Vala); "Shortcut Editor" menu entry hidden |
+| PCManFM | 1.2.5 | GTK 3; "Desktop Preferences" entry hidden (Awesome owns the wallpaper; PCManFM never runs `--desktop`) |
+| PaVuControl | 4.0 | autotools release; gtkmm-3, libpulse, libcanberra-gtk3 were already on the image |
+| LxRandr | 0.3.1 | GTK 3; uses the `xrandr` tool from 0.1; icon changed to `preferences-desktop-display` |
+| LXDM | 0.5.3 | GTK 3, PAM, no ConsoleKit; spin files in `spin/lxdm/`; see **`docs/login-screen.md`** |
+
+Downloads (all built from source, fetched in the guest):
+
+| Name | Version | URL | Licence |
+|---|---|---|---|
+| libfm | 1.2.5 | https://downloads.sourceforge.net/pcmanfm/libfm-1.2.5.tar.xz | GPL-2.0 (COPYING); most library sources carry LGPL-2.1+ headers |
+| menu-cache | 1.0.2 | https://downloads.sourceforge.net/lxde/menu-cache-1.0.2.tar.xz | LGPL-2.1+ |
+| pcmanfm | 1.2.5 | https://downloads.sourceforge.net/pcmanfm/pcmanfm-1.2.5.tar.xz | GPL-2.0+ |
+| pavucontrol | 4.0 | https://freedesktop.org/software/pulseaudio/pavucontrol/pavucontrol-4.0.tar.xz | GPL-2.0+ |
+| lxrandr | 0.3.1 | https://downloads.sourceforge.net/lxde/lxrandr-0.3.1.tar.xz | GPL-2.0+ |
+| lxdm | 0.5.3 | https://downloads.sourceforge.net/lxde/lxdm-0.5.3.tar.xz | GPL-3.0+ |
+| GoboNet | 0.12 | https://github.com/gobolinux/GoboNet/archive/refs/tags/0.12.tar.gz | GPL-3.0 (read only to check its Makefile; not built) |
+
+MD5 of the five LXDE/PCManFM tarballs match the upstream Recipes; pavucontrol is the .xz of the same release.
+
+Look (`look/gobo11/`):
+- Taskbar: pinned **Files** button between Terminal and Firefox; **Win+E** opens PCManFM.
+- Volume icon: left click opens PaVuControl (floating, above the icon), right/middle click mute, wheel = volume.
+- Menu → Desktop → **Displays...** opens LxRandr; "Detect Displays" now forces the automatic layout
+  (`displays.sh --auto`); at login `displays.sh` uses a layout saved with LxRandr's Save, if any.
+- Category menu keeps entries whose icon is not found (generic icon) instead of dropping them.
+- `libfm/libfm.conf` and `pcmanfm/default/pcmanfm.conf` defaults, copied by `apply.sh` only if absent
+  (places: Home, Desktop, Filesystem Root; no volume list — the VM showed proc/sys/pts... from fstab otherwise).
+- GTK apps follow `gtk-3.0/settings.ini` (dark/light + Papirus-Dark/-Light); checked in both modes.
+
+`spin/build-iso.sh`: VERSION=0.4, copies + `SymlinkProgram`s the six programs, runs `update-mime-database`,
+and sets the setuid bit on `gobonet_backend` (see **`docs/wifi-notes.md`**). `vm/serve/build-iso.sh` is identical.
+**Rebuild from snapshot `iso-build-env-4`.** The rootfs steps of build-iso were not run (no ISO built).
+
+Screenshots `docs/screenshots/0.4-*`: file manager (dark), sound control (dark), displays (dark), light mode
+(file manager + sound), login greeter, network menu.
+
+Not tested: PCManFM file operations beyond browsing (copy/move/trash, removable media — there is no udisks/gvfs,
+so no automount and no Trash view), PaVuControl with real playback streams, LxRandr Apply/second monitor,
+LXDM items listed in `docs/login-screen.md`, anything on real hardware. PCManFM 1.2.5 does not quit on SIGTERM
+(`pkill pcmanfm` leaves a hung window; closing the window or ending X is fine).
+
+Lab lessons:
+- `vm/lua.sh 'root.fake_input("motion_notify", false, X, Y)'` then `root.fake_input("button_press", 1)` /
+  `("button_release", 1)` **clicks with the mouse** inside the Awesome desktop (taskbar, menus, windows).
+- zsh is root's shell in the guest: an unmatched glob (`*.tgz`) aborts the whole `vm/ssh.sh` command line.
+- To try LXDM at boot in the VM: append the inittab line from `docs/login-screen.md` (a copy of the original is
+  `/Data/Build/inittab.before-lxdm-test`); the snapshot has text login (inittab restored).
+
+VM snapshots: `iso-build-env-4` (= -3 + the six programs, **current**, taken powered off).
