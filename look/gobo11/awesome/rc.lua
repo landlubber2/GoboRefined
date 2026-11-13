@@ -274,8 +274,8 @@ end
 local start_button = hoverable(wibox.widget.imagebox(beautiful.start_icon), 4)
 launcher.setup({ on_power = power.show })
 start_button:buttons(awful.util.table.join(
-   awful.button({}, 1, function() launcher.toggle() end),
-   awful.button({}, 3, function() mymainmenu:toggle() end)
+   awful.button({}, 1, function() mymainmenu:toggle() end),   -- left click: the category menu
+   awful.button({}, 3, function() launcher.toggle() end)      -- right click: search
 ))
 
 local mytextclock = wibox.widget.textclock("%H:%M\n%d.%m.%Y", 5)
