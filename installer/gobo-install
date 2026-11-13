@@ -351,6 +351,15 @@ ln -s /proc/mounts "$DEST/etc/mtab"
 step "Creating users"
 in_target AddUser -f "$USER_FULLNAME" -p '!' --skel "$USER_NAME"
 in_target usermod -aG sys,lpadmin "$USER_NAME"     # sys = may use sudo
+# The desktop's power menu runs these four commands through sudo; allow them
+# without a password for the "sys" group (the group that may use sudo at all).
+sudoers="$DEST/Programs/Sudo/Settings/sudoers"
+if [ -f "$sudoers" ] && ! grep -q 'NOPASSWD: /System/Index/bin/shutdown' "$sudoers"
+then
+   echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown, /System/Index/bin/reboot, /System/Index/bin/poweroff, /System/Index/bin/halt' >> "$sudoers"
+   chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is no longer valid"
+fi
+
 # Passwords are hashed here and written with usermod: chpasswd on 017.01
 # exits 0 without changing anything. (Not logged, so hashes stay out of $LOG.)
 set_password() { # set_password LOGIN PASSWORD
@@ -393,8 +402,15 @@ cat >> "$DEST/Users/$USER_NAME/.zlogin" <<'EOF'
 
 # Added by gobo-install: start the desktop when logging in on the first console.
 # (On GoboLinux the console is reported as /System/Kernel/Devices/tty1.)
+# When the desktop is closed ("Log out"), leave the console too, so the next
+# person gets a login prompt. If X stops within seconds it probably failed:
+# stay in the shell then, so the problem can be looked at.
 case "$DISPLAY:$(tty)" in
-   :*/tty1) startx ;;
+   :*/tty1)
+      started=$SECONDS
+      startx
+      [ $((SECONDS - started)) -gt 20 ] && logout
+      ;;
 esac
 EOF
 in_target chown "$USER_NAME" "/Users/$USER_NAME/.zlogin"

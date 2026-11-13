@@ -13,7 +13,8 @@ set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-OUT=$B/GoboLinux-017.01-spin.iso
+VERSION=0.2
+OUT=$B/GoboLinux-017.01-spin-$VERSION.iso
 cd $B
 
 echo "== fetching installer and look from the host"
@@ -30,6 +31,7 @@ rm -rf $P && mkdir -p $P/1.0/bin $P/1.0/share $P/1.0/Resources
 install -m 755 gobo-install $P/1.0/bin/gobo-install
 cp -r gobo11 $P/1.0/share/gobo11
 echo "Thin installer and desktop look of the modernized GoboLinux spin." > $P/1.0/Resources/Description
+echo "$VERSION" > $P/1.0/share/spin-version
 ln -sfn 1.0 $P/Current
 mount -t proc proc $R/proc
 chroot $R SymlinkProgram XRandR-Tool | tail -n 1

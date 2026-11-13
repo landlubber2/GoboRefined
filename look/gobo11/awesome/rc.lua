@@ -11,11 +11,12 @@ local naughty = require("naughty")
 local menubar = require("menubar")
 
 local gobonet = require("gobo.awesome.gobonet")
-local sound = require("gobo.awesome.sound")
-local battery = require("gobo.awesome.battery")
-local alttab = require("gobo.awesome.alttab")
 local docking = require("gobo.awesome.docking")
-local light = require("gobo.awesome.light")
+-- The spin's own modules (in ~/.config/awesome/spin/)
+local status = require("spin.status")
+local alttab = require("spin.alttab")
+local launcher = require("spin.launcher")
+local power = require("spin.power")
 local bluetooth = require("gobo.awesome.bluetooth")
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
@@ -37,13 +38,12 @@ local browser = "firefox"
 local titlebars_enabled = true
 local sloppy_focus = false
 
-local light_widget = light.new()
-local sound_widget = sound.new()
-sound_widget.terminal = terminal
-
 -- Theme handling library
 local beautiful = require("beautiful")
 beautiful.init(gears.filesystem.get_configuration_dir() .. "themes/gobo11/theme.lua")
+
+local light_widget = status.brightness()
+local sound_widget = status.volume(terminal)
 
 awful.titlebar.enable_tooltip = false
 hotkeys_popup.group_margin = 20
@@ -154,7 +154,8 @@ local myawesomemenu = {
 local mymainmenu = awful.menu({
    items = awful.util.table.join({
       { "Awesome WM", myawesomemenu, beautiful.awesome_icon },
-      { "Run...", function() menubar.show() end, nil },
+      { "Search applications...", function() launcher.show() end, nil },
+      { "Power...", function() power.show() end, nil },
       { "Open Terminal", terminal }
    }),
    theme = { width = 280, height = 32 },
@@ -215,7 +216,11 @@ local function pinned(icon, command, tip)
 end
 
 local start_button = hoverable(wibox.widget.imagebox(beautiful.start_icon), 4)
-start_button:buttons(awful.button({}, 1, function() mymainmenu:toggle() end))
+launcher.setup({ on_power = power.show })
+start_button:buttons(awful.util.table.join(
+   awful.button({}, 1, function() launcher.toggle() end),
+   awful.button({}, 3, function() mymainmenu:toggle() end)
+))
 
 local mytextclock = wibox.widget.textclock("%H:%M\n%d.%m.%Y", 5)
 mytextclock.align = "right"
@@ -308,7 +313,7 @@ awful.screen.connect_for_each_screen(function(s)
    })
 
    mywibox[s] = awful.wibar({
-      position = "bottom", screen = s,
+      position = "bottom", screen = s, ontop = true, -- stays above windows; fullscreen still covers it
       height = beautiful.bar_height, bg = beautiful.bar_bg,
    })
 
@@ -324,7 +329,7 @@ awful.screen.connect_for_each_screen(function(s)
       right_layout:add(status_icon(wibox.widget.systray()))
       right_layout:add(status_icon(bluetooth.new()))
       right_layout:add(status_icon(gobonet.new()))
-      right_layout:add(status_icon(battery.new()))
+      right_layout:add(status_icon(status.battery()))
       right_layout:add(status_icon(light_widget))
       right_layout:add(status_icon(sound_widget))
    end
@@ -443,6 +448,15 @@ local globalkeys = awful.util.table.join(
       end,
       { description = "Go back to previous client", group = "client" }),
 
+   -- Lock and power
+   awful.key({ modkey }, "l",
+      function() power.lock() end,
+      { description = "Lock the screen", group = "awesome" }),
+
+   awful.key({ "Control", ALT }, "Delete",
+      function() power.show() end,
+      { description = "Power menu", group = "awesome" }),
+
    -- Standard program
    awful.key({ modkey }, "Return",
       function()
@@ -464,13 +478,13 @@ local globalkeys = awful.util.table.join(
       awesome.quit,
       { description = "Quit Awesome", group = "awesome" }),
 
-   awful.key({ modkey }, "l",
+   awful.key({ modkey }, "bracketright",
       function()
          awful.tag.incmwfact(0.05)
       end,
       { description = "Increase master width factor", group = "layout" }),
 
-   awful.key({ modkey }, "h",
+   awful.key({ modkey }, "bracketleft",
       function()
          awful.tag.incmwfact(-0.05)
       end,
@@ -526,15 +540,15 @@ local globalkeys = awful.util.table.join(
    -- Prompt
    awful.key({ modkey }, "r",
       function()
-         menubar.show()
+         launcher.show()
       end,
-      { description = "Show the menubar", group = "awesome gobolinux" }),
+      { description = "Search and start applications", group = "launcher" }),
 
    awful.key({ ALT }, "F2",
       function()
-         menubar.show()
+         launcher.show()
       end,
-      { description = "Show the menubar", group = "awesome gobolinux" }),
+      { description = "Search and start applications", group = "launcher" }),
 
    --[[
    awful.key({ modkey }, "x",
@@ -549,8 +563,8 @@ local globalkeys = awful.util.table.join(
 
    -- Menubar
    awful.key({ modkey }, "p",
-      function() menubar.show() end,
-      { description = "Show the menubar", group = "launcher" }),
+      function() launcher.show() end,
+      { description = "Search and start applications", group = "launcher" }),
 
    -- Switch windows
    awful.key({ ALT, }, "Tab",

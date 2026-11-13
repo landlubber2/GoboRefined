@@ -15,6 +15,10 @@ xsetroot -solid '#0b1630' -cursor_name left_ptr
 # Extend the desktop across every connected display
 sh ~/.config/awesome/displays.sh
 
+# Lock the screen after 10 minutes without input, and before sleep
+xset s 600 5
+[ -x /bin/xss-lock ] && xss-lock -l -- sh ~/.config/awesome/lock.sh &
+
 # Shadows and fades
 [ -x /bin/picom ] && picom -b --config ~/.config/picom.conf
 

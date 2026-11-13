@@ -3,13 +3,21 @@
 --  Everything visual is drawn here with cairo (wallpaper, title bar
 --  buttons, launcher icons), so the theme needs almost no image files.
 --
---  Switch between dark and light by changing MODE below, then press
---  Mod4+Ctrl+r to reload.
+--  Dark or light is read from the file "mode" next to rc.lua (the power
+--  menu's Light mode / Dark mode button writes it). Default: dark.
 -----------------------------------------------------------------------
 
-local MODE = "dark"   -- "dark" or "light"
-
 local gears = require("gears")
+
+local MODE = "dark"
+do
+   local f = io.open(gears.filesystem.get_configuration_dir() .. "mode", "r")
+   if f then
+      local word = (f:read("*l") or ""):match("%a+")
+      f:close()
+      if word == "light" or word == "dark" then MODE = word end
+   end
+end
 local cairo = require("lgi").cairo
 local naughty = require("naughty")
 
@@ -163,6 +171,39 @@ theme.start_icon = surface(48, 48, function(cr)
    end
 end)
 theme.awesome_icon = theme.start_icon
+
+-- Icons for the power menu, drawn as thin outlines in the text colour.
+local function glyph(draw)
+   return surface(48, 48, function(cr)
+      set_color(cr, p.fg)
+      cr:set_line_width(3)
+      cr:set_line_cap(cairo.LineCap.ROUND)
+      cr:set_line_join(cairo.LineJoin.ROUND)
+      draw(cr)
+   end)
+end
+theme.power_icon = glyph(function(cr)
+   cr:arc(24, 26, 14, -math.pi / 2 + 0.6, -math.pi / 2 - 0.6 + 2 * math.pi); cr:stroke()
+   cr:move_to(24, 8); cr:line_to(24, 24); cr:stroke()
+end)
+theme.lock_icon = glyph(function(cr)
+   cr:arc(24, 19, 8, math.pi, 2 * math.pi); cr:stroke()
+   cr:move_to(16, 19); cr:line_to(16, 23); cr:move_to(32, 19); cr:line_to(32, 23); cr:stroke()
+   cr:translate(11, 23); gears.shape.rounded_rect(cr, 26, 18, 3); cr:stroke()
+end)
+theme.logout_icon = glyph(function(cr)
+   cr:move_to(20, 10); cr:line_to(11, 10); cr:line_to(11, 38); cr:line_to(20, 38); cr:stroke()
+   cr:move_to(20, 24); cr:line_to(38, 24); cr:stroke()
+   cr:move_to(31, 17); cr:line_to(38, 24); cr:line_to(31, 31); cr:stroke()
+end)
+theme.restart_icon = glyph(function(cr)
+   cr:arc(24, 24, 14, -math.pi / 2 + 0.9, -math.pi / 2 + 2 * math.pi); cr:stroke()
+   cr:move_to(24, 4); cr:line_to(24, 16); cr:line_to(34, 10); cr:close_path(); cr:fill()
+end)
+theme.mode_icon = glyph(function(cr)
+   cr:arc(24, 24, 14, 0, 2 * math.pi); cr:stroke()
+   cr:arc(24, 24, 14, -math.pi / 2, math.pi / 2); cr:line_to(24, 10); cr:fill()
+end)
 
 -- Fallback icon for windows that do not provide one (e.g. the terminal).
 theme.default_app_icon = surface(48, 48, function(cr)
