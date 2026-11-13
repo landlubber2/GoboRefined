@@ -121,3 +121,31 @@ Snapshot names listed earlier in this file that are not among these three no lon
 - Open-source software may be downloaded and compiled into the ISO freely; list what was added afterwards.
 - Not started. Next up: stage 0 (git, spin name, bug-report drafts), then stage 1 (launcher, power menu, lock,
   neon leftovers, light mode).
+
+## Stage 0 and stage 1 done — ISO 0.2 (2026-11-13)
+
+- Workspace is a git repository (`main`); ISOs, the VM, `upstream/` and lab secrets are ignored.
+- `docs/upstream-bugs/` holds four draft reports (not posted). Spin name still undecided.
+- New in the look (`look/gobo11/awesome/spin/`): `launcher.lua` (search), `power.lua` (lock, log out, restart,
+  shut down, dark/light), `status.lua` (flat battery/volume/brightness), `alttab.lua` (stock switcher, theme
+  colours). Category menu restyled. Start button: left click = category menu, right click = search.
+  Keys: Win+R / Win+P / Alt+F2 search, Win+W menu, Win+L lock, Ctrl+Alt+Del power menu.
+- Installer additions: sudo rule so group `sys` can run shutdown/reboot/poweroff/halt without a password;
+  console logs out when the desktop session ends (unless X died within 20 s).
+- **`dist/GoboLinux-017.01-spin-0.2.iso`** built with `spin/build-iso.sh` (VERSION=0.2). Verified in the VM by
+  keyboard-driven installs in BIOS and UEFI mode; on the BIOS install also search, log out and shut down.
+  Mouse clicks (start button, power menu buttons) could not be simulated — only keyboard paths were exercised.
+
+Lab lessons:
+- `vm/push-look.sh` pushes the look to the VM user and reloads; `vm/lua.sh '<lua>'` runs Lua in the desktop.
+  The X display is not always `:0` — `lab-desktop.sh` reads it from the awesome process.
+- In the menu, Right on "Search applications..." activates it; send test keys slowly.
+- VirtualBox UEFI boots the disk, not the DVD, when the disk has a loader/boot entry. Before a UEFI ISO test on
+  the build disk: delete `GoboLinux` entries with `efibootmgr -B` and remove `EFI/BOOT/BOOTX64.EFI` from the ESP
+  (the snapshot keeps the build environment intact). Always screenshot before typing install answers.
+- XSecureLock needs `XSECURELOCK_NO_COMPOSITE=1` here, or the taskbar area shows through the lock screen.
+
+VM snapshots now: `not even installed`, `iso-build-env-2` (build env), `iso-final-installed-efi` (0.1, can be
+deleted), `iso-0.2-installed-efi` (**current**, powered off).
+
+Next: user tries ISO 0.2 on the real PC (checkpoint 1). Then stages 2+3 together (fonts/icons kept minimal).

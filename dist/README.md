@@ -1,6 +1,9 @@
 # GoboLinux 017.01 modernized spin — test ISO
 
-`GoboLinux-017.01-spin.iso` — check it against `GoboLinux-017.01-spin.iso.sha256` before use.
+`GoboLinux-017.01-spin-0.2.iso` — check it against `GoboLinux-017.01-spin-0.2.iso.sha256` before use.
+
+New in 0.2: app menu on the dots button (left click) with search on right click or Win+R; power menu
+(Ctrl+Alt+Del) with lock, log out, restart, shut down and a dark/light switch; Win+L locks; flat status icons.
 
 ## Try it on a PC
 
