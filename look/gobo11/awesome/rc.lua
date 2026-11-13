@@ -151,14 +151,68 @@ local myawesomemenu = {
    { "Quit", function() awesome.quit() end }
 }
 
+-- Menus: rounded corners, and rows with padded, evenly sized icons
+-- (the stock rows stretch each icon to the full row height).
+do
+   local new_menu = awful.menu.new
+   awful.menu.new = function(...)
+      local m = new_menu(...)
+      if m and m.wibox and beautiful.menu_shape then
+         m.wibox.shape = beautiful.menu_shape
+      end
+      return m
+   end
+
+   local ICON, PAD = 20, 12
+   awful.menu.entry = function(parent, args)
+      args = args or {}
+      args.text = args[1] or args.text or ""
+      args.cmd = args[2] or args.cmd
+      args.icon = args[3] or args.icon
+
+      local label = wibox.widget.textbox()
+      label:set_font(parent.theme.font)
+      label:set_text(args.text)
+
+      local iconbox
+      if args.icon then
+         iconbox = wibox.widget.imagebox()
+         iconbox.forced_width, iconbox.forced_height = ICON, ICON
+         if not iconbox:set_image(gears.surface.load_silently(args.icon)) then iconbox = nil end
+      end
+
+      local left = wibox.layout.fixed.horizontal()
+      local slot = wibox.container.place(iconbox)   -- an empty slot keeps labels aligned
+      slot.forced_width = ICON
+      left:add(wibox.container.margin(slot, PAD, PAD, 0, 0))
+      left:add(label)
+
+      local submenu
+      if type(args.cmd) == "table" then
+         submenu = wibox.widget.imagebox()
+         submenu.forced_width, submenu.forced_height = 14, 14
+         submenu:set_image(parent.theme.submenu_icon)
+      end
+
+      local layout = wibox.layout.align.horizontal()
+      layout:set_left(left)
+      if submenu then
+         layout:set_right(wibox.container.margin(wibox.container.place(submenu), 0, PAD, 0, 0))
+      end
+
+      return {
+         label = label, sep = submenu, icon = iconbox, widget = layout,
+         cmd = args.cmd, theme = args.theme, akey = "",
+      }
+   end
+end
+
 local mymainmenu = awful.menu({
    items = awful.util.table.join({
-      { "Awesome WM", myawesomemenu, beautiful.awesome_icon },
-      { "Search applications...", function() launcher.show() end, nil },
-      { "Power...", function() power.show() end, nil },
-      { "Open Terminal", terminal }
+      { "Search applications...", function() launcher.show() end, beautiful.search_icon },
+      { "Terminal", terminal, beautiful.default_app_icon },
    }),
-   theme = { width = 280, height = 32 },
+   theme = { width = beautiful.menu_width, height = beautiful.menu_height },
 })
 
 menu_gen.generate(function(entries)
@@ -182,6 +236,8 @@ menu_gen.generate(function(entries)
          mymainmenu:add({ cat.name, cat_submenus[k], icon_theme():find_icon_path(cat.icon_name) })
       end
    end
+   mymainmenu:add({ "Desktop", myawesomemenu, beautiful.desktop_icon })
+   mymainmenu:add({ "Power...", function() power.show() end, beautiful.power_icon })
 end)
 
 

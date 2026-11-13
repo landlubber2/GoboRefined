@@ -200,6 +200,14 @@ theme.restart_icon = glyph(function(cr)
    cr:arc(24, 24, 14, -math.pi / 2 + 0.9, -math.pi / 2 + 2 * math.pi); cr:stroke()
    cr:move_to(24, 4); cr:line_to(24, 16); cr:line_to(34, 10); cr:close_path(); cr:fill()
 end)
+theme.search_icon = glyph(function(cr)
+   cr:arc(21, 21, 11, 0, 2 * math.pi); cr:stroke()
+   cr:move_to(29, 29); cr:line_to(39, 39); cr:stroke()
+end)
+theme.desktop_icon = glyph(function(cr)
+   cr:translate(7, 9); gears.shape.rounded_rect(cr, 34, 24, 3); cr:stroke()
+   cr:move_to(11, 31); cr:line_to(23, 31); cr:move_to(17, 24); cr:line_to(17, 31); cr:stroke()
+end)
 theme.mode_icon = glyph(function(cr)
    cr:arc(24, 24, 14, 0, 2 * math.pi); cr:stroke()
    cr:arc(24, 24, 14, -math.pi / 2, math.pi / 2); cr:line_to(24, 10); cr:fill()
@@ -219,8 +227,9 @@ end)
 -- Menus -----------------------------------------------------------------
 
 theme.menu_font         = theme.font
-theme.menu_height       = 30
-theme.menu_width        = 260
+theme.menu_height       = 34
+theme.menu_width        = 270
+theme.menu_shape        = rounded(8)
 theme.menu_fg_normal    = p.fg
 theme.menu_fg_focus     = p.fg
 theme.menu_bg_normal    = p.menu
