@@ -1,4 +1,4 @@
-# How to install software on this spin
+# How to install software on GoboRefined (this spin of GoboLinux 017.01)
 
 GoboLinux has no `apt`, `dnf` or app store. Every program lives in its own folder,
 `/Programs/<Name>/<Version>`, and is linked into the system with `SymlinkProgram`.

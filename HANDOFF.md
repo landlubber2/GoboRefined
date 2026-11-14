@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-12 (evening). Direction: **modernized spin, path of least resistance** — see `docs/goals.md`.
+Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current ISO: **`dist/GoboRefined-0.5.iso`** (see the last section). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -90,12 +90,17 @@ non-English welcome texts still mention the old `Installer`.
 
 ### Rebuilding the ISO
 
-1. Host: `node vm/serve.js`; refresh `vm/serve/gobo11.tgz` (`cd look && tar czf ../vm/serve/gobo11.tgz gobo11`)
-   and `vm/serve/build-iso.sh` (copy of `spin/build-iso.sh`).
-2. Restore VM snapshot `iso-build-env-2`, firmware EFI, **no ISO attached**, boot from disk (sshd starts at boot).
-3. Hot-attach the stock ISO, then in the VM: `bash /Data/Build/build-iso.sh` (fetches from the host, ~5 min).
-   Do not wait on it with `pgrep -f build-iso.sh` over ssh — that matches the waiting shell itself.
-4. `scp` `/Data/Build/GoboLinux-017.01-spin.iso` to `dist/`.
+(Current procedure, updated for 0.5; the snapshot names below are the ones that exist now.)
+
+1. Host: `node vm/serve.js` on port 8766; refresh `vm/serve/gobo11.tgz` (`cd look && tar czf ../vm/serve/gobo11.tgz gobo11`),
+   `vm/serve/lxdm-files.tgz` (`cd spin && tar czf ../vm/serve/lxdm-files.tgz --exclude=render-title.sh lxdm`),
+   `vm/serve/build-iso.sh` (identical copy of `spin/build-iso.sh`), `vm/serve/gobo-command-not-found`,
+   `vm/serve/software-install.txt` (copy of `docs/software-install.md`); `vm/serve/welcome.src` is edited in place.
+2. Restore VM snapshot `iso-build-env-5`, firmware EFI, **no ISO attached**, boot from disk (sshd starts at boot).
+3. Hot-attach the stock ISO, then in the VM: `bash /Data/Build/build-iso.sh` (fetches from the host; ~10 min with
+   ONLYOFFICE). Do not wait on it with `pgrep -f build-iso.sh` over ssh — that matches the waiting shell itself;
+   poll `tail /Data/Build/build-0.5.log` for `BUILD-DONE` instead (run it with nohup and a log file).
+4. `scp` `/Data/Build/GoboRefined-$VERSION.iso` to `dist/`, write the `.sha256`, compare with the build's output.
 
 ### VM snapshots added today
 
@@ -349,3 +354,91 @@ Udevil 0.5 MB / 0.1 MB; USB-ModeSwitch 0.1 MB / 0.03 MB; RTL8852AU 9.6 MB / 2.5 
 
 VM snapshots: `iso-build-env-5` (= -4 + Udevil, USB-ModeSwitch, RTL8852AU, OnlyOffice, the 0.5 look
 for `lab`, updated LXDM PostLogout; taken powered off). **Current.**
+
+## Name GoboRefined + ISO 0.5 built and install-tested in the VM (2026-11-14)
+
+**Name.** The user named the spin **GoboRefined**; it is always shown as an unofficial spin of GoboLinux 017.01.
+Applied where a user sees the product name:
+- Login screen title: `spin/lxdm/Gobo11/login.png` now reads "GoboRefined" with the line "an unofficial spin of
+  GoboLinux 017.01" (the old title was this image, not text; redraw it with `spin/lxdm/render-title.sh` in the
+  build VM). `spin/build-iso.sh` now copies the theme files from the host (`lxdm-files.tgz`) into the rootfs, so
+  the title no longer depends on the build VM's `/Programs/LXDM` copy (snapshot `iso-build-env-5` still holds the
+  old image there). That build-iso step was checked on its own in the build VM, not in a full build.
+- GRUB entries written by `gobo-install`: "GoboRefined 0.5 (GoboLinux 017.01)" and "... (safe graphics)"; the
+  version comes from `/Programs/GoboSpin/Current/share/spin-version` (no version when run from a checkout).
+  Installer messages: disk question, "About to install GoboRefined 0.5, an unofficial spin of GoboLinux 017.01:",
+  "GoboRefined is installed on /dev/sda.", the header comment shown by `--help`.
+- Live welcome text (`vm/serve/welcome.src`), GoboSpin's `Description`, ISO file name `GoboRefined-$VERSION.iso`,
+  `README.md`, `dist/README.md`, `docs/roadmap.md`, `docs/software-install.md` title, `docs/login-screen.md`.
+- Deliberately unchanged: ISO volume label `GOBOLINUX_LIVE_INSTALLER`, partition/filesystem label `GoboLinux`,
+  `/Mount/GoboLinux`, the efibootmgr label "GoboLinux", `/Programs/GoboSpin`, the `gobo11` look, VM and snapshot
+  names, the default hostname `gobolinux`, the stock isolinux/UEFI boot menu of the live ISO (replayed unchanged
+  from the stock ISO), upstream names (GoboNet, GoboLinux Recipes...). `dist/gobo-spin.tgz` (0.1-era installer +
+  look for use with the stock ISO) was not rebuilt.
+
+**ISO.** `dist/GoboRefined-0.5.iso`, 2,860,646,400 bytes, sha256
+`b35ac96720a1454ba24d45243084a5f4a60c17026c2f43af39f1acc42163ca0b` (`.sha256` next to it; matches the build VM).
+Two builds were made; the first (sha256 4375dcc1...) was replaced after the search bug below was found.
+The 0.4 ISO and its checksum were removed from `dist/`.
+
+**Bug found and fixed (look):** after the search window (right click on dots / Win+R) was closed by a click
+outside it or with its power button, every later search opened without keyboard input until the next login.
+Cause: `launcher.hide()` and `power.hide()` called the bare C `keygrabber.stop()`, while the search prompt runs
+on `awful.keygrabber`; awful's grabber stack then believed a grabber was still running and never grabbed the
+keyboard again. Fixed in `look/gobo11/awesome/spin/launcher.lua` (`awful.keygrabber.stop()`) and `power.lua`
+(its own grabber via `awful.keygrabber.run/stop`). Probably present since 0.2 (0.4's tests never typed into a
+search opened after such a close). Verified on the final ISO (UEFI and the autologin BIOS install).
+
+### Tests of the final ISO (VM; keyboard and simulated mouse)
+
+| Check | Result | Evidence |
+|---|---|---|
+| A UEFI install by keyboard, defaults, layout pl | pass | summary "About to install GoboRefined 0.5 ..." + login line; `0.5-installed-installer.png` |
+| A GRUB shows the new name | pass | `0.5-installed-grub.png`; grub.cfg menuentries |
+| A greeter titled GoboRefined, login to desktop | pass | `0.5-installed-greeter.png`, `0.5-installed-desktop.png` |
+| A Win+E / Files button | pass | both open a Pcmanfm client |
+| A volume icon -> sound control | pass | Pavucontrol client |
+| A dots left = menu, right = search (+ typing) | pass | menu screenshot; search filters "only" -> ONLYOFFICE |
+| A Displays entry | pass | Lxrandr client |
+| A Lock + unlock | pass | xsecurelock running, prompt shown, password unlocks |
+| A Log out -> greeter, Restart -> greeter, Shut down | pass | greeter after each; sshd gone after restart; VM off within seconds after Shut down |
+| A light/dark toggle | pass | light and dark screenshots |
+| A wired DHCP | pass | eth0 10.0.2.15/24 |
+| B1 title bar double click / single click / drag | pass | 720x512 -> 1280x752 max -> 720x512; single click no change; drag moves |
+| B2 select = copy, right click paste, Ctrl+Shift+C/V | pass | xclip shows PRIMARY+CLIPBOARD; pasted lines in `0.5-installed-terminal.png` |
+| B2 GTK (zenity entry) -> terminal and terminal -> GTK | pass | "g:GTKCOPY99" pasted; zenity returned the terminal selection |
+| B2 Firefox <-> terminal | not tested | |
+| B3 USB notification, Open, write as user, Safely remove, pull without remove | pass (see notes) | `0.5-installed-usb-notification.png`; `/Mount/Media` empty afterwards |
+| B4 modinfo 8852au (2357:013f), modprobe, udev rule, usb_modeswitch in PATH, gobonet_backend setuid | pass | alias `usb:v2357p013F...`; module loaded; rule link; `/usr/bin/usb_modeswitch` for lab; `-rwsr-xr-x` |
+| B5 ONLYOFFICE from search, new document, save .docx, open .docx from PCManFM | pass | `0.5-installed-onlyoffice.png`; file is "Microsoft Word 2007+" with the typed text |
+| B6 `apt update` hint, `sudo Compile` found | pass | hint text; `sudo Compile --help` prints usage |
+| C BIOS, answers file, `--autologin --swap 1024` | pass | desktop at boot; `/Data/Variable/swap` 1 GB active; summary "automatic login to the desktop ..."; closing line "The desktop starts by itself" |
+| D BIOS `--text-login` | pass | no LXDM, no inittab line; tty1 login starts X; USB mounted + notification; Log out -> tty1 prompt, stick unmounted, only PulseAudio left (exits by itself) |
+
+Notes from testing (not fixed):
+- **USB notification button order is random** (Awesome 4.3's naughty lays out `actions` with `pairs()`):
+  sometimes "Open" is first, sometimes "Safely remove". In one run a click meant for "Open" hit "Safely remove".
+  Fix idea for 0.6: keep only "Safely remove" as an action (clicking the notification already opens the drive).
+- Once, clicking "Open" in the notification opened no window (PCManFM had just been closed; possibly its
+  single-instance hand-off). The taskbar drive menu's "Open" and a later notification "Open" worked.
+- The hint only appears when the unknown command is the first word of the line (`clear; apt update` shows only
+  zsh's message): upstream's CommandNotFound hook looks at the first word only.
+- The live session brings up no network by itself (interface `enp0s3` there; the installed system uses `eth0`).
+  `dhcpcd -b` fixes it. Matters only for live-session use (e.g. Wi-Fi before installing).
+- Lab: a hot-plugged `usbstick.vdi` gets a fresh differencing image on every attach (the base has a snapshot
+  child), so files written during one plug are gone at the next; not a spin bug.
+
+### Lab lessons (0.5)
+- Restoring `iso-build-env-5` throws away anything changed in the build VM since; re-apply changes or (better)
+  make `build-iso.sh` fetch them from the host, as was done for the LXDM theme.
+- Before simulated typing, check that the search window really holds the keyboard:
+  `vm/lua.sh 'return tostring(keygrabber.isrunning())'`.
+- The installed system's sshd is not started at boot: tty2 root login + `lab-ssh.sh` after every boot.
+- `su - lab -c ...` from the ssh root shell asks for a password here; `su lab -c ...` works.
+- VM boot order is now DVD first (`--boot1 dvd --boot2 disk`).
+
+VM snapshots now: `not even installed`, `iso-build-env-2`, `iso-build-env-3`, `iso-build-env-4`,
+`iso-0.4-installed-efi`, `iso-build-env-5` (build env for 0.5), **`iso-0.5-installed-efi`** (current, powered
+off: UEFI default install of the final 0.5 ISO, user lab, LXDM, layout pl, timezone UTC).
+
+Next: the user tries ISO 0.5 on the real PC, Wi-Fi adapter first (`dist/README.md`).

@@ -9,6 +9,7 @@ local beautiful = require("beautiful")
 local power = {}
 
 local config_dir = gears.filesystem.get_configuration_dir()
+local grabber         -- the key grabber function while the menu is open
 local popup, backdrop
 local open = false
 
@@ -44,7 +45,9 @@ function power.hide()
    open = false
    popup.visible = false
    backdrop.visible = false
-   keygrabber.stop()
+   -- awful.keygrabber, not the bare C keygrabber: mixing the two leaves awful's
+   -- grabber stack out of step and breaks keyboard input in the search later.
+   if grabber then awful.keygrabber.stop(grabber); grabber = nil end
 end
 
 local function build()
@@ -102,7 +105,7 @@ function power.show()
    popup.y = s.geometry.y + math.floor((s.geometry.height - popup.height) / 2)
    backdrop.visible = true
    popup.visible = true
-   keygrabber.run(function(_, key, event)
+   grabber = awful.keygrabber.run(function(_, key, event)
       if event == "press" and (key == "Escape" or key == "q") then power.hide() end
    end)
 end

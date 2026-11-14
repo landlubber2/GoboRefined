@@ -190,7 +190,11 @@ function launcher.hide()
    open = false
    popup.visible = false
    backdrop.visible = false
-   keygrabber.stop()
+   -- Stop the search prompt's grabber through awful.keygrabber (the prompt was started
+   -- with it). The bare C keygrabber.stop() left awful's grabber stack thinking it was
+   -- still running, so after closing the search with a click outside or its power
+   -- button, every later search opened without keyboard input.
+   awful.keygrabber.stop()
 end
 
 function launcher.show()

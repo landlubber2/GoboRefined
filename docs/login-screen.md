@@ -18,7 +18,7 @@ no systemd). The spin's own files come from `spin/lxdm/` and end up in `/Program
 | `/etc/lxdm/Xsession` | `spin/lxdm/Xsession` | loads `/System/Environment/Cache`, then runs the user's `~/.xinitrc` through the login shell under `dbus-launch` |
 | `/etc/lxdm/PostLogout` | `spin/lxdm/PostLogout` | kills the user's leftover `xss-lock` (it spins at 100% CPU once its X server is gone) |
 | `/etc/pam.d/lxdm` | `spin/lxdm/pam.d-lxdm` | modelled on `/etc/pam.d/login` (system-auth/-account/-session/-password) |
-| `share/lxdm/themes/Gobo11/` | `spin/lxdm/Gobo11/` + Industrial's layout | our wallpaper (rendered from the Awesome theme at 1920x1080), Inter, dark entry field, "GoboLinux" title |
+| `share/lxdm/themes/Gobo11/` | `spin/lxdm/Gobo11/` + Industrial's layout | our wallpaper (rendered from the Awesome theme at 1920x1080), Inter, dark entry field, title image `login.png` ("GoboRefined" + "an unofficial spin of GoboLinux 017.01", drawn by `spin/lxdm/render-title.sh`) |
 
 Two problems found and fixed on the way (both are in the files above):
 - LXDM's stock `Xsession` sources `/etc/xprofile` with bash; on GoboLinux that file is zsh syntax, so the

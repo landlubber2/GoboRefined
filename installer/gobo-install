@@ -1,5 +1,6 @@
 #!/bin/bash
-# gobo-install — thin installer for the GoboLinux 017.01 live environment.
+# gobo-install — thin installer of GoboRefined, an unofficial spin of GoboLinux 017.01,
+# for its live environment.
 #
 # Replaces the upstream graphical Installer for the common case: one disk,
 # whole-disk install. It reuses upstream's ProfileInstall for the file copy and
@@ -34,6 +35,8 @@ ASSUME_YES=0
 
 DEST=/Mount/GoboLinux
 LOG=/tmp/gobo-install.log
+SPIN_NAME="GoboRefined"  # the spin's name (unofficial; based on GoboLinux 017.01)
+SPIN_VERSION=""          # read from the GoboSpin program's share/spin-version below
 
 ### Helpers ####################################################################
 
@@ -60,7 +63,7 @@ cleanup() {
 }
 
 usage() {
-   sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+   sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
    cat <<EOF
 
 Options:
@@ -121,6 +124,15 @@ then
    do [ -d "$d" ] && LOOK_DIR="$d" && break
    done
 fi
+self_dir="$(dirname "$(readlink -f "$0")")"
+for f in "$self_dir/../share/spin-version" /Programs/GoboSpin/Current/share/spin-version
+do
+   if [ -z "$SPIN_VERSION" ] && [ -f "$f" ]
+   then SPIN_VERSION="$(head -n 1 "$f" | tr -dc '0-9A-Za-z.-')"
+   fi
+done
+SPIN_LABEL="$SPIN_NAME${SPIN_VERSION:+ $SPIN_VERSION}"
+SPIN_TITLE="$SPIN_LABEL (GoboLinux 017.01)"
 if [ -z "${FIRMWARE:-}" ]
 then [ -d /sys/firmware/efi ] && FIRMWARE=efi || FIRMWARE=bios
 fi
@@ -158,7 +170,7 @@ then
    echo "Disks:"
    lsblk -dno NAME,SIZE,MODEL,TYPE | awk '$NF == "disk" { $NF = ""; print "  /dev/" $0 }'
    first=$(lsblk -dno NAME,TYPE | awk '$2 == "disk" { print "/dev/" $1; exit }')
-   ask DISK "Disk to ERASE and install GoboLinux on" "$first"
+   ask DISK "Disk to ERASE and install $SPIN_NAME on" "$first"
 fi
 [ -b "$DISK" ] || die "$DISK is not a block device"
 [ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "$DISK is not a whole disk"
@@ -194,7 +206,7 @@ then
 fi
 
 echo
-echo "About to install GoboLinux:"
+echo "About to install $SPIN_LABEL, an unofficial spin of GoboLinux 017.01:"
 echo "  disk      $DISK ($(lsblk -dno SIZE "$DISK" | tr -d ' ')) - EVERYTHING ON IT WILL BE ERASED"
 echo "  firmware  $FIRMWARE"
 echo "  hostname  $HOSTNAME_NEW"
@@ -541,12 +553,12 @@ insmod $partmod
 insmod ext2
 search --no-floppy --fs-uuid --set=root $ROOT_UUID
 
-menuentry "GoboLinux 017.01" {
+menuentry "$SPIN_TITLE" {
     linux /System/Kernel/Boot/kernel $cmdline
     initrd /System/Kernel/Boot/$initramfs
 }
 
-menuentry "GoboLinux 017.01 (safe graphics)" {
+menuentry "$SPIN_TITLE (safe graphics)" {
     linux /System/Kernel/Boot/kernel $cmdline nomodeset
     initrd /System/Kernel/Boot/$initramfs
 }
@@ -561,7 +573,7 @@ umount -R "$DEST" >> "$LOG" 2>&1 || umount -lR "$DEST" >> "$LOG" 2>&1 || true
 [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
 
 echo
-echo "${c_cyan}GoboLinux is installed on $DISK.${c_off}"
+echo "${c_cyan}$SPIN_NAME is installed on $DISK.${c_off}"
 if [ "$AUTOLOGIN" = 1 ]
 then echo "Remove the installation medium and reboot. The desktop starts by itself (automatic login as '$USER_NAME')."
 elif [ "$LOGIN_SCREEN" = 1 ]

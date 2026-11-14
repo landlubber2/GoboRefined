@@ -19,6 +19,11 @@ The order puts cheap, visible, low-risk work first and anything that can lose da
 
 **Checkpoint 0:** first commit exists; name decided; four drafts written. No ISO.
 
+> **Status 2026-11-14:** name decided by the user: **GoboRefined** (always shown as "an unofficial spin of
+> GoboLinux 017.01"). Applied in ISO 0.5: login screen title, GRUB entries, live welcome text, installer
+> messages, ISO file name `GoboRefined-<version>.iso`. Internal names (disk label `GoboLinux`, `/Programs/GoboSpin`,
+> the `gobo11` look, the ISO volume label `GOBOLINUX_LIVE_INSTALLER`) are unchanged.
+
 ## Stage 1 — Desktop basics from what already ships (no new software)
 
 - Searchable app launcher: a Start-style popup with a search box, written inside the existing desktop.
@@ -63,12 +68,20 @@ certain item on the whole roadmap. Each program that fails is dropped or swapped
 > (interactive, defaults), BIOS (`--autologin --swap 1024`) and BIOS (`--text-login`); all checks passed, see
 > HANDOFF. Snapshot `iso-0.4-installed-efi`. Waiting for the user's real-PC test; no git tag yet.
 
+> **Status 2026-11-14 (0.4 feedback → ISO 0.5):** the user tested 0.4 on the real PC; the six reported problems
+> were fixed (title-bar double click, terminal paste, USB automount, TP-Link Wi-Fi mode switch + driver, ONLYOFFICE,
+> "command not found" hint) and the name GoboRefined applied. **`dist/GoboRefined-0.5.iso`** built and installed in
+> the VM (UEFI interactive, BIOS `--autologin --swap 1024`, BIOS `--text-login`), all checks passed except the
+> Firefox paste check (not tested); see HANDOFF. A search-window keyboard bug found during testing was fixed. The
+> Wi-Fi adapter can only be tested on the real PC. Snapshot `iso-0.5-installed-efi`. The boot-experience stage below
+> therefore becomes ISO 0.6.
+
 ## Stage 4 — Boot experience
 
 - GRUB menu themed to match the desktop (it is a static file our installer writes, so this is contained).
 - Quieter boot: a matching boot theme instead of the stock text.
 
-**Checkpoint 4 → ISO 0.5.** Risk: medium. A bad boot theme can hide real boot errors, so the "safe graphics"
+**Checkpoint 4 → ISO 0.6** (0.5 went to the fixes for the 0.4 test). Risk: medium. A bad boot theme can hide real boot errors, so the "safe graphics"
 entry stays plain.
 
 ## Stage 5 — Installer

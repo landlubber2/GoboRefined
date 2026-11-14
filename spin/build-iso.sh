@@ -1,5 +1,6 @@
 #!/bin/bash
-# Rebuild the spin ISO. Runs INSIDE the build VM (snapshot "iso-build-env"), as root:
+# Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
+# Runs INSIDE the build VM (snapshot "iso-build-env-5"), as root:
 #
 #   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
 #
@@ -18,13 +19,16 @@
 #                                   (snapshot "iso-build-env-5"; spin/build-programs.sh)
 # and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz, welcome.src,
 # gobo-command-not-found and software-install.txt (copies of spin/gobo-command-not-found and
-# docs/software-install.md in vm/serve/).
+# docs/software-install.md in vm/serve/), lxdm-files.tgz (cd spin && tar czf ../vm/serve/lxdm-files.tgz
+# --exclude=render-title.sh lxdm).
 set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
 VERSION=0.5
-OUT=$B/GoboLinux-017.01-spin-$VERSION.iso
+# GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
+# stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
+OUT=$B/GoboRefined-$VERSION.iso
 cd $B
 
 echo "== fetching installer and look from the host"
@@ -43,6 +47,10 @@ KREL=6.12.16-Gobo
 for prog in $EXTRA $MODULES
 do rm -rf $R/Programs/$prog && cp -a /Programs/$prog $R/Programs/
 done
+# Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm on the host,
+# so a theme change does not depend on the build VM's copy of /Programs/LXDM being up to date.
+rm -rf lxdm-files && mkdir lxdm-files && wget -qO- $HOST/lxdm-files.tgz | tar xz -C lxdm-files
+install -m 644 lxdm-files/lxdm/Gobo11/* $R/Programs/LXDM/0.5.3/share/lxdm/themes/Gobo11/
 P=$R/Programs/GoboSpin
 rm -rf $P && mkdir -p $P/1.0/bin $P/1.0/share $P/1.0/Resources
 install -m 755 gobo-install $P/1.0/bin/gobo-install
@@ -50,7 +58,7 @@ install -m 755 gobo-command-not-found $P/1.0/bin/gobo-command-not-found
 mkdir -p $P/1.0/share/doc
 install -m 644 software-install.txt $P/1.0/share/doc/software-install.txt
 cp -r gobo11 $P/1.0/share/gobo11
-echo "Thin installer and desktop look of the modernized GoboLinux spin." > $P/1.0/Resources/Description
+echo "GoboRefined (unofficial spin of GoboLinux 017.01): thin installer and desktop look." > $P/1.0/Resources/Description
 echo "$VERSION" > $P/1.0/share/spin-version
 ln -sfn 1.0 $P/Current
 mount -t proc proc $R/proc
