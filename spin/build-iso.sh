@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
-# Runs INSIDE the build VM (snapshot "iso-build-env-5"), as root:
+# Runs INSIDE the build VM (snapshot "iso-build-env-6a"), as root:
 #
 #   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
 #
@@ -17,6 +17,8 @@
 #   - /Programs/Udevil, USB-ModeSwitch, RTL8852AU, OnlyOffice
 #                                   USB automount, Wi-Fi mode switch + driver, office suite
 #                                   (snapshot "iso-build-env-5"; spin/build-programs.sh)
+#   - /Programs/CopyQ, and USB-ModeSwitch rebuilt with gobo-wifi-switch + the new udev rule
+#                                   clipboard history, Wi-Fi switch wrapper (snapshot "iso-build-env-6a")
 # and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz, welcome.src,
 # gobo-command-not-found and software-install.txt (copies of spin/gobo-command-not-found and
 # docs/software-install.md in vm/serve/), lxdm-files.tgz (cd spin && tar czf ../vm/serve/lxdm-files.tgz
@@ -25,7 +27,7 @@ set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=0.5
+VERSION=0.6
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
 # stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
 OUT=$B/GoboRefined-$VERSION.iso
@@ -40,7 +42,7 @@ rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ"
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -98,6 +100,15 @@ chroot $R update-mime-database /System/Index/share/mime
 chmod 4755 $R/Programs/GoboNet/Current/bin/gobonet_backend
 # udevil mounts USB drives for normal users: setuid root (cp -a keeps it; make sure)
 chmod 4755 $R/Programs/Udevil/Current/bin/udevil
+# 0.6: the desktop session may run the Wi-Fi adapter switch (gobo-wifi-switch, in USB-ModeSwitch)
+# as root, with exactly this argument and nothing else. The live user is root; installed users
+# are in group "users". The installer copies /Programs, so installed systems get this rule too.
+SUDOERS=$R/Programs/Sudo/Settings/sudoers
+grep -q gobo-wifi-switch $SUDOERS || \
+   echo '%users ALL=(root) NOPASSWD: /System/Index/bin/gobo-wifi-switch --session' >> $SUDOERS
+chroot $R visudo -c > /dev/null
+[ -x $R/Programs/USB-ModeSwitch/Current/bin/gobo-wifi-switch ] || { echo "gobo-wifi-switch missing"; exit 1; }
+grep -q 'gobo-wifi-switch --udev' $R/Programs/USB-ModeSwitch/Current/lib/udev/rules.d/40-gobo-realtek-wifi.rules
 # no stray link inside /Mount/Media (USB drives are mounted there; see gobo-install)
 [ -L $R/Mount/Media/Media ] && rm -f $R/Mount/Media/Media
 umount $R/proc

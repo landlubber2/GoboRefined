@@ -442,3 +442,91 @@ VM snapshots now: `not even installed`, `iso-build-env-2`, `iso-build-env-3`, `i
 off: UEFI default install of the final 0.5 ISO, user lab, LXDM, layout pl, timezone UTC).
 
 Next: the user tries ISO 0.5 on the real PC, Wi-Fi adapter first (`dist/README.md`).
+
+## 0.6 desktop half: real-PC feedback on 0.5 fixed in the look and build VM (2026-11-14)
+
+ISO 0.6 **not built** (a second worker still does the file-manager half). Build VM state: snapshot
+**`iso-build-env-6a`** (= `iso-build-env-5` + CopyQ 6.4.0, USB-ModeSwitch rebuilt with `gobo-wifi-switch`
+and the new udev rule, the sudoers rule in the build VM, the 0.6 look for `lab`). `spin/build-iso.sh`:
+VERSION=0.6, copies CopyQ, writes the sudoers rule into the rootfs; `vm/serve/build-iso.sh` identical.
+
+| # | Item | State | What changed |
+|---|---|---|---|
+| 1 | Keyboard input gets stuck | done | `spin/popups.lua` (new): one registry of popups, `close_all()` before every show, a click-catching backdrop for every awful.menu, Win+Escape safety net (also inside grabs); `launcher.lua` stops exactly its prompt grabber; `alttab.lua` on awful.keygrabber with a robust end; hotkeys popup closes on a click outside |
+| 2 | Wi-Fi adapter does not switch by itself | done (needs the real PC) | `spin/gobo-wifi-switch` wrapper (detached, retries, log), two udev triggers, desktop trigger via sudo; see `docs/wifi-notes.md` (0.6 section) |
+| 3 | Network icon always full | done | `spin/network.lua`: own cairo icons (off, no-adapter off, connecting, wired, Wi-Fi 4 levels), real state every 4 s and on click; GoboNet's widget runs hidden for its menu |
+| 4 | Virtual desktops | done | `spin/desktops.lua`: 1 desktop per screen, Win+Shift+Tab list (add/remove/switch), indicator hidden with one desktop, count + window placement survive restarts |
+| 5 | Screenshots | done | `spin/screenshot.lua`: Win+Shift+S card (Area/Window/Whole screen), Print = screen; ImageMagick `import` (on the image), `~/Pictures/Screenshots`, clipboard, notification -> folder |
+| 6 | Clipboard history | done | CopyQ 6.4.0 (Qt 5, X11-only build), 20 items, no tray; `spin/cliphist.lua` popup on Win+Shift+V; a CopyQ script keeps the clipboard after its program closes |
+| 7 | Default folders | done | `apply.sh` creates Documents, Downloads, Music, Pictures(/Screenshots), Videos + `~/.config/user-dirs.dirs`; installer chowns them |
+| 8 | USB notification | done | only one action button ("Safely remove"); body click opens the drive |
+
+### Item 1: what was actually broken (reproduced with `vm/input-test.sh`)
+
+- **The category menu (and every other awful.menu: window menu, network list, USB menu, taskbar window
+  list) holds the keyboard grab for as long as it is open, and nothing closed it on a click elsewhere.**
+  A click on a window gave that window the focus (cursor blinking) but every key still went to the
+  invisible-to-the-user menu grab. 0.5 baseline: 7 of 23 scenarios failed, all of them menus
+  (menu + click on window / desktop / taskbar, taskbar right-click list, network menu, USB menu,
+  window menu). This matches the second report exactly.
+- **Latent, matches the first report:** `launcher.hide()` called `awful.keygrabber.stop()` without an
+  argument. In Awesome 4.3 that removes the *oldest* grabber on the stack (`grabbers[#grabbers]`), not
+  the newest. With the category menu open and the search opened over it (right click on the dots),
+  closing the search removed the menu's grabber and left the hidden search prompt holding the keyboard
+  (stack check: 1 grabber left, menu visible, C grab still running).
+- alt-tab used the bare C keygrabber and ended only on the release of `Alt_L`; now awful.keygrabber,
+  any Alt release, or any key without Alt held, and cancellable.
+- The hotkeys popup closed only on a key or a click on itself (its grab stayed after a click elsewhere).
+- Not a bug (lab artefact): keys sent with `root.fake_input` sometimes reached urxvt as the previous
+  shortcut's letter; with VirtualBox's virtual keyboard this never happened, so the test uses that.
+
+After the fix the regression test passes all 32 scenarios (incl. desktops, screenshot and clipboard popups), and Win+Escape inside an open menu
+closes it and frees the keyboard (3 visible wiboxes -> 1, grab running -> not).
+
+`vm/input-test.sh [scenario...]` (+ `vm/input-test.lua`): needs SSH and a running desktop; mouse through
+`root.fake_input`, keys through `VBoxManage keyboardputscancode/keyboardputstring`; each scenario ends by
+clicking the terminal and typing `touch /tmp/kb-<name>`. `rc.lua` exposes `spin_debug` (taskbar widgets)
+for it.
+
+### Wiring for the ISO build (0.6)
+
+- `spin/build-programs.sh copyq` (new) and `usb-modeswitch` (again: installs `gobo-wifi-switch` fetched
+  from the host as `vm/serve/gobo-wifi-switch`, writes the new rule). Tarballs `spin/programs/CopyQ--6.4.0--x86_64.tgz`
+  (3.2 MB; 9.1 MB installed) and `USB-ModeSwitch--2.6.1--x86_64.tgz` (re-packed, 33 KB / 136 KB).
+- Sudoers: `%users ALL=(root) NOPASSWD: /System/Index/bin/gobo-wifi-switch --session` is added to the
+  **rootfs** by `build-iso.sh` (the installer copies `/Programs`, so installed systems have it; the live
+  user is root). The udev rule ships inside USB-ModeSwitch (linked by SymlinkProgram into
+  `/System/Index/lib/udev/rules.d` = `/usr/lib/udev/rules.d`, which Eudev reads).
+- Look: `apply.sh` copies `copyq/copyq.conf` and `copyq/copyq-commands.ini` (if absent) and creates the
+  folders; `xinitrc` starts `copyq`. Run on the skeleton by build-iso, so live and new users get it.
+- CopyQ build notes: Qt 5.14 was built for prefix `/usr`, so its cmake files want `/usr/mkspecs`,
+  `/usr/plugins/...`: the step makes temporary links. CopyQ 6.x (and 4.1/5.0) always build a Wayland
+  clipboard needing extra-cmake-modules + Wayland + QtWaylandClient (none on the image): the step removes
+  that part with sed (used only off X11). `copyq eval` unescapes its arguments (`'\n'` breaks scripts).
+
+### New keys (all in the hotkeys help, Win+S)
+
+Win+Escape close all popups / free the keyboard (was "previous desktop"); Win+Shift+Tab desktops list;
+Win+, / Win+. previous/next desktop; Win+1..9, Win+Shift+1..9 (move window), Win+Ctrl(+Shift)+1..9;
+Print whole screen; Win+Shift+S screenshot card; Win+Shift+V clipboard history.
+
+### Not verified (needs the real PC)
+
+The Wi-Fi switch with the actual adapter (only emulated with the virtual stick, see wifi-notes); Wi-Fi
+signal levels (only unit-tested: `network.level_from` with sample `/proc/net/wireless` / iwconfig text);
+the connecting animation during a real Wi-Fi association; screenshots on NVIDIA with picom (VM: vmwgfx,
+works); a physical second monitor (fake screens only); CopyQ with images from Firefox/GTK apps (tested:
+terminal text, screenshot image, GTK not); real typing habits (only simulated input).
+
+Screenshots: `docs/screenshots/0.6-*` (hotkeys help, desktops dark/light, screenshot card dark/light, area selection,
+saved notification, clipboard history light, network icons dark+light strip, USB notification with one
+button, Wi-Fi switch from the session).
+
+Lab lessons (0.6):
+- The X session can be started without typing a login: `openvt -f -c 7 -s -- su lab -c "... exec zsh -i -l -c startx"`
+  (`-i` is needed: the environment cache, LUA_PATH, QT_PLUGIN_PATH come from the interactive zshrc).
+- `VBoxManage controlvm ... setlinkstate1 off` also cuts the SSH port forward (same NIC): take screenshots.
+- `vm/lua.sh` output passes through `tail -n 2`: write longer results to a file and `cat` it.
+
+VM snapshots now: ..., `iso-build-env-5`, `iso-0.5-installed-efi`, **`iso-build-env-6a`** (current; taken
+powered off, VM started again headless; the lab X session is started with the openvt line above).

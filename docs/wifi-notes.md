@@ -96,3 +96,46 @@ If it still does not work, send the output of these three commands:
     lsusb
     dmesg | tail -40
     ip link
+
+## 0.6: the switch did not happen by itself on the real PC
+
+Report on 0.5: plugging the adapter in did nothing; typing `sudo usb_modeswitch -KW -v 0bda -p 1a2b`
+later switched it and Wi-Fi then worked (so the driver and GoboNet are fine; the automatic path failed).
+
+What was checked in the build VM and on the 0.5 live image (squashfs of `dist/GoboRefined-0.5.iso`):
+- udevd (Eudev) reads rules from `/usr/lib/udev/rules.d` (= `/System/Index/lib/udev/rules.d`),
+  `/System/Settings/udev/rules.d` and `/run/udev/rules.d` (strings in the binary). The 0.5 image has
+  `40-gobo-realtek-wifi.rules` linked in `/System/Index/lib/udev/rules.d`, the binary path
+  `/System/Index/bin/usb_modeswitch` exists, the match keys are right, and the boot task
+  (`Eudev/Resources/Tasks/Udev`) does `udevadm trigger --action=add`, so the rule is read and fires.
+- So the most likely cause is timing: 0.5 ran `usb_modeswitch` synchronously inside udev's handling of
+  the device's "add" event, while the kernel was still setting the device up (usb-storage probing the
+  virtual CD). The same command typed seconds later worked. Without the adapter this cannot be proven.
+
+What 0.6 does instead (robust rather than a guess at one cause):
+- **`gobo-wifi-switch`** (`/Programs/USB-ModeSwitch/2.6.1/bin`, source `spin/gobo-wifi-switch`): leaves
+  udev at once (`setsid`), waits 4 s, then up to 4 tries of `usb_modeswitch -K -W -v 0bda -p 1a2b -b BUS
+  -g DEV` 3 s apart, then 2 tries of `eject /dev/srN` (the virtual CD drive), stopping as soon as the
+  `0bda:1a2b` device is gone; afterwards it loads `8852au` if udev has not. One copy runs at a time
+  (`flock`); a second copy waits and finds nothing to do. Every step is logged with time stamps.
+- **Three triggers**: the udev rule on the USB device ("add", also the coldplug at boot), a second udev
+  rule on its CD drive (`sr*`, after usb-storage has set it up), and the desktop: Awesome looks for
+  `0bda:1a2b` every 3 s (also right after login) and runs `sudo -n gobo-wifi-switch --session`
+  (`look/gobo11/awesome/spin/wifi_switch.lua`; NOPASSWD rule for exactly that command, written into
+  the image's sudoers by `spin/build-iso.sh`). The desktop shows "Wi-Fi adapter found / ready" or
+  "could not switch it on" notifications.
+- Emulated in the build VM with a copy of the wrapper and rule matched to the virtual USB stick
+  (`80ee:0030`): plug-in -> udev -> detached wrapper -> retries, and "switched" logged once the stick was
+  pulled during the retries; the same at boot with the stick already plugged in (coldplug, log written
+  6 s after boot); the session path through sudo (and `sudo -n` refuses the wrapper with any other
+  argument, and any other command). The real eject and the adapter re-appearing need the real PC.
+
+### If it still does not switch by itself (0.6)
+
+Plug the adapter in, wait 30 seconds, then send the log file:
+
+    cat /var/log/gobo-wifi-switch.log
+
+(also `lsusb`, and `dmesg | tail -40`). The log shows which trigger ran (udev / session), each attempt
+and what usb_modeswitch answered. Switching by hand still works: `sudo gobo-wifi-switch` (prints the
+same lines) or `sudo usb_modeswitch -KW -v 0bda -p 1a2b`.

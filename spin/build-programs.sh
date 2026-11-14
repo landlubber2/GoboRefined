@@ -5,6 +5,7 @@
 #
 #   bash build-programs.sh <step>      steps, in order: menu-cache libfm pcmanfm pavucontrol lxrandr lxdm
 #                                      0.5: udevil usb-modeswitch rtl8852au onlyoffice
+#                                      0.6: copyq (and usb-modeswitch again: gobo-wifi-switch)
 #   (0.5 sources: udevil-0.4.4.tar.gz, usb-modeswitch-2.6.1.tar.bz2 in src3; rtl8852au is cloned
 #    from GitHub and onlyoffice downloaded by their steps; list in HANDOFF.md, 0.5 section)
 set -e
@@ -155,14 +156,26 @@ usb-modeswitch)
    rm -rf $P && mkdir -p $P/bin $P/share/man/man1 $P/lib/udev/rules.d $P/Resources
    install -m 755 usb_modeswitch $P/bin/
    install -m 644 usb_modeswitch.1 $P/share/man/man1/
+   # 0.6: the rule starts gobo-wifi-switch (spin/gobo-wifi-switch, fetched from the host): it
+   # leaves udev at once, waits, retries the switch and logs to /var/log/gobo-wifi-switch.log.
+   # (0.5 ran usb_modeswitch straight from the rule; on the real PC nothing happened, while the
+   # same command typed later worked.) The desktop session runs it too (sudo rule: build-iso.sh).
+   wget -qO $P/bin/gobo-wifi-switch http://10.0.2.2:8766/gobo-wifi-switch
+   chmod 755 $P/bin/gobo-wifi-switch
    cat > $P/lib/udev/rules.d/40-gobo-realtek-wifi.rules <<'RULES'
-# GoboLinux spin: Realtek Wi-Fi USB adapters (e.g. TP-Link Archer TX20U Plus) first show up
-# as a virtual "driver CD" with ID 0bda:1a2b. Eject it, so the adapter re-appears with its
-# Wi-Fi ID (e.g. 2357:013f, handled by the 8852au driver), and keep devmon from mounting it.
-ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="1a2b", RUN+="/System/Index/bin/usb_modeswitch -K -v 0bda -p 1a2b"
+# GoboRefined: Realtek Wi-Fi USB adapters (e.g. TP-Link Archer TX20U Plus) first show up
+# as a virtual "driver CD" with ID 0bda:1a2b. Switch them (gobo-wifi-switch ejects the CD in
+# the background, with retries), so the adapter re-appears with its Wi-Fi ID (e.g. 2357:013f,
+# handled by the 8852au driver), and keep devmon from mounting the CD.
+# Two triggers: the USB device itself, and its CD drive once usb-storage has set it up
+# (gobo-wifi-switch runs one copy at a time; the second finds nothing left to do).
+# Rules are read from /usr/lib/udev/rules.d (= /System/Index/lib/udev/rules.d), where
+# SymlinkProgram links this file; "add" also matches the coldplug at boot (Eudev's Udev task).
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="1a2b", RUN+="/System/Index/bin/gobo-wifi-switch --udev"
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="sr*", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="1a2b", RUN+="/System/Index/bin/gobo-wifi-switch --udev"
 SUBSYSTEM=="block", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="1a2b", ENV{UDISKS_PRESENTATION_NOPOLICY}="1", ENV{UDISKS_IGNORE}="1"
 RULES
-   echo "Switches USB devices out of their 'driver CD' mode (binary only, spin udev rule for Realtek Wi-Fi)." > $P/Resources/Description
+   echo "Switches USB devices out of their 'driver CD' mode (binary only, spin udev rule + gobo-wifi-switch for Realtek Wi-Fi)." > $P/Resources/Description
    ln -sfn $V /Programs/USB-ModeSwitch/Current
    SymlinkProgram USB-ModeSwitch $V | tail -n 1
    ;;
@@ -217,6 +230,45 @@ onlyoffice)
    SymlinkProgram OnlyOffice $V | tail -n 1
    gtk-update-icon-cache -q -f /System/Index/share/icons/hicolor || true
    update-desktop-database -q /System/Index/share/applications 2>/dev/null || true
+   ;;
+copyq)
+   # 0.6: clipboard history (Win+Shift+V shows it in the look's own popup, spin/cliphist.lua).
+   # CopyQ 6.4.0 is the last release series that builds with Qt 5.14 and cmake 3.16 (7.x wants
+   # Qt 5.15+). No KDE Frameworks on the image: Qt's own notifications instead of KNotifications.
+   # Source: https://github.com/hluk/CopyQ/archive/refs/tags/v6.4.0.tar.gz -> $SRC/CopyQ-6.4.0.tar.gz
+   V=6.4.0 P=/Programs/CopyQ/6.4.0
+   [ -f $SRC/CopyQ-$V.tar.gz ] || wget -q -O $SRC/CopyQ-$V.tar.gz https://github.com/hluk/CopyQ/archive/refs/tags/v$V.tar.gz
+   rm -rf $WORK/CopyQ-$V && tar xzf $SRC/CopyQ-$V.tar.gz -C $WORK
+   # X11 only: its Wayland clipboard needs extra-cmake-modules, Wayland and QtWaylandClient,
+   # none of which the image has. Drop that part (it is used only when not running on X11).
+   cd $WORK/CopyQ-$V/src/platform/x11
+   sed -i '/^# Wayland clipboard/,/^list(APPEND copyq_LIBRARIES systemclipboard)/d' x11platform.cmake
+   sed -i -e '/#include "systemclipboard\/waylandclipboard.h"/d' \
+      -e 's|m_selectionSupported = WaylandClipboard::instance()->isSelectionSupported();|m_selectionSupported = false;|' \
+      -e '/connect(WaylandClipboard::instance(), &WaylandClipboard::changed,/,+1d' \
+      -e 's|WaylandClipboard::instance()->setMimeData(data, qmode);|delete data;|' \
+      -e 's|return WaylandClipboard::instance()->mimeData( modeToQClipboardMode(mode) );|return DummyClipboard::mimeData(mode);|' \
+      x11platformclipboard.cpp
+   ! grep -q -e WaylandClipboard -e systemclipboard x11platformclipboard.cpp x11platform.cmake
+   mkdir -p $WORK/CopyQ-$V/build && cd $WORK/CopyQ-$V/build
+   # Qt 5.14 was built for prefix /usr; its cmake files then want /usr/mkspecs, /usr/plugins...,
+   # which the image does not have (/usr holds only links). Temporary links for the build only.
+   # (/usr/plugins already exists, holding webkit/: link Qt's plugin directories one by one)
+   tmp_links=
+   trap 'rm -f $tmp_links' EXIT
+   for d in mkspecs qml $(cd /Programs/Qt/Current && ls -d plugins/*)
+   do [ -e /usr/$d ] || { ln -s /Programs/Qt/Current/$d /usr/$d; tmp_links="$tmp_links /usr/$d"; }
+   done
+   cmake .. -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_BUILD_TYPE=Release -DWITH_TESTS=OFF \
+      -DWITH_NATIVE_NOTIFICATIONS=OFF -DPLUGIN_INSTALL_PREFIX=$P/lib/copyq/plugins
+   make -j2
+   rm -rf $P && make install
+   mkdir -p $P/Resources
+   echo "CopyQ clipboard manager: keeps the last copied texts and pictures (used by the desktop's Win+Shift+V)." > $P/Resources/Description
+   # no autostart entry from the program itself (~/.xinitrc starts it), menu entry kept
+   rm -rf $P/etc
+   ln -sfn $V /Programs/CopyQ/Current
+   SymlinkProgram CopyQ $V | tail -n 1
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

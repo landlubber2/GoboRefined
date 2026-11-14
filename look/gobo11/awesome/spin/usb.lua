@@ -1,8 +1,8 @@
 -- USB sticks and other removable drives (spin 0.5).
 -- devmon (from udevil, started in ~/.xinitrc) mounts them under /Mount/Media/<label>.
 -- This module watches /proc/mounts and
---   * shows a notification when a drive appears (click it, or "Open", to open the
---     file manager there; "Safely remove" unmounts it),
+--   * shows a notification when a drive appears (click it to open the file manager
+--     there; its only button, "Safely remove", unmounts it),
 --   * shows a taskbar icon while any drive is mounted; clicking it lists the drives
 --     with "Open" and "Safely remove" entries.
 -- Unmounting uses `udevil umount`, which works for normal users without polkit.
@@ -79,8 +79,10 @@ function usb.new(args)
                text = m.label .. " is ready. Click to open it.",
                icon = icon, timeout = 15,
                run = function(n) open(m) naughty.destroy(n) end,
+               -- One button only (0.6): Awesome 4.3 lays out notification actions in
+               -- random order (pairs()), and a click meant for "Open" once hit
+               -- "Safely remove". Clicking the notification itself opens the drive.
                actions = {
-                  ["Open"] = function() open(m) end,
                   ["Safely remove"] = function() remove(m) end,
                },
             })

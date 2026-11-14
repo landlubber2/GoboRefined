@@ -5,6 +5,7 @@ local awful = require("awful")
 local wibox = require("wibox")
 local gears = require("gears")
 local beautiful = require("beautiful")
+local popups = require("spin.popups")
 
 local power = {}
 
@@ -88,26 +89,24 @@ local function build()
    })
    popup:setup { row, margins = 14, widget = wibox.container.margin }
 
-   backdrop = wibox({ ontop = true, visible = false, bg = "#00000066", type = "utility" })
-   backdrop:buttons(awful.util.table.join(
-      awful.button({}, 1, power.hide),
-      awful.button({}, 3, power.hide)
-   ))
+   backdrop = popups.backdrop(power.hide, "#00000066")
 end
 
 function power.show()
    if not popup then build() end
    if open then power.hide(); return end
+   popups.close_all("power")
    open = true
    local s = awful.screen.focused()
-   backdrop:geometry(s.geometry)
    popup.x = s.geometry.x + math.floor((s.geometry.width - popup.width) / 2)
    popup.y = s.geometry.y + math.floor((s.geometry.height - popup.height) / 2)
-   backdrop.visible = true
+   backdrop.show_on(s)
    popup.visible = true
    grabber = awful.keygrabber.run(function(_, key, event)
       if event == "press" and (key == "Escape" or key == "q") then power.hide() end
    end)
 end
+
+popups.register("power", power.hide)
 
 return power

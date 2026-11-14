@@ -14,11 +14,18 @@ local GLib = require("lgi").GLib
 local gobonet = require("gobo.awesome.gobonet")
 local docking = require("gobo.awesome.docking")
 -- The spin's own modules (in ~/.config/awesome/spin/)
+local popups = require("spin.popups")   -- first: it filters every keyboard grab (Win+Escape)
+spin_popups = popups                     -- (the lab's input test checks for it)
 local status = require("spin.status")
 local alttab = require("spin.alttab")
 local launcher = require("spin.launcher")
 local power = require("spin.power")
 local usb = require("spin.usb")
+local network = require("spin.network")
+local wifi_switch = require("spin.wifi_switch")
+local desktops = require("spin.desktops")
+local screenshot = require("spin.screenshot")
+local cliphist = require("spin.cliphist")
 local bluetooth = require("gobo.awesome.bluetooth")
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
@@ -120,16 +127,44 @@ awful.screen.connect_for_each_screen(set_wallpaper)
 screen.connect_signal("property::geometry", set_wallpaper)
 
 
--- Tags
--- Define a tag table which hold all screen tags.
-local tags = {}
+-- Tags = virtual desktops (0.6): one per screen to start with (also screens plugged in
+-- later), more from the Win+Shift+Tab list; the count survives an Awesome restart.
 awful.screen.connect_for_each_screen(function(s)
-   -- Each screen has its own tag table (also screens plugged in later).
-   tags[s] = awful.tag({ 1, 2, 3, 4 }, s, layouts[1])
+   desktops.setup_screen(s, layouts[1])
 end)
 
+-- Hotkeys help: closes on any key, and (0.6) on a click anywhere, like the other popups.
+local function hotkeys_visible()
+   local w = hotkeys_popup.default_widget
+   local list = {}
+   for _, per_screen in pairs(w and w._cached_wiboxes or {}) do
+      for _, hw in pairs(per_screen) do
+         if hw.wibox.visible then table.insert(list, hw) end
+      end
+   end
+   return list
+end
+local hotkeys_backdrop
+local function hide_help()
+   for _, hw in ipairs(hotkeys_visible()) do hw:hide() end
+   if hotkeys_backdrop then hotkeys_backdrop.visible = false end
+end
+popups.register("hotkeys", hide_help)
 local function show_help()
+   popups.close_all("hotkeys")
+   hotkeys_backdrop = hotkeys_backdrop or popups.backdrop(hide_help)
+   hotkeys_backdrop.show_on(awful.screen.focused())
    hotkeys_popup.show_help()
+   for _, hw in ipairs(hotkeys_visible()) do
+      if not hw.spin_wrapped then   -- a key or a click on the popup hides it: drop the backdrop too
+         hw.spin_wrapped = true
+         local hide = hw.hide
+         hw.hide = function(self)
+            hide(self)
+            if hotkeys_backdrop then hotkeys_backdrop.visible = false end
+         end
+      end
+   end
 end
 
 local function layout_fn(mode) return function() awful.layout.set(mode) end end
@@ -174,7 +209,8 @@ do
       if m and m.wibox and beautiful.menu_shape then
          m.wibox.shape = beautiful.menu_shape
       end
-      return m
+      -- one popup at a time; a click outside closes the menu (it holds the keyboard)
+      return m and popups.manage_menu(m)
    end
 
    local ICON, PAD = 20, 12
@@ -288,6 +324,7 @@ end
 
 local start_button = hoverable(wibox.widget.imagebox(beautiful.start_icon), 4)
 launcher.setup({ on_power = power.show })
+popups.register("alttab", function() alttab.cancel() end)
 start_button:buttons(awful.util.table.join(
    awful.button({}, 1, function() mymainmenu:toggle() end),   -- left click: the category menu
    awful.button({}, 3, function() launcher.toggle() end)      -- right click: search
@@ -302,6 +339,8 @@ local function status_icon(widget)
 end
 
 local mywibox = {}
+-- Taskbar widgets by name, for the lab's input tests (vm/input-test.lua finds them on screen).
+spin_debug = { start = start_button, bars = mywibox, launcher_power_xy = launcher.power_xy }
 local mytaglist = {}
 mytaglist.buttons = awful.util.table.join(
    awful.button({}, 1, awful.tag.viewonly),
@@ -330,7 +369,7 @@ mytasklist.buttons = awful.util.table.join(
    end),
    awful.button({}, 2, function(c) c:kill() end),
    awful.button({}, 3, function()
-      if clients_menu then
+      if clients_menu and clients_menu.wibox.visible then
          clients_menu:hide()
          clients_menu = nil
       else
@@ -357,6 +396,8 @@ local function client_icon(c)
    end
    return class_icons[class]
 end
+
+desktops.icon_for = client_icon   -- the desktops list shows the same icons as the taskbar
 
 local function update_task(self, c)
    self:get_children_by_id("icon")[1].image = client_icon(c)
@@ -417,8 +458,11 @@ awful.screen.connect_for_each_screen(function(s)
    if s == screen.primary then
       right_layout:add(status_icon(wibox.widget.systray()))
       right_layout:add(status_icon(bluetooth.new()))
-      right_layout:add(status_icon(usb.new({ icon = icon_theme():find_icon_path("drive-removable-media-usb", 48) or find_icon("drive-removable-media"), file_manager = file_manager })))
-      right_layout:add(status_icon(gobonet.new()))
+      spin_debug.usb = usb.new({ icon = icon_theme():find_icon_path("drive-removable-media-usb", 48) or find_icon("drive-removable-media"), file_manager = file_manager })
+      right_layout:add(status_icon(spin_debug.usb))
+      -- our own icon (real state, drawn in the theme); GoboNet's widget runs hidden for its menu
+      spin_debug.net = network.new({ menu_widget = gobonet.new() })
+      right_layout:add(status_icon(spin_debug.net))
       right_layout:add(status_icon(status.battery()))
       right_layout:add(status_icon(light_widget))
       right_layout:add(status_icon(sound_widget))
@@ -427,7 +471,15 @@ awful.screen.connect_for_each_screen(function(s)
 
    local layout = wibox.layout.align.horizontal()
    layout.expand = "none"
-   layout:set_left(wibox.container.margin(mytaglist[s], 10, 0, 12, 12))
+   -- desktop numbers on the left, only while the screen has more than one desktop
+   local tag_area = wibox.container.margin(mytaglist[s], 10, 0, 12, 12)
+   tag_area.visible = #s.tags > 1
+   desktops.on_change(function(changed_s)
+      if changed_s == s then tag_area.visible = #s.tags > 1 end
+   end)
+   spin_debug.tag_area = spin_debug.tag_area or {}
+   spin_debug.tag_area[s] = tag_area
+   layout:set_left(tag_area)
    layout:set_middle(wibox.container.margin(center_layout, 0, 0, 4, 4))
    layout:set_right(right_layout)
 
@@ -435,50 +487,58 @@ awful.screen.connect_for_each_screen(function(s)
 end)
 
 
+-- Realtek USB Wi-Fi adapters that start as a "driver CD": switch them from the session too,
+-- in case udev's rule did not (spin/wifi_switch.lua, /var/log/gobo-wifi-switch.log).
+wifi_switch.start({ icon = find_icon("network-wireless", "network-wireless-symbolic") })
+
 -- Mouse bindings
 root.buttons(awful.util.table.join(
-   awful.button({}, 1, function() mymainmenu:hide() end),
+   awful.button({}, 1, function() popups.close_all() end),
    awful.button({}, 3, function() mymainmenu:toggle() end)
    --awful.button({}, 4, awful.tag.viewnext),
    --awful.button({}, 5, awful.tag.viewprev)
 ))
 
-local function screenshot()
-   local name = os.getenv("HOME") .. "/screenshot-" .. os.date("%Y-%m-%d-%H-%M-%S") .. ".png"
-
-   os.execute([[ps aux | grep '[i]mport' && killall import || {
-      ( import ]]..name.." && ( cat "..name..[[ | xclip -i -selection clipboard -t image/png && \
-        echo 'naughty = require("naughty");
-              naughty.notify({ preset = naughty.config.presets.normal,
-                               title = "Screen captured",
-                               text = "Screenshot saved to ]]..name..[["})
-        ' | awesome-client )
-      ) &
-   }]])
-end
 
 -- Key bindings
 local globalkeys = awful.util.table.join(
 
+   -- Screenshots (0.6): saved to ~/Pictures/Screenshots and copied to the clipboard
    awful.key({}, "Print",
-      screenshot,
-      { description = "Screenshot", group = "awesome gobolinux" }),
+      function() screenshot.take("screen") end,
+      { description = "Screenshot of the whole screen", group = "screenshots and clipboard" }),
+
+   awful.key({ modkey, "Shift" }, "s",
+      function() screenshot.show() end,
+      { description = "Screenshot: area, window or screen", group = "screenshots and clipboard" }),
+
+   -- Clipboard history (0.6)
+   awful.key({ modkey, "Shift" }, "v",
+      function() cliphist.show() end,
+      { description = "Clipboard history: pick an earlier copy", group = "screenshots and clipboard" }),
 
    awful.key({ modkey }, "s",
       show_help,
       { description = "Show hotkeys", group = "awesome" }),
 
+   -- Virtual desktops (0.6)
+   awful.key({ modkey, "Shift" }, "Tab",
+      function() desktops.show() end,
+      { description = "Desktops: list, switch, add, remove", group = "desktops" }),
+
    awful.key({ modkey }, ",",
       awful.tag.viewprev,
-      { description = "View previous", group = "tag" }),
+      { description = "Previous desktop", group = "desktops" }),
 
    awful.key({ modkey }, ".",
       awful.tag.viewnext,
-      { description = "View next", group = "tag" }),
+      { description = "Next desktop", group = "desktops" }),
 
+   -- Safety net (0.6): closes every popup and menu, releases keyboard and mouse grabs and
+   -- focuses the window under the pointer. Also works inside a grab (spin/popups.lua).
    awful.key({ modkey }, "Escape",
-      awful.tag.history.restore,
-      { description = "Go back", group = "tag" }),
+      function() popups.panic() end,
+      { description = "Close all popups, free the keyboard", group = "awesome" }),
 
    awful.key({ modkey }, "j",
       function()
@@ -804,8 +864,9 @@ local clientkeys = awful.util.table.join(
 
 -- Bind all key numbers to tags.
 -- Be careful: we use keycodes to make it works on any keyboard layout.
--- This should map on the top row of your keyboard, usually 1 to 4.
-for i = 1, 4 do
+-- Win+1..9 = desktop 1..9 (those that exist); only the first is listed in the hotkeys help.
+for i = 1, 9 do
+   local function d(text) return i == 1 and { description = text, group = "desktops" } or nil end
    globalkeys = awful.util.table.join(globalkeys,
 
    awful.key({ modkey }, "#" .. i + 9,
@@ -816,7 +877,7 @@ for i = 1, 4 do
             awful.tag.viewonly(tag)
          end
       end,
-      { description = "View tag #"..i, group = "tag" }),
+      d("Go to desktop 1 (Win+1 ... Win+9)")),
 
    awful.key({ modkey, "Control" }, "#" .. i + 9,
       function()
@@ -826,7 +887,7 @@ for i = 1, 4 do
             awful.tag.viewtoggle(tag)
          end
       end,
-      { description = "Toggle tag #" .. i, group = "tag" }),
+      d("Also show desktop 1 (Win+Ctrl+1 ... 9)")),
 
    awful.key({ modkey, "Shift" }, "#" .. i + 9,
       function()
@@ -837,7 +898,7 @@ for i = 1, 4 do
             end
          end
       end,
-      { description = "Move focused client to tag #"..i, group = "tag" }),
+      d("Move window to desktop 1 (Win+Shift+1 ... 9)")),
 
    awful.key({ modkey, "Control", "Shift" }, "#" .. i + 9,
       function()
@@ -848,7 +909,7 @@ for i = 1, 4 do
             end
          end
       end,
-      { description = "Toggle focused client on tag #" .. i, group = "tag" }))
+      d("Window also on desktop 1 (Win+Ctrl+Shift+1 ... 9)")))
 end
 
 local clientbuttons = awful.util.table.join(

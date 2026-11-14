@@ -23,6 +23,10 @@ xset s 600 5
 # shows a notification and a drive icon (open / safely remove). Awesome stops it at log out.
 [ -x /bin/devmon ] && devmon > /dev/null 2>&1 &
 
+# Clipboard history: CopyQ keeps the last 20 copies, also after their program has closed
+# (no tray icon; Win+Shift+V lists them). Settings in ~/.config/copyq/.
+[ -x /bin/copyq ] && copyq > /dev/null 2>&1 &
+
 # Shadows and fades
 [ -x /bin/picom ] && picom -b --config ~/.config/picom.conf
 

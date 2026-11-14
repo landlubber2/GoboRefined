@@ -426,6 +426,11 @@ then
    do
       run sh "$LOOK_DIR/apply.sh" "$DEST/Users/$login" "$XKB_LAYOUT"
       in_target chown -R "$login" "/Users/$login/.config" "/Users/$login/.xinitrc" "/Users/$login/.Xresources" "/Users/$login/.urxvt"
+      # standard folders created by apply.sh (0.6): Documents, Downloads, Music, Pictures, Videos
+      for d in Desktop Documents Downloads Music Pictures Videos
+      do
+         if [ -d "$DEST/Users/$login/$d" ]; then in_target chown -R "$login" "/Users/$login/$d"; fi
+      done
    done
 fi
 

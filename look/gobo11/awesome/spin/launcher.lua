@@ -8,6 +8,7 @@ local wibox = require("wibox")
 local gears = require("gears")
 local beautiful = require("beautiful")
 local menu_gen = require("menubar.menu_gen")
+local popups = require("spin.popups")
 
 local launcher = {}
 
@@ -177,29 +178,32 @@ local function build()
       widget = wibox.container.margin,
    }
 
-   -- A transparent sheet behind the popup: a click anywhere outside closes it.
-   backdrop = wibox({ ontop = true, visible = false, bg = "#00000000", type = "utility" })
-   backdrop:buttons(awful.util.table.join(
-      awful.button({}, 1, function() launcher.hide() end),
-      awful.button({}, 3, function() launcher.hide() end)
-   ))
+   -- A transparent sheet behind the popup: a click anywhere outside closes it (and a click
+   -- on a window focuses that window).
+   backdrop = popups.backdrop(function() launcher.hide() end)
 end
+
+local prompt_grabber   -- the search prompt's awful.keygrabber function while it runs
 
 function launcher.hide()
    if not open then return end
    open = false
    popup.visible = false
    backdrop.visible = false
-   -- Stop the search prompt's grabber through awful.keygrabber (the prompt was started
-   -- with it). The bare C keygrabber.stop() left awful's grabber stack thinking it was
-   -- still running, so after closing the search with a click outside or its power
-   -- button, every later search opened without keyboard input.
-   awful.keygrabber.stop()
+   -- Stop exactly the search prompt's grabber. 0.5 called awful.keygrabber.stop() without
+   -- an argument, which removes the OLDEST grabber on awful's stack, not the newest: with
+   -- the category menu open underneath, the menu's grabber was removed and the hidden
+   -- prompt kept the keyboard, so no window could get keys any more.
+   if prompt_grabber then
+      awful.keygrabber.stop(prompt_grabber)
+      prompt_grabber = nil
+   end
 end
 
 function launcher.show()
    if not popup then build() end
    if open then launcher.hide(); return end
+   popups.close_all("launcher")
    open = true
    local s = awful.screen.focused()
    local wa = s.workarea
@@ -208,10 +212,13 @@ function launcher.show()
    popup.y = wa.y + wa.height - popup.height - 10
    filter("")
    redraw()
-   backdrop.visible = true
+   backdrop.show_on(s)
    popup.visible = true
 
-   awful.prompt.run {
+   -- awful.prompt does not hand out its keygrabber: note it as it is registered.
+   local run = awful.keygrabber.run
+   awful.keygrabber.run = function(g) prompt_grabber = g; return run(g) end
+   local ok, err = pcall(awful.prompt.run, {
       prompt = "",
       textbox = prompt_box,
       bg_cursor = beautiful.accent,
@@ -224,14 +231,23 @@ function launcher.show()
       end,
       exe_callback = function() start(matches[selected]) end,
       done_callback = function() launcher.hide() end,
-   }
+   })
+   awful.keygrabber.run = run
+   if not ok then launcher.hide(); error(err) end
 end
 
 function launcher.toggle() launcher.show() end
 
+-- centre of the power button on screen (lab input tests)
+function launcher.power_xy()
+   if not open then return nil end
+   return { x = popup.x + WIDTH - 14 - 20, y = popup.y + popup.height - 10 - 20 }
+end
+
 function launcher.setup(args)
    on_power = args and args.on_power
    load_apps()
+   popups.register("launcher", launcher.hide)
 end
 
 return launcher

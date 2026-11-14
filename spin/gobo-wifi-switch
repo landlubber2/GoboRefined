@@ -1,0 +1,121 @@
+#!/bin/sh
+# gobo-wifi-switch (GoboRefined 0.6): switch Realtek USB Wi-Fi adapters out of their
+# "driver CD" mode (USB ID 0bda:1a2b, e.g. TP-Link Archer TX20U Plus), so they come back
+# as the Wi-Fi device that the 8852au driver handles.
+#
+# Started from three places, so one failing path does not leave the adapter as a CD:
+#   --udev     by the udev rule 40-gobo-realtek-wifi.rules (plug-in, and the "add" coldplug
+#              at boot); detaches from udev at once and does the work in the background
+#   --session  by the desktop at login and when the taskbar sees the CD appear (as the user,
+#              through `sudo -n`; the ISO build adds a NOPASSWD rule for exactly this file)
+#   (none)     by hand: `sudo gobo-wifi-switch`
+# Each attempt is logged with a time stamp to /var/log/gobo-wifi-switch.log
+# (= /Data/Variable/log). Exit status: 0 = no CD left (switched, or nothing to do), 1 = failed.
+PATH=/System/Index/bin:/System/Index/sbin:/bin:/sbin
+export PATH
+VID=0bda PID=1a2b
+LOG=/var/log/gobo-wifi-switch.log
+from=manual
+case "$1" in
+   --udev)
+      # udev waits for RUN programs and may kill what they leave behind: start a detached copy
+      setsid "$0" --from-udev < /dev/null > /dev/null 2>&1 &
+      exit 0 ;;
+   --from-udev) from=udev ;;
+   --session) from=session ;;
+   "") ;;
+   *) echo "usage: gobo-wifi-switch [--udev|--session]" >&2; exit 2 ;;
+esac
+[ "$(id -u)" = 0 ] || { echo "gobo-wifi-switch: must run as root (sudo)" >&2; exit 1; }
+
+# At boot the log directory may not be writable yet: keep lines until it is.
+pending=""
+log() {
+   line="$(date '+%Y-%m-%d %H:%M:%S') [$from $$] $*"
+   pending="$pending$line
+"
+   if { printf '%s' "$pending" >> "$LOG"; } 2> /dev/null
+   then pending=""
+   fi
+   [ "$from" = manual ] && echo "$line"
+}
+
+# sysfs directories of every USB device that still is the CD (one per line)
+cd_devices() {
+   for d in /sys/bus/usb/devices/*
+   do
+      [ -r "$d/idVendor" ] || continue
+      [ "$(cat "$d/idVendor" 2>/dev/null)" = $VID ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = $PID ] && echo "$d"
+   done
+}
+
+# only one copy at a time; a second one waits, then finds nothing left to do
+# (the lock is in a directory only root can write: this script runs as root through sudo,
+# so it must not open a file whose name another user could have planted in /tmp)
+LOCK=/var/run/gobo-wifi-switch.lock
+if ( : >> "$LOCK" ) 2> /dev/null
+then
+   exec 9>> "$LOCK"
+   flock -w 90 9 || { log "another copy is still running; giving up"; exit 1; }
+else
+   log "no lock ($LOCK is not writable yet); going on without it"
+fi
+
+# keep the log small: one old copy
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 200000 ]
+then mv -f "$LOG" "$LOG.old"
+fi
+
+[ -n "$(cd_devices)" ] || { log "no adapter in CD mode ($VID:$PID) found: nothing to do"; exit 0; }
+log "adapter in CD mode found: $(cd_devices | tr '\n' ' ')"
+
+# udev: give the kernel time to finish setting the device up (usb-storage probing it)
+case $from in udev) sleep 4 ;; session) sleep 1 ;; esac
+
+attempt=0
+while [ $attempt -lt 6 ]
+do
+   attempt=$((attempt + 1))
+   devs=$(cd_devices)
+   [ -n "$devs" ] || break
+   for d in $devs
+   do
+      bus=$(cat "$d/busnum" 2>/dev/null) dev=$(cat "$d/devnum" 2>/dev/null)
+      if [ $attempt -le 4 ]
+      then
+         log "attempt $attempt: usb_modeswitch -K -W -v $VID -p $PID -b $bus -g $dev ($d)"
+         out=$(usb_modeswitch -K -W -v $VID -p $PID -b "$bus" -g "$dev" 2>&1); rc=$?
+         log "  exit $rc; usb_modeswitch said:"
+         while IFS= read -r l; do log "    $l"; done <<EOF
+$(printf '%s\n' "$out" | grep -v '^ *$' | tail -n 30)
+EOF
+      else
+         # fallback: eject the virtual CD drive through the SCSI layer
+         for sr in $(ls -d "$d"/*/host*/target*/*/block/sr* 2>/dev/null)
+         do
+            log "attempt $attempt: eject /dev/$(basename "$sr")"
+            out=$(eject "/dev/$(basename "$sr")" 2>&1); rc=$?
+            log "  exit $rc: $out"
+         done
+      fi
+   done
+   sleep 3
+done
+
+if [ -n "$(cd_devices)" ]
+then
+   log "FAILED: still in CD mode after $attempt attempts"
+   log "lsusb: $(lsusb 2>&1 | grep -i -E "$VID|realtek|tp-link|2357" | tr '\n' '|')"
+   exit 1
+fi
+
+log "switched: the CD is gone (after $attempt attempt(s))"
+# the Wi-Fi device should now be there; load the driver if udev has not
+sleep 3
+log "lsusb: $(lsusb 2>&1 | grep -i -E "0bda|realtek|tp-link|2357" | tr '\n' '|')"
+if ! lsmod | grep -q '^8852au'
+then
+   log "loading the driver: modprobe 8852au: $(modprobe 8852au 2>&1 && echo ok)"
+fi
+log "driver: $(lsmod | grep '^8852au' | cut -c1-40 || true); interfaces: $(ls /sys/class/net | tr '\n' ' ')"
+exit 0

@@ -2,6 +2,7 @@
 -- the colours and font changed to match the gobo11 theme.
 
 local alttab = {}
+alttab.cancel = function() end   -- ends a running switch (set while one runs)
 
 local cairo = require("lgi").cairo
 local mouse = mouse
@@ -566,37 +567,48 @@ function alttab.switch(dir, alt, tab, shift_tab)
    preview_delay_timer:start()
 
    -- Now that we have collected all windows, we should run a keygrabber
-   -- as long as the user is alt-tabbing:
-   keygrabber.run(
-      function (mod, key, event)  
+   -- as long as the user is alt-tabbing.
+   -- 0.6: through awful.keygrabber (not the bare C one, which awful's stack does not know
+   -- about), ended by the release of either Alt key or by any key event without Alt held
+   -- (in case the release itself was missed), and cancelled by alttab.cancel() (Win+Escape,
+   -- another popup opening).
+   local grabber
+   local function finish(cancel)
+      if not grabber then return end
+      awful.keygrabber.stop(grabber)
+      grabber = nil
+      alttab.cancel = function() end
+      preview_wbox.visible = false
+      preview_live_timer:stop()
+      preview_delay_timer:stop()
+      finish_thumbnail_surfaces()
+      restore_order(alttab_table)
+      restore_opacity(alttab_table)
+      if cancel then
+         if alttab_table[1].client.valid then raise(alttab_table[1].client) end
+      elseif alttab_table[alttab_index].client.valid then
+         -- raise chosen client on top of all
+         history.add(raise(alttab_table[alttab_index].client), "force")
+      end
+      current_client = nil
+      alttabbing = false
+   end
+   alttab.cancel = function() finish(true) end
+
+   local function alt_held(mod)
+      for _, m in ipairs(mod or {}) do if m == "Mod1" then return true end end
+      return false
+   end
+
+   grabber = awful.keygrabber.run(
+      function (mod, key, event)
+         if key == "Escape" and event == "release" then
+            finish(true)
          -- Stop alt-tabbing when the alt-key is released
-         if key == alt or key == "Escape" and event == "release" then
-            preview_wbox.visible = false
-
-            preview_live_timer:stop()
-            preview_delay_timer:stop()
-            
-            finish_thumbnail_surfaces()
-   
-            restore_order(alttab_table)
-
-            restore_opacity(alttab_table)
-
-            if key == "Escape" then
-               raise(alttab_table[1].client)
-               keygrabber.stop()
-               alttabbing = false
-               return
-            end
-
-            -- raise chosen client on top of all
-            history.add(raise(alttab_table[alttab_index].client), "force")
-
-            current_client = nil
-            alttabbing = false
-            
-            keygrabber.stop()
-
+         elseif (key == alt or key == "Alt_L" or key == "Alt_R" or key == "Meta_L") and event == "release" then
+            finish(false)
+         elseif not alt_held(mod) and not key:match("^Alt") and event == "press" then
+            finish(false)
          -- Move to previous client on Shift-Tab
          elseif (key == shift_tab or (mod[1] == "Shift" and key == "Tab") or key == "Left") and event == "press" then
             alttab_index = cycle(alttab_table, alttab_index, -1)
@@ -604,7 +616,7 @@ function alttab.switch(dir, alt, tab, shift_tab)
          -- Move to next client on each Tab-press
          elseif (key == tab or key == "Right") and event == "press" then
             alttab_index = cycle(alttab_table, alttab_index, 1)
-            
+
          end
       end
    )
