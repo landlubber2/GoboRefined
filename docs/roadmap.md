@@ -117,3 +117,56 @@ Risk: items 1–3 low; **item 4 is the one change that can destroy someone's dat
 ## Still unverified from 0.1 (carry along, test when convenient)
 
 A physical second monitor, Wi-Fi, NVMe drives, the non-English welcome texts.
+
+## After 0.6 — from the real-PC test of 0.6 and the brainstorm of 2026-11-14
+
+Nothing in this section is started. Version numbers are placeholders. Order proposed (not yet confirmed by the
+owner): A/B design on paper → A/B prototype → the 0.6.2 fixes delivered as the first update → new programs.
+
+### 0.6.2 — fixes (real-PC test of 0.6)
+
+Works on the real PC: automatic Wi-Fi mode switch (4 of 4 plug-ins, `8852au` loads, `wlan0` appears), and
+everything else in 0.6 not listed here.
+
+1. Wi-Fi menu lists networks only while some network is already connected; Rescan does not help.
+2. Trouble connecting to Wi-Fi after the adapter was unplugged and plugged in again.
+3. PC froze when the Wi-Fi adapter was unplugged (suspect: the out-of-tree driver; not proven, not
+   reproducible in the VM). If it happens again: does the Caps Lock light still toggle?
+4. A USB mouse stops working after being unplugged and plugged in again, until restart (suspect: the
+   desktop gets no udev events, as with USB sticks before the udevil patch).
+5. Short press of the power button does nothing.
+6. Tapping the Win key alone opens the dots menu (holding it for shortcuts stays).
+7. "Wired network (eth0)" is listed with no cable connected.
+8. Screenshots (Win+Shift+S, Print) do not work while a menu is open.
+9. Desktop icons do not redraw after being moved until an empty spot is clicked.
+10. Taskbar icons of minimized windows sometimes look wrong ("just 2 apps") — owner to say what exactly.
+11. Plain text files have no default program.
+12. A second user gets the US keyboard layout on the desktop.
+13. Cosmetic: "Pcmanfm" in the desktops list; light/dark switch jumps to desktop 1; app search misses "Displays".
+
+Not a bug: `sudo` asks for the user's own password, not root's. Becomes a design point when non-admin users
+are added.
+
+### 0.7 — programs the owner asked for
+
+- Miniconda (installs into the home folder; easy).
+- VS Code (official build is proprietary; VSCodium is the open build — owner to choose).
+- KolourPaint (needs many KDE libraries built first; compare with a lighter paint program before committing).
+
+### 0.8 — A/B system updates (owner's idea; design not written yet)
+
+- Partitions: boot (EFI), Root A, Root B, Data. No separate recovery partition proposed: the other root slot
+  and the USB stick serve as recovery.
+- Root read-only, replaced whole by an update; boot falls back to the other slot if the new one fails.
+- Data keeps `/Users`, settings, logs and user-added programs.
+- Hard parts to design and prototype first: (a) `/System/Settings` surviving updates while picking up new
+  defaults; (b) user-added programs — leaning towards an overlay so they still appear in `/Programs`.
+- Includes the installer rewrite, so Stage 5 item 1 (menu-driven installer) folds into it.
+- Minimum disk size to be measured (guess: about 40 GB).
+
+### Layout decision proposed
+
+Keep `/Programs/<Name>/<Version>` for native programs only (it is compiled into every program and assumed by
+every GoboLinux tool and recipe). Other ecosystems (Android, Windows programs) would get their own home on
+the Data partition, e.g. `/Data/Android`, `/Data/Windows`, not `/Programs/android`. Android apps through
+Waydroid would need Wayland; the desktop is X11.
