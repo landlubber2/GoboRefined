@@ -1,0 +1,209 @@
+diff -ruN pcmanfm-1.2.5/src/desktop.c ../pcmanfm-1.2.5/src/desktop.c
+--- pcmanfm-1.2.5/src/desktop.c	2016-12-10 01:38:33.000000000 +0100
++++ pcmanfm-1.2.5/src/desktop.c	2026-11-14 15:08:37.757475800 +0100
+@@ -2518,7 +2518,10 @@
+ {
+     GdkScreen* screen = gtk_widget_get_screen((GtkWidget*)desktop);
+     GdkRectangle geom;
+-#if GTK_CHECK_VERSION(3, 4, 0)
++    /* GoboRefined: GTK 3 ignores _NET_WORKAREA here (Awesome does not list it in
++       _NET_SUPPORTED; the look sets the property itself, see
++       awesome/spin/desktop_icons.lua): always read the property directly, as for GTK 2 */
++#if 0
+     gdk_screen_get_monitor_workarea(screen, desktop->monitor, &desktop->working_area);
+     /* we need working area coordinates within the monitor not the screen */
+     gdk_screen_get_monitor_geometry(screen, desktop->monitor, &geom);
+@@ -2560,7 +2563,10 @@
+                        XA_NET_WORKAREA, 0, 4 * 32, False, AnyPropertyType, &ret_type,
+                        &format, &len, &after, &prop) != Success)
+         goto _out;
+-    if(ret_type == None || format == 0 || len != n_desktops*4)
++    /* GoboRefined: accept more rectangles than desktops (the number of Awesome's desktops
++       changes; the look writes 16) */
++    (void)n_desktops;
++    if(ret_type == None || format == 0 || len < (cur_desktop + 1) * 4)
+     {
+         if(prop)
+             XFree(prop);
+@@ -3418,7 +3424,19 @@
+         {
+             if(evt->button == 3)  /* right click on the blank area => desktop popup menu */
+             {
+-                if(!self->conf.show_wm_menu)
++                /* GoboRefined: Awesome binds root window clicks with passive grabs, so the
++                   click forwarded below never reaches it. Awesome starts the desktop with
++                   GOBO_DESKTOP_MENU_COMMAND set: run that instead (it opens Awesome's menu). */
++                const char *menu_cmd = g_getenv("GOBO_DESKTOP_MENU_COMMAND");
++                if(self->conf.show_wm_menu && menu_cmd && *menu_cmd &&
++                   !(evt->state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK)))
++                {
++                    g_spawn_command_line_async(menu_cmd, NULL);
++                    self->button_pressed = 0; /* nothing to forward on release */
++                    return TRUE;
++                }
++                /* GoboRefined: Ctrl+right click still gives PCManFM's own desktop menu */
++                if(!self->conf.show_wm_menu || (evt->state & GDK_CONTROL_MASK))
+                     clicked = FM_FV_CONTEXT_MENU;
+             }
+             else if(evt->button == 1)
+diff -ruN pcmanfm-1.2.5/src/main-win-ui.c ../pcmanfm-1.2.5/src/main-win-ui.c
+--- pcmanfm-1.2.5/src/main-win-ui.c	2016-12-10 01:38:22.000000000 +0100
++++ pcmanfm-1.2.5/src/main-win-ui.c	2026-11-14 12:26:00.960305500 +0100
+@@ -153,6 +153,7 @@
+   "<menu action='ToolMenu'>"
+     "<menuitem action='Term'/>"
+ #if FM_CHECK_VERSION(1, 0, 2)
++    "<menuitem action='QuickSearch'/>" /* GoboRefined */
+     "<menuitem action='Search'/>"
+ #endif
+ #if FM_CHECK_VERSION(1, 2, 0)
+@@ -175,6 +176,7 @@
+     "<toolitem action='Up'/>"
+     "<toolitem action='Home'/>"
+     "<toolitem action='Go'/>"
++    "<toolitem action='QuickSearch'/>" /* GoboRefined */
+ "</toolbar>"
+ "<accelerator action='Location2'/>"
+ "<accelerator action='Prev2'/>"
+@@ -248,7 +250,9 @@
+     {"ToolMenu", NULL, N_("Too_ls"), NULL, NULL, NULL},
+         {"Term", "utilities-terminal", N_("Open Current Folder in _Terminal"), "F4", NULL, G_CALLBACK(on_open_in_terminal)},
+ #if FM_CHECK_VERSION(1, 0, 2)
+-        {"Search", GTK_STOCK_FIND, N_("Fin_d Files..."), "<Ctrl><Shift>F", N_("Open search dialog"), G_CALLBACK(on_search)},
++        /* GoboRefined: simple search on Ctrl+F (and a toolbar button); the full dialog stays */
++        {"QuickSearch", "edit-find", N_("_Search..."), "<Ctrl>F", N_("Search for files in this folder"), G_CALLBACK(on_quick_search)},
++        {"Search", GTK_STOCK_FIND, N_("A_dvanced Search..."), "<Ctrl><Shift>F", N_("Open search dialog"), G_CALLBACK(on_search)},
+ #endif
+ #if FM_CHECK_VERSION(1, 2, 0)
+         {"Launch", GTK_STOCK_EXECUTE, N_("_Run a Command in Current Folder..."), NULL, NULL, G_CALLBACK(on_launch)},
+diff -ruN pcmanfm-1.2.5/src/main-win.c ../pcmanfm-1.2.5/src/main-win.c
+--- pcmanfm-1.2.5/src/main-win.c	2016-12-10 01:38:22.000000000 +0100
++++ pcmanfm-1.2.5/src/main-win.c	2026-11-14 12:32:05.001647700 +0100
+@@ -118,6 +118,7 @@
+ /*static void on_open_as_root(GtkAction* act, FmMainWin* win);*/
+ #if FM_CHECK_VERSION(1, 0, 2)
+ static void on_search(GtkAction* act, FmMainWin* win);
++static void on_quick_search(GtkAction* act, FmMainWin* win);
+ #endif
+ #if FM_CHECK_VERSION(1, 2, 0)
+ static void on_launch(GtkAction* act, FmMainWin* win);
+@@ -904,6 +905,8 @@
+     {
+         act = gtk_ui_manager_get_action(ui, "/menubar/ToolMenu/Search");
+         gtk_action_set_sensitive(act, FALSE);
++        act = gtk_ui_manager_get_action(ui, "/menubar/ToolMenu/QuickSearch");
++        gtk_action_set_sensitive(act, FALSE);
+     }
+     /* disable "Applications" button if module isn't available */
+     if (!fm_module_is_in_use("vfs", "menu"))
+@@ -976,7 +979,9 @@
+     toolitem = (GtkToolItem*)gtk_tool_item_new();
+     gtk_container_add(GTK_CONTAINER(toolitem), GTK_WIDGET(pathbox));
+     gtk_tool_item_set_expand(toolitem, TRUE);
+-    gtk_toolbar_insert(win->toolbar, toolitem, gtk_toolbar_get_n_items(win->toolbar) - 1);
++    /* GoboRefined: right before the Go button (the Search button follows it) */
++    gtk_toolbar_insert(win->toolbar, toolitem, gtk_toolbar_get_item_index(win->toolbar,
++                       GTK_TOOL_ITEM(gtk_ui_manager_get_widget(ui, "/toolbar/Go"))));
+     g_signal_connect(app_config, "changed::toolsbar",
+                      G_CALLBACK(on_toolsbar_changed), win);
+ 
+@@ -1217,6 +1222,99 @@
+     fm_launch_search_simple(GTK_WINDOW(win), NULL, l, pcmanfm_open_folder, NULL);
+     g_list_free(l);
+ }
++
++/* GoboRefined: simple search (Ctrl+F, toolbar button): a name and two modes,
++ * "this folder only" or "this folder and every folder inside it". It opens a
++ * search:// tab of libfm's search module; the old dialog stays as Advanced Search. */
++static gboolean quick_search_recursive = TRUE; /* last choice, kept while PCManFM runs */
++
++static void on_quick_search(GtkAction* act, FmMainWin* win)
++{
++    FmPath *cwd = fm_tab_page_get_cwd(win->current_page);
++    FmPath *folder;
++    GtkWidget *dlg, *box, *label, *entry, *only_here, *below;
++    char *dir_str, *disp, *markup;
++
++    /* in a search result (or another non-local place) search the home folder */
++    if (cwd && fm_path_is_native(cwd))
++        folder = fm_path_ref(cwd);
++    else
++        folder = fm_path_ref(fm_path_get_home());
++    dir_str = fm_path_to_str(folder);
++    disp = fm_path_display_basename(folder);
++
++    dlg = gtk_dialog_new_with_buttons(_("Search"), GTK_WINDOW(win),
++                                      GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
++                                      _("_Cancel"), GTK_RESPONSE_CANCEL,
++                                      _("_Search"), GTK_RESPONSE_OK, NULL);
++    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
++    gtk_window_set_default_size(GTK_WINDOW(dlg), 420, -1);
++    gtk_window_set_icon_name(GTK_WINDOW(dlg), "edit-find");
++    box = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
++    gtk_container_set_border_width(GTK_CONTAINER(box), 12);
++    gtk_box_set_spacing(GTK_BOX(box), 8);
++
++    label = gtk_label_new(_("Find files and folders whose name contains:"));
++    gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
++    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
++    entry = gtk_entry_new();
++    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
++    gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
++
++    markup = g_strdup_printf(_("Only in this folder (%s)"), disp);
++    only_here = gtk_radio_button_new_with_label(NULL, markup);
++    g_free(markup);
++    below = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(only_here),
++                    _("In this folder and all folders inside it"));
++    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(quick_search_recursive ? below : only_here), TRUE);
++    gtk_box_pack_start(GTK_BOX(box), only_here, FALSE, FALSE, 0);
++    gtk_box_pack_start(GTK_BOX(box), below, FALSE, FALSE, 0);
++    label = gtk_label_new(_("Not case sensitive. * and ? work as wildcards."));
++    gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
++    gtk_widget_set_sensitive(label, FALSE);
++    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
++    gtk_widget_show_all(dlg);
++
++    while (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_OK)
++    {
++        const char *text = gtk_entry_get_text(GTK_ENTRY(entry));
++        char *pattern, *esc_dir, *esc_pat, *uri;
++        FmPath *search;
++
++        while (*text == ' ')
++            ++text;
++        if (*text == '\0')
++        {
++            gtk_widget_grab_focus(entry);
++            continue;
++        }
++        quick_search_recursive = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(below));
++        /* a plain word matches anywhere in the name; with wildcards it is used as typed */
++        if (strchr(text, '*') || strchr(text, '?'))
++            pattern = g_strdup(text);
++        else
++            pattern = g_strdup_printf("*%s*", text);
++        /* same escaping as libfm's own search dialog (fm-gtk-file-launcher.c) */
++        esc_dir = g_uri_escape_string(dir_str, "!$&'()*+:;=/@", TRUE);
++        esc_pat = g_uri_escape_string(pattern, ":/?#[]@!$'()*+,;", TRUE);
++        uri = g_strdup_printf("search://%s?recursive=%c&show_hidden=0&name=%s&name_ci=1",
++                              esc_dir, quick_search_recursive ? '1' : '0', esc_pat);
++        search = fm_path_new_for_uri(uri);
++        /* like the old dialog: through the launcher, so the tab is titled "Search Results" */
++        gtk_widget_hide(dlg);
++        fm_launch_path_simple(GTK_WINDOW(win), NULL, search, pcmanfm_open_folder, NULL);
++        fm_path_unref(search);
++        g_free(uri);
++        g_free(esc_pat);
++        g_free(esc_dir);
++        g_free(pattern);
++        break;
++    }
++    gtk_widget_destroy(dlg);
++    g_free(disp);
++    g_free(dir_str);
++    fm_path_unref(folder);
++}
+ #endif
+ 
+ #if FM_CHECK_VERSION(1, 2, 0)

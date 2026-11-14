@@ -26,6 +26,7 @@ local wifi_switch = require("spin.wifi_switch")
 local desktops = require("spin.desktops")
 local screenshot = require("spin.screenshot")
 local cliphist = require("spin.cliphist")
+local desktop_icons = require("spin.desktop_icons")   -- 0.6: ~/Desktop icons (PCManFM), Trash clean-up
 local bluetooth = require("gobo.awesome.bluetooth")
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
@@ -490,6 +491,9 @@ end)
 -- Realtek USB Wi-Fi adapters that start as a "driver CD": switch them from the session too,
 -- in case udev's rule did not (spin/wifi_switch.lua, /var/log/gobo-wifi-switch.log).
 wifi_switch.start({ icon = find_icon("network-wireless", "network-wireless-symbolic") })
+
+-- Files in ~/Desktop on the desktop (PCManFM --desktop, spin/desktop_icons.lua); Trash clean-up
+desktop_icons.start({ menu = function() mymainmenu:toggle() end })   -- same as a root right click
 
 -- Mouse bindings
 root.buttons(awful.util.table.join(
@@ -964,7 +968,11 @@ awful.rules.rules = {
       placement = function(c) awful.placement.bottom_right(c, { honor_workarea = true, margins = 8 }) end } },
    { rule = { class = "Lxrandr" }, properties = { floating = true, placement = awful.placement.centered } },
    -- Add titlebars to normal clients and dialogs
-   { rule_any = {type = { "normal", "dialog" } }, properties = { titlebars_enabled = true } },}
+   { rule_any = {type = { "normal", "dialog" } }, properties = { titlebars_enabled = true } },
+   -- 0.6: PCManFM's desktop window (icons of ~/Desktop): on every desktop, never in the taskbar,
+   -- and it never takes the keyboard focus (a click on an icon or the desktop leaves it where it was)
+   { rule = { type = "desktop" }, properties = { sticky = true, border_width = 0, titlebars_enabled = false,
+      skip_taskbar = true, focusable = false, below = true } },}
 
 local no_decorations = {
     ["plugin-container"] = true,

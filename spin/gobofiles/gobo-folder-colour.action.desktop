@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Action
+Name=Folder colour...
+Tooltip=Show this folder in a colour of your choice
+Icon=colors
+Profiles=folder;
+
+[X-Action-Profile folder]
+Name=Folder colour...
+MimeTypes=inode/directory;
+SelectionCount==1
+Schemes=file;
+ShowIfTrue=gobo-folder-colour --check %f
+Exec=gobo-folder-colour %f

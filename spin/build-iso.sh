@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
-# Runs INSIDE the build VM (snapshot "iso-build-env-6a"), as root:
+# Runs INSIDE the build VM (snapshot "iso-build-env-6b"), as root:
 #
 #   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
 #
@@ -19,6 +19,9 @@
 #                                   (snapshot "iso-build-env-5"; spin/build-programs.sh)
 #   - /Programs/CopyQ, and USB-ModeSwitch rebuilt with gobo-wifi-switch + the new udev rule
 #                                   clipboard history, Wi-Fi switch wrapper (snapshot "iso-build-env-6a")
+#   - LibFM and PCManFM rebuilt with spin/patches/*-gobo.patch (search, USB entry, folder icons,
+#     trash rule, desktop menu/work area), /Programs/GoboFiles (Trash window, folder colours)
+#                                   (snapshot "iso-build-env-6b"; spin/build-programs.sh)
 # and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz, welcome.src,
 # gobo-command-not-found and software-install.txt (copies of spin/gobo-command-not-found and
 # docs/software-install.md in vm/serve/), lxdm-files.tgz (cd spin && tar czf ../vm/serve/lxdm-files.tgz
@@ -42,7 +45,7 @@ rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice CopyQ"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles"
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -109,6 +112,11 @@ grep -q gobo-wifi-switch $SUDOERS || \
 chroot $R visudo -c > /dev/null
 [ -x $R/Programs/USB-ModeSwitch/Current/bin/gobo-wifi-switch ] || { echo "gobo-wifi-switch missing"; exit 1; }
 grep -q 'gobo-wifi-switch --udev' $R/Programs/USB-ModeSwitch/Current/lib/udev/rules.d/40-gobo-realtek-wifi.rules
+# 0.6 file tools: Trash window + purge, folder colours (PCManFM menu entry = libfm custom action)
+for f in bin/gobo-trash bin/gobo-trash-purge bin/gobo-folder-colour share/file-manager/actions/gobo-folder-colour.desktop
+do [ -e $R/Programs/GoboFiles/Current/$f ] || { echo "GoboFiles: $f missing"; exit 1; }
+done
+[ -e $R/System/Index/share/file-manager/actions/gobo-folder-colour.desktop ] || { echo "folder colour action not linked"; exit 1; }
 # no stray link inside /Mount/Media (USB drives are mounted there; see gobo-install)
 [ -L $R/Mount/Media/Media ] && rm -f $R/Mount/Media/Media
 umount $R/proc

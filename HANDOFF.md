@@ -530,3 +530,120 @@ Lab lessons (0.6):
 
 VM snapshots now: ..., `iso-build-env-5`, `iso-0.5-installed-efi`, **`iso-build-env-6a`** (current; taken
 powered off, VM started again headless; the lab X session is started with the openvt line above).
+
+## 0.6 file-manager half (2026-11-14)
+
+ISO 0.6 **not built**. Build VM state: snapshot **`iso-build-env-6b`** (= `iso-build-env-6a` + LibFM/PCManFM
+rebuilt with the 0.6 patches, GoboFiles 0.6, USB-ModeSwitch with the final `gobo-wifi-switch`, the 0.6 look for
+`lab`). `spin/build-iso.sh` names `iso-build-env-6b`, copies GoboFiles and checks its files; the `vm/serve/`
+copies of `build-iso.sh`, `build-programs.sh`, `gobo-wifi-switch` are identical to `spin/`.
+New files served for builds: `vm/serve/libfm-1.2.5-gobo.patch`, `vm/serve/pcmanfm-1.2.5-gobo.patch` (copies
+of `spin/patches/`), `vm/serve/gobofiles.tgz` (`cd spin && tar czf ../vm/serve/gobofiles.tgz gobofiles`).
+Tarballs re-packed/added in `spin/programs/`: LibFM, PCManFM, GoboFiles, USB-ModeSwitch.
+
+| # | Item | State | What changed |
+|---|---|---|---|
+| 0 | `gobo-wifi-switch` lock in /var/run | done | installed in the build VM; `/var/run` (= `/Data/Variable/run`) is a root-owned 755 tmpfs; `sudo -n ... --session` as `lab` logs "nothing to do"; tarball re-packed |
+| 1 | File search | done | the built-in search worked (Tools -> Find Files, `search://`) but needed wildcards: typing `report` found only a file named exactly "report", and there was no button. New: **Ctrl+F** / magnifier button right of the location bar / Tools -> Search...: one name field (plain text = "name contains", not case sensitive, `*`/`?` used as typed), "Only in this folder (X)" or "In this folder and all folders inside it" (last choice remembered while PCManFM runs); results in a "Search Results" tab, they open like normal files. Old dialog: Tools -> Advanced Search (Ctrl+Shift+F) |
+| 2 | "USB drives" entry | done (+ bonus) | fixed side-pane entry from the spin's LibFM: last of the places (above the separator), Papirus' blue USB icon, user bookmarks always below it; each mounted stick listed under it (drive icon), updated on plug/unplug (watches `/Mount/Media`). `apply.sh` removes the 0.5 bookmark line |
+| 3 | Desktop icons | done | Awesome starts `pcmanfm --desktop` (`awesome/spin/desktop_icons.lua`); details below |
+| 4 | Trash | done | Delete in PCManFM -> `~/.local/share/Trash` (GLib does this without gvfs); Trash icon on the desktop opens `gobo-trash` (restore, delete for good, empty, age 1/3/6 months, default 6); `gobo-trash-purge --auto` 20 s after Awesome starts and every 24 h; files on USB sticks / other disks: asked (default "No"), then deleted for good |
+| 5 | Folder colours | done | right click on a folder under home -> "Folder colour..." -> GTK colour chooser (zenity) with palette, custom colour and "Default"; shown in PCManFM and on the desktop, survives restarts and moves |
+
+### How it works
+
+- **Patches** (`spin/patches/`, applied by `spin/build-programs.sh libfm` / `pcmanfm`):
+  - LibFM: `fm-places-model.c` (USB entries), `fm-file-info.c` (a folder's icon from `<folder>/.directory`,
+    `[Desktop Entry] Icon=`), `fm-file-ops-job-delete.c` (only files on the home folder's file system are trashed;
+    the stock check used `g_mount_can_unmount`, which tells nothing without gvfs), `fm-progress-dlg.c` (clear
+    question, default No). Custom actions are compiled in again (the release tarball carries Vala's C output).
+  - PCManFM: `main-win*.c` (search dialog, button, Ctrl+F), `desktop.c` (right click on an empty desktop spot
+    runs `$GOBO_DESKTOP_MENU_COMMAND`; Ctrl+right click = PCManFM's own desktop menu; the icon area reads
+    `_NET_WORKAREA` directly).
+- **Desktop** (`look/gobo11/awesome/spin/desktop_icons.lua`, started from `rc.lua`): 1.5 s after Awesome starts it
+  saves the drawn wallpaper (`root.wallpaper()`, all screens) to `~/.cache/gobo11/desktop-wallpaper-<mode>-WxH.png`,
+  writes the `[*]` group of `~/.config/pcmanfm/default/desktop-items-N.conf` (wallpaper mode "screen"; text white
+  with black shadow in dark, `#1b2230` with a light shadow in light; Inter 10; no PCManFM trash/mount icons; icon
+  positions saved in that file are kept) and starts the desktop, or switches it off and on when the settings
+  changed. The power menu's light/dark switch restarts Awesome, so picture and colours follow (checked both ways).
+  Awesome 4.3 publishes no `_NET_WORKAREA`; the module sets it with `xprop` (full width, down to the taskbar top,
+  16 copies), also on workarea changes, so icons stay above the taskbar. A rule makes the desktop window sticky,
+  `below`, not in the taskbar and **not focusable**. Same path for `startx` and LXDM (both run `~/.xinitrc` ->
+  Awesome); `xinitrc` itself is unchanged.
+- **Menus on the desktop (decision)**: right click on an empty spot = Awesome's menu as before (PCManFM's forwarded
+  click never reached Awesome, whose root bindings are passive grabs; hence the command
+  `awesome-client 'spin_desktop_menu()'` passed in the environment); right click on an icon = PCManFM's file menu
+  (Open, Cut/Copy, Move to Trash, Rename, Folder colour..., Properties); Ctrl+right click on an empty spot =
+  PCManFM's desktop menu (Create New, Paste, Sort, Desktop Preferences). A left click elsewhere closes Awesome's menu.
+- **Trash**: `spin/gobofiles/gobo-trash.c` (window), `gobo-trash-purge` (all deleting; refuses a HOME that is not
+  absolute, a trash path not ending in `/Trash`, item names that are empty, `.`, `..` or contain `/`; `cd /` first,
+  because `find` gives up in an unreadable working directory - found by the fixture test). Age in
+  `~/.config/gobo-trash.conf`, log in `~/.cache/gobo-trash.log`. Desktop icon `~/Desktop/Trash.desktop` written
+  once by `apply.sh` (marker `~/.config/gobo11-trash-icon`, so a deleted icon stays deleted). Also in the
+  application search as "Trash".
+- **Folder colours**: `gobo-folder-colour` recolours Papirus' 64 px folder SVG into
+  `~/.local/share/gobo-folder-colours/folder-rrggbb.svg` (back part 82 % of the colour, like Papirus) and edits only
+  the `Icon=` line of `[Desktop Entry]` in the folder's `.directory` (other groups kept; Default removes the line,
+  and the file when nothing else is left), then `touch`es the folder so open views update. The menu entry is hidden
+  for folders outside home (`ShowIfTrue=gobo-folder-colour --check %f`) and the script refuses them as well.
+- Installer: only a comment changed; `~/Desktop/Trash.desktop` and `~/.config/gobo11-trash-icon` are inside the
+  folders it already chowns, the other new files are created by the user's own session.
+
+### Verified in the VM (simulated mouse/keys, user lab, dark and light)
+
+- Search: Ctrl+F dialog, a plain word finds 3 files incl. sub-sub-folders, "only this folder" mode, tab title.
+- USB: entry order with two bookmarks; stick entry disappears/appears on detach/attach of the virtual stick.
+- Trash: Delete -> confirm -> file in Trash with `.trashinfo`; delete on the stick -> our question, file gone, no
+  `.Trash-1000` on the stick; Trash window lists name / original folder / date, Restore puts the file back,
+  Delete for good and Empty Trash (both confirmed), the age switch writes the config.
+- Purge fixtures (`vm/serve/trash-fixture-test.sh`, throwaway HOME): items 8/5/2 months and 2 weeks old, a
+  7-month folder with a read-only sub-folder and a link to an outside folder, a link to an outside file, a name
+  `old -rf *`, bad and missing dates: 6 months removes exactly the 4 old ones, then 3 months the 5-month one,
+  1 month the 2-month one; bad/missing dates kept; invalid names refused; empty and relative HOME refused;
+  outside files kept.
+- Folder colours: menu entry, chooser, green applied live, Default, `.directory` with a `[File Manager]` group
+  kept, `/tmp` refused, coloured folder on the desktop.
+- Desktop: icons of `~/Desktop` (new files appear at once), wallpaper identical to Awesome's, light/dark switch,
+  icons above the taskbar with 17 files, Awesome menu on right click (also after a mode switch), Ctrl+right click,
+  double click on Trash, Awesome restart and `vm/push-look.sh`.
+- Keyboard-focus regression `vm/input-test.sh` with the desktop running: **32 of 32 pass** (incl. menu + click on
+  the desktop, right click on the desktop; the keyboard always ends in the terminal).
+
+### Not verified (needs the real PC or an install)
+
+The LXDM login path with the desktop (same `~/.xinitrc` -> Awesome, so expected to work; only the lab's
+`startx` session was used); NVIDIA + picom with the desktop window; a physical second monitor (the picture spans
+all screens, settings are written for each); exFAT/NTFS sticks with the trash rule; the 24-hour purge timer
+(only the start-up run and the script itself).
+
+### Known limits / decisions to review
+
+- The desktop window is not focusable: Delete, F2 and arrow keys do nothing on desktop icons; the mouse menus work.
+- "Desktop Preferences" (Ctrl+right click) can set another wallpaper, but the next Awesome start (or light/dark
+  switch) puts ours back.
+- File manager windows run inside the desktop's PCManFM process (single instance, as in LXDE).
+- Delete on a USB stick asks twice (PCManFM's own "move to trash?" first, then ours).
+- Trash folders on other disks/sticks (`.Trash-1000`, made by other systems) are not shown.
+- Search: a comma in the text splits it into two patterns (libfm's search syntax).
+- Not from this work, found while testing: opening a plain text file (from search results or any folder) shows
+  an empty "Choose Application" list. The image has no `update-desktop-database` (desktop-file-utils), so no
+  `mimeinfo.cache`, and no default for text/plain; only the types in `~/.config/mimeapps.list` (OnlyOffice) open
+  directly. gvim declares text/plain; a GUI text editor default is the owner's choice. Folders and office files
+  from search results open normally.
+
+Downloads: none in this half (everything built from the sources already in `/Data/Build/src3`).
+Size: LibFM tgz 864 -> 888 KB, PCManFM 418 -> 420 KB, GoboFiles 17 KB tgz / 96 KB installed.
+Screenshots: `docs/screenshots/0.6-search-dark.png`, `0.6-search-results-dark.png`, `0.6-usb-sidepane-dark.png`,
+`0.6-desktop-icons-light.png`, `0.6-desktop-menu-dark.png`, `0.6-trash-dark.png`, `0.6-folder-colour-dark.png`,
+`0.6-folder-colour-chooser-dark.png`.
+
+Lab lessons (0.6 file-manager half):
+- Awesome's root-window bindings are passive grabs: events sent with XSendEvent to the root never reach them.
+- GTK 3.24 here reported no work area even with `_NET_WORKAREA` and `_NET_SUPPORTED` set (GDK's EWMH check
+  failed in a test program); PCManFM's GTK 2 code path that reads the property directly works.
+- `su lab -c` from the ssh root shell runs in `/Users/root` (unreadable for lab): `find` aborts before `-exec`.
+- `pkill -9 -u lab pcmanfm` before rebuilding LibFM/PCManFM (the desktop process keeps the old libraries).
+- xsecurelock had locked the idle lab desktop once more (black screenshot): `pkill xsecurelock`, `xset s off`.
+
+VM snapshots now: ..., `iso-build-env-6a`, **`iso-build-env-6b`** (current; taken powered off, VM started again
+headless; the lab X session is started with the openvt line of the 0.6 desktop half).

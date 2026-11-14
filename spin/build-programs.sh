@@ -5,7 +5,8 @@
 #
 #   bash build-programs.sh <step>      steps, in order: menu-cache libfm pcmanfm pavucontrol lxrandr lxdm
 #                                      0.5: udevil usb-modeswitch rtl8852au onlyoffice
-#                                      0.6: copyq (and usb-modeswitch again: gobo-wifi-switch)
+#                                      0.6: copyq (and usb-modeswitch again: gobo-wifi-switch),
+#                                           libfm + pcmanfm again (spin/patches/*-gobo.patch), gobofiles
 #   (0.5 sources: udevil-0.4.4.tar.gz, usb-modeswitch-2.6.1.tar.bz2 in src3; rtl8852au is cloned
 #    from GitHub and onlyoffice downloaded by their steps; list in HANDOFF.md, 0.5 section)
 set -e
@@ -64,13 +65,26 @@ menu-cache)
    ;;
 libfm)
    unpack libfm-1.2.5.tar.xz
-   gobo_configure LibFM 1.2.5 --with-gtk=3 --disable-exif --disable-actions CFLAGS="$CF"
+   # 0.6 (spin/patches/libfm-1.2.5-gobo.patch, served by vm/serve.js): fixed "USB drives"
+   # side-pane entry + one entry per mounted stick; folder icons from <folder>/.directory
+   # (folder colours); only files on the home file system go to the trash (others: asked,
+   # then deleted for good). Custom actions are on again (0.6, folder colours): the tarball
+   # ships the C files generated from Vala, so no Vala compiler is needed.
+   wget -qO- http://10.0.2.2:8766/libfm-1.2.5-gobo.patch | patch -p1
+   gobo_configure LibFM 1.2.5 --with-gtk=3 --disable-exif CFLAGS="$CF"
+   grep -q '^#define HAVE_ACTIONS 1' config.h
    # the shortcut editor is not useful as a menu entry
    echo "NoDisplay=true" >> /Programs/LibFM/1.2.5/share/applications/lxshortcut.desktop
    finish LibFM 1.2.5 "File management library used by PCManFM (GTK 3 build)."
    ;;
 pcmanfm)
    unpack pcmanfm-1.2.5.tar.xz
+   # 0.6 (spin/patches/pcmanfm-1.2.5-gobo.patch): simple search on Ctrl+F and a toolbar
+   # button ("this folder only" / "this folder and all folders inside it"); the old dialog
+   # stays as Tools -> Advanced Search (Ctrl+Shift+F). Desktop mode (0.6, desktop icons): a right
+   # click on an empty spot runs $GOBO_DESKTOP_MENU_COMMAND (Awesome's menu; Ctrl+right click =
+   # PCManFM's own), and the icon area follows _NET_WORKAREA read directly (set by the look)
+   wget -qO- http://10.0.2.2:8766/pcmanfm-1.2.5-gobo.patch | patch -p1
    gobo_configure PCManFM 1.2.5 --with-gtk=3 CFLAGS="$CF"
    finish PCManFM 1.2.5 "Lightweight file manager (GTK 3 build)."
    # Awesome owns the wallpaper: hide the "Desktop Preferences" entry (it manages desktop icons)
@@ -269,6 +283,24 @@ copyq)
    rm -rf $P/etc
    ln -sfn $V /Programs/CopyQ/Current
    SymlinkProgram CopyQ $V | tail -n 1
+   ;;
+gobofiles)
+   # 0.6: the spin's own file tools (sources in spin/gobofiles/, served as gobofiles.tgz):
+   # gobo-trash (Trash window, GTK 3, C), gobo-trash-purge (all deleting from the Trash, age
+   # limit), gobo-folder-colour + the PCManFM menu entry "Folder colour..." (libfm custom action).
+   V=0.6 P=/Programs/GoboFiles/0.6
+   rm -rf $WORK/gobofiles && mkdir -p $WORK/gobofiles && cd $WORK/gobofiles
+   wget -qO- http://10.0.2.2:8766/gobofiles.tgz | tar xz
+   cd gobofiles
+   for s in gobo-trash-purge gobo-folder-colour; do bash -n $s; done
+   gcc -O2 -Wall -o gobo-trash gobo-trash.c $(pkg-config --cflags --libs gtk+-3.0)
+   rm -rf $P && mkdir -p $P/bin $P/share/applications $P/share/file-manager/actions $P/Resources
+   install -m 755 gobo-trash gobo-trash-purge gobo-folder-colour $P/bin/
+   install -m 644 gobo-trash.desktop $P/share/applications/gobo-trash.desktop
+   install -m 644 gobo-folder-colour.action.desktop $P/share/file-manager/actions/gobo-folder-colour.desktop
+   echo "GoboRefined file tools: Trash window with automatic clean-up, folder colours for PCManFM." > $P/Resources/Description
+   ln -sfn $V /Programs/GoboFiles/Current
+   SymlinkProgram GoboFiles $V | tail -n 1
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

@@ -78,3 +78,14 @@ Recipe dates matter: most of these were written for 2016–2020 library versions
 | Cursor | Adwaita (XCursor-Themes 1.0.6 also present) |
 
 Stage 2 added Inter 4.1, JetBrains Mono 2.304 and Papirus 20260801 (see `HANDOFF.md`).
+
+## Added in 0.6 (file-manager half, 2026-11-14)
+
+| Program | Version | What |
+|---|---|---|
+| GoboFiles | 0.6 | the spin's own: `gobo-trash` (Trash window, GTK 3, C), `gobo-trash-purge` (deleting from the Trash, 1/3/6-month age limit), `gobo-folder-colour` + the PCManFM menu entry "Folder colour..." (libfm custom action in `share/file-manager/actions`). Sources `spin/gobofiles/`. 96 KB installed. |
+| LibFM | 1.2.5 (rebuilt) | `spin/patches/libfm-1.2.5-gobo.patch`; custom actions enabled again (generated C files ship in the tarball, no Vala needed) |
+| PCManFM | 1.2.5 (rebuilt) | `spin/patches/pcmanfm-1.2.5-gobo.patch` |
+
+Used from the image, nothing downloaded: Zenity 3.32.0 (colour chooser, `--extra-button`), FindUtils, XProp, GLib's own
+freedesktop trash support (`g_file_trash` works without gvfs for files on the home file system).

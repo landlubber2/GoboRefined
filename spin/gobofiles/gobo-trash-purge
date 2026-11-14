@@ -1,0 +1,130 @@
+#!/bin/sh
+# GoboRefined (0.6): deletes items from the user's Trash (freedesktop format, the one GLib and
+# PCManFM write to: ~/.local/share/Trash/files + info/*.trashinfo).
+#
+#   gobo-trash-purge --auto              delete items older than the chosen age (1, 3 or 6 months;
+#                                        default 6). Run at login and once a day by the desktop.
+#   gobo-trash-purge --delete NAME...    delete these items (NAME = file name inside Trash/files)
+#   gobo-trash-purge --empty             delete everything in the Trash
+#   gobo-trash-purge --months            print the chosen age in months
+#   gobo-trash-purge --set-months 1|3|6  choose the age (saved in ~/.config/gobo-trash.conf)
+#
+# Safety: this script only ever deletes entries directly inside $TRASH/files and $TRASH/info,
+# where $TRASH is checked to be an absolute path ending in /Trash, and every item name is
+# checked (not empty, no "/", not "." or ".."), so no path built here can point elsewhere.
+set -u
+LC_ALL=C
+export LC_ALL
+
+die() { echo "gobo-trash-purge: $*" >&2; exit 1; }
+
+case "${HOME:-}" in /?*) ;; *) die "HOME is not set to an absolute path" ;; esac
+data="${XDG_DATA_HOME:-}"
+case "$data" in /?*) ;; *) data="$HOME/.local/share" ;; esac
+TRASH="$data/Trash"
+case "$TRASH" in /?*/Trash) ;; *) die "unexpected trash folder: $TRASH" ;; esac
+CONF="$HOME/.config/gobo-trash.conf"
+# find (used below) gives up when it cannot return to an unreadable working directory
+cd / || die "cannot change to /"
+LOG="$HOME/.cache/gobo-trash.log"
+
+months() {
+   m=$(sed -n 's/^months=\([0-9]*\)$/\1/p' "$CONF" 2> /dev/null | tail -n 1)
+   case "$m" in 1|3|6) echo "$m" ;; *) echo 6 ;; esac
+}
+
+log() {
+   mkdir -p "$HOME/.cache" 2> /dev/null
+   echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2> /dev/null
+}
+
+# valid_name NAME: a plain file name (what may sit directly inside Trash/files)
+valid_name() {
+   case "$1" in
+      ""|.|..|*/*) return 1 ;;
+   esac
+   return 0
+}
+
+# delete_item NAME: remove Trash/files/NAME (file, link or folder tree) and its .trashinfo
+delete_item() {
+   valid_name "$1" || { echo "gobo-trash-purge: skipping invalid name: $1" >&2; return 1; }
+   f="$TRASH/files/$1"
+   i="$TRASH/info/$1.trashinfo"
+   if [ -d "$f" ] && [ ! -L "$f" ]
+   then
+      # folders without write permission inside cannot be emptied otherwise
+      # (find does not follow links; -exec only touches folders below $f)
+      find "$f" -type d ! -perm -u=rwx -exec chmod u+rwx {} + 2> /dev/null
+      rm -rf -- "$f" || return 1
+   elif [ -e "$f" ] || [ -L "$f" ]
+   then
+      rm -f -- "$f" || return 1
+   fi
+   rm -f -- "$i"
+   return 0
+}
+
+[ $# -ge 1 ] || die "usage: gobo-trash-purge --auto | --delete NAME... | --empty | --months | --set-months 1|3|6"
+
+case "$1" in
+--months)
+   months
+   ;;
+--set-months)
+   case "${2:-}" in 1|3|6) ;; *) die "--set-months takes 1, 3 or 6" ;; esac
+   mkdir -p "$HOME/.config"
+   printf '# Trash: items older than this many months are deleted automatically (1, 3 or 6)\nmonths=%s\n' "$2" > "$CONF"
+   ;;
+--delete)
+   shift
+   [ -d "$TRASH/files" ] || exit 0
+   rc=0
+   for name in "$@"
+   do delete_item "$name" || rc=1
+   done
+   log "deleted $# item(s) by request"
+   exit $rc
+   ;;
+--empty)
+   [ -d "$TRASH/files" ] || exit 0
+   n=0
+   for i in "$TRASH"/info/*.trashinfo
+   do
+      [ -e "$i" ] || continue
+      name=${i##*/}
+      delete_item "${name%.trashinfo}" && n=$((n + 1))
+   done
+   # leftovers without an info file (including names starting with a dot)
+   for f in "$TRASH"/files/* "$TRASH"/files/.[!.]* "$TRASH"/files/..?*
+   do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      delete_item "${f##*/}" && n=$((n + 1))
+   done
+   log "emptied the trash ($n item(s))"
+   ;;
+--auto)
+   [ -d "$TRASH/info" ] || exit 0
+   m=$(months)
+   cutoff=$(date -d "$m months ago" +%s) || die "date failed"
+   n=0
+   for i in "$TRASH"/info/*.trashinfo
+   do
+      [ -f "$i" ] || continue
+      # DeletionDate=YYYY-MM-DDThh:mm:ss (local time); items without a readable date are kept
+      d=$(sed -n 's/^DeletionDate=\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)$/\1/p' "$i" | head -n 1)
+      [ -n "$d" ] || continue
+      t=$(date -d "$d" +%s 2> /dev/null) || continue
+      if [ "$t" -lt "$cutoff" ]
+      then
+         name=${i##*/}
+         delete_item "${name%.trashinfo}" && n=$((n + 1))
+      fi
+   done
+   [ "$n" -gt 0 ] && log "deleted $n item(s) older than $m month(s)"
+   exit 0
+   ;;
+*)
+   die "unknown option: $1"
+   ;;
+esac

@@ -1,0 +1,153 @@
+#!/bin/sh
+# GoboRefined (0.6): give a folder inside the home folder its own colour.
+#
+#   gobo-folder-colour FOLDER           pick a colour (GTK colour chooser via zenity) or "Default"
+#   gobo-folder-colour --set FOLDER #rrggbb|default    the same without asking
+#   gobo-folder-colour --check FOLDER   exit 0 if FOLDER may get a colour (used by the menu entry)
+#
+# How it works: the Papirus folder icon is recoloured into
+# ~/.local/share/gobo-folder-colours/folder-rrggbb.svg and the folder's own .directory file
+# gets "[Desktop Entry] Icon=<that file>". The spin's libfm reads that (patch in
+# spin/patches/libfm-1.2.5-gobo.patch), so PCManFM and the desktop show the colour; it stays
+# with the folder when it is moved or renamed. Folders outside the home folder are refused.
+set -u
+LC_ALL=C
+export LC_ALL
+
+ICONS="$HOME/.local/share/gobo-folder-colours"
+
+# inside_home FOLDER: prints the resolved folder when it is a writable folder below $HOME
+inside_home() {
+   [ -n "${HOME:-}" ] && [ -d "$1" ] || return 1
+   home=$(readlink -f -- "$HOME") || return 1
+   dir=$(readlink -f -- "$1") || return 1
+   case "$dir" in
+      "$home"/*) ;;
+      *) return 1 ;;
+   esac
+   [ -w "$dir" ] || return 1
+   printf '%s\n' "$dir"
+}
+
+msg() {   # msg error|info TEXT
+   if [ -n "${DISPLAY:-}" ] && command -v zenity > /dev/null
+   then zenity --"$1" --title="Folder colour" --no-wrap --text="$2" 2> /dev/null
+   else echo "gobo-folder-colour: $2" >&2
+   fi
+}
+
+# make_icon RRGGBB: write the recoloured icon (if missing) and print its path
+make_icon() {
+   hex=$1
+   out="$ICONS/folder-$hex.svg"
+   if [ ! -s "$out" ]
+   then
+      r=$((0x$(printf %.2s "$hex"))); g=$((0x$(echo "$hex" | cut -c3-4))); b=$((0x$(echo "$hex" | cut -c5-6)))
+      # back part: the colour darkened like Papirus' own (#5294e2 -> #4877b1, about 82 %)
+      dark=$(printf '%02x%02x%02x' $((r * 82 / 100)) $((g * 82 / 100)) $((b * 82 / 100)))
+      mkdir -p "$ICONS" || return 1
+      # Papirus 20260801 places/folder-blue (64x64 drawing; scalable)
+      cat > "$out.tmp" <<SVG || return 1
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1">
+ <rect style="opacity:0.2" width="56" height="36" x="4" y="22" rx="2.8" ry="2.8"/>
+ <path style="fill:#$dark" d="M 4,46.2 C 4,47.751 5.2488,49 6.8,49 H 57.2 C 58.751,49 60,47.751 60,46.2 V 15.8 C 60,14.249 58.751,13 57.2,13 H 32 C 27.8,13 26.4,7 22.2,7 H 6.8 C 5.2488,7 4,8.2488 4,9.8"/>
+ <rect style="opacity:0.2" width="56" height="36" x="4" y="20" rx="2.8" ry="2.8"/>
+ <rect style="fill:#e4e4e4" width="48" height="22" x="8" y="16" rx="2.8" ry="2.8"/>
+ <rect style="fill:#$hex" width="56" height="36" x="4" y="21" rx="2.8" ry="2.8"/>
+ <path style="opacity:0.1;fill:#ffffff" d="M 6.8008,7 C 5.2496,7 4,8.2496 4,9.8008 V 10.801 C 4,9.2496 5.2496,8 6.8008,8 H 22.199 C 26.399,8 27.8,14 32,14 H 57.199 C 58.75,14 60,15.25 60,16.801 V 15.801 C 60,14.25 58.75,13 57.199,13 H 32 C 27.8,13 26.399,7 22.199,7 Z"/>
+</svg>
+SVG
+      mv -f "$out.tmp" "$out" || return 1
+   fi
+   printf '%s\n' "$out"
+}
+
+# set_icon FOLDER ICON|"": write (or with "" remove) Icon= in the [Desktop Entry] group of
+# FOLDER/.directory, keeping everything else in that file (PCManFM may keep view settings there)
+set_icon() {
+   f="$1/.directory"
+   tmp="$1/.directory.gobo-tmp"
+   if [ -f "$f" ]
+   then
+      awk -v icon="$2" '
+         BEGIN { done = 0; ingrp = 0; seen = 0 }
+         /^\[/ {
+            if (ingrp && !done && icon != "") { print "Icon=" icon; done = 1 }
+            ingrp = ($0 == "[Desktop Entry]"); if (ingrp) seen = 1
+            print; next
+         }
+         ingrp && /^Icon=/ { if (icon != "" && !done) { print "Icon=" icon; done = 1 } ; next }
+         { print }
+         END {
+            if (ingrp && !done && icon != "") { print "Icon=" icon; done = 1 }
+            if (!seen && icon != "") { print ""; print "[Desktop Entry]"; print "Icon=" icon }
+         }' "$f" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+      # nothing left but an empty [Desktop Entry] group: remove the file
+      if [ -z "$(grep -v -e '^\[Desktop Entry\]$' -e '^[[:space:]]*$' "$tmp")" ]
+      then rm -f -- "$tmp" "$f"
+      else mv -f -- "$tmp" "$f"
+      fi
+   elif [ -n "$2" ]
+   then
+      printf '[Desktop Entry]\nIcon=%s\n' "$2" > "$f" || return 1
+   fi
+   # the parent folder's view notices the change through the folder's time stamp
+   touch -c -- "$1"
+}
+
+current_hex() {   # colour now set for FOLDER, or empty
+   sed -n 's|^Icon=.*/gobo-folder-colours/folder-\([0-9a-f]\{6\}\)\.svg$|\1|p' "$1/.directory" 2> /dev/null | head -n 1
+}
+
+# apply FOLDER COLOUR: COLOUR is #rrggbb, rgb(r,g,b), rgba(r,g,b,a) or "default"
+apply() {
+   case "$2" in
+      default|"")
+         set_icon "$1" ""
+         return
+         ;;
+      \#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])
+         hex=$(echo "$2" | cut -c2-7 | tr 'A-F' 'a-f')
+         ;;
+      rgb\(*|rgba\(*)
+         set -- "$1" $(echo "$2" | sed 's/^rgba*(\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3/')
+         [ $# -eq 4 ] || { msg error "Unknown colour."; return 1; }
+         hex=$(printf '%02x%02x%02x' "$2" "$3" "$4")
+         ;;
+      *)
+         msg error "Unknown colour: $2"
+         return 1
+         ;;
+   esac
+   icon=$(make_icon "$hex") || { msg error "Could not write the icon in $ICONS."; return 1; }
+   set_icon "$1" "$icon"
+}
+
+case "${1:-}" in
+--check)
+   inside_home "${2:-}" > /dev/null
+   exit $?
+   ;;
+--set)
+   dir=$(inside_home "${2:-}") || { msg error "Folder colours can only be set for folders inside your home folder."; exit 1; }
+   apply "$dir" "${3:-}"
+   exit $?
+   ;;
+""|-*)
+   echo "usage: gobo-folder-colour FOLDER | --set FOLDER #rrggbb|default | --check FOLDER" >&2
+   exit 2
+   ;;
+esac
+
+dir=$(inside_home "$1") || { msg error "Folder colours can only be set for folders inside your home folder\n(and only for folders you may change)."; exit 1; }
+cur=$(current_hex "$dir")
+name=$(basename -- "$dir")
+# zenity's colour chooser = GTK's own (palette + custom colour); "Default" brings back the theme's
+out=$(zenity --color-selection --show-palette --title="Folder colour: $name" \
+         ${cur:+--color="#$cur"} --extra-button="Default" 2> /dev/null)
+rc=$?
+case "$rc:$out" in
+   0:?*) apply "$dir" "$out" ;;
+   1:Default) apply "$dir" default ;;
+   *) exit 0 ;;   # cancelled
+esac

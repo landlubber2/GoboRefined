@@ -1,0 +1,295 @@
+diff -ruN libfm-1.2.5/src/base/fm-file-info.c ../libfm-1.2.5/src/base/fm-file-info.c
+--- libfm-1.2.5/src/base/fm-file-info.c	2016-12-10 00:11:18.000000000 +0100
++++ libfm-1.2.5/src/base/fm-file-info.c	2026-11-14 12:24:48.797041000 +0100
+@@ -204,6 +204,32 @@
+  *
+  * Returns: TRUE if no error happens.
+  */
++/* GoboRefined: icon from <folder>/.directory ([Desktop Entry] Icon=), or NULL.
++ * An absolute icon path is used only if that file exists. */
++static FmIcon* gobo_folder_custom_icon(const char* folder)
++{
++    char *dotdir = g_build_filename(folder, ".directory", NULL);
++    FmIcon *icon = NULL;
++    struct stat dst;
++
++    if (stat(dotdir, &dst) == 0 && S_ISREG(dst.st_mode) && dst.st_size < 65536)
++    {
++        GKeyFile *kf = g_key_file_new();
++        if (g_key_file_load_from_file(kf, dotdir, G_KEY_FILE_NONE, NULL))
++        {
++            char *name = g_key_file_get_string(kf, G_KEY_FILE_DESKTOP_GROUP,
++                                               G_KEY_FILE_DESKTOP_KEY_ICON, NULL);
++            if (name && *name &&
++                (!g_path_is_absolute(name) || g_file_test(name, G_FILE_TEST_IS_REGULAR)))
++                icon = fm_icon_from_name(name);
++            g_free(name);
++        }
++        g_key_file_free(kf);
++    }
++    g_free(dotdir);
++    return icon;
++}
++
+ gboolean _fm_file_info_set_from_native_file(FmFileInfo* fi, const char* path,
+                                             GError** err, gboolean get_fast)
+ {
+@@ -351,6 +377,10 @@
+         /* set "locked" icon on unaccesible folder */
+         else if(!fi->accessible)
+             fi->icon = g_object_ref(icon_locked_folder);
++        /* GoboRefined: an icon chosen for this folder (folder colours), set in the
++           folder's own .directory file: [Desktop Entry] Icon=<name or absolute path> */
++        else if((fi->icon = gobo_folder_custom_icon(path)) != NULL)
++            ;
+         else if(!get_fast && S_ISDIR(st.st_mode)) /* special handling for folder icons */
+         {
+             FmPath* fmpath = fi->path;
+diff -ruN libfm-1.2.5/src/gtk/fm-places-model.c ../libfm-1.2.5/src/gtk/fm-places-model.c
+--- libfm-1.2.5/src/gtk/fm-places-model.c	2016-02-20 01:02:10.000000000 +0100
++++ libfm-1.2.5/src/gtk/fm-places-model.c	2026-11-14 15:10:35.059075400 +0100
+@@ -41,6 +41,7 @@
+ #include "fm-file.h"
+ 
+ #include <glib/gi18n-lib.h>
++#include <sys/stat.h>
+ 
+ #include "fm-config.h"
+ #include "fm-monitor.h"
+@@ -56,14 +57,19 @@
+     FM_PLACES_ID_APPLICATIONS,
+     FM_PLACES_ID_COMPUTER,
+     FM_PLACES_ID_NETWORK,
++    FM_PLACES_ID_USB,       /* GoboRefined: fixed "USB drives" entry (/Mount/Media) */
++    FM_PLACES_ID_USB_STICK, /* GoboRefined: one entry per mounted stick under it (may repeat) */
+     FM_PLACES_ID_OTHER
+ } FmPlacesOrder;
+ 
++/* GoboRefined: devmon (udevil) mounts USB sticks under this folder */
++#define GOBO_USB_DIR "/Mount/Media"
++
+ struct _FmPlacesItem
+ {
+     FmPlacesType type;
+     gboolean mounted : 1; /* used if type == FM_PLACES_ITEM_VOLUME */
+-    FmPlacesOrder id : 4; /* used if type == FM_PLACES_ITEM_PATH */
++    FmPlacesOrder id : 5; /* used if type == FM_PLACES_ITEM_PATH */
+     FmIcon* icon;
+     FmFileInfo* fi;
+     union
+@@ -96,6 +102,9 @@
+     guint places_network_change_handler;
+     guint places_unmounted_change_handler;
+     GdkPixbuf* eject_icon;
++    GFileMonitor* usb_monitor; /* GoboRefined: watches GOBO_USB_DIR */
++    guint usb_refresh_handler;
++    guint usb_refresh_count;
+ 
+     GSList* jobs;
+ };
+@@ -183,7 +192,9 @@
+                         fm_file_info_unref(item->fi);
+                         item->fi = fm_file_info_ref(fi);
+                         /* only update the icon if the item is not a volume or mount. */
+-                        if(item->type == FM_PLACES_ITEM_PATH)
++                        /* GoboRefined: and keep the drive icons of the USB entries */
++                        if(item->type == FM_PLACES_ITEM_PATH && item->id != FM_PLACES_ID_USB
++                           && item->id != FM_PLACES_ID_USB_STICK)
+                         {
+                             icon = fm_file_info_get_icon(fi);
+                             /* replace the icon with updated data */
+@@ -328,7 +339,7 @@
+             gtk_list_store_insert_before(model, it, &next_it);
+             goto _added;
+         }
+-        else if(tst->id == id)
++        else if(tst->id == id && id != FM_PLACES_ID_USB_STICK)
+         {
+             *it = next_it;
+             place_item_free(tst);
+@@ -904,6 +915,96 @@
+         model->trash_idle_handler = gdk_threads_add_idle(update_trash_item, model);
+ }
+ 
++/* GoboRefined: list the sticks mounted under GOBO_USB_DIR right below "USB drives".
++ * A stick is a sub-folder that is a mount point (other device than GOBO_USB_DIR). */
++static void refresh_usb_sticks(FmPlacesModel* model)
++{
++    GtkListStore* store = GTK_LIST_STORE(model);
++    GtkTreeIter it;
++    FmPlacesItem* item;
++    GDir* dir;
++    const char* name;
++    struct stat top_st, st;
++    gboolean more;
++
++    /* drop the old stick entries */
++    more = gtk_tree_model_get_iter_first(GTK_TREE_MODEL(model), &it);
++    while (more)
++    {
++        item = NULL;
++        gtk_tree_model_get(GTK_TREE_MODEL(model), &it, FM_PLACES_MODEL_COL_INFO, &item, -1);
++        if (item && item->type == FM_PLACES_ITEM_PATH && item->id == FM_PLACES_ID_USB_STICK)
++        {
++            more = gtk_list_store_remove(store, &it);
++            place_item_free(item);
++        }
++        else
++            more = gtk_tree_model_iter_next(GTK_TREE_MODEL(model), &it);
++    }
++    if (stat(GOBO_USB_DIR, &top_st) != 0)
++        return;
++    dir = g_dir_open(GOBO_USB_DIR, 0, NULL);
++    if (!dir)
++        return;
++    while ((name = g_dir_read_name(dir)) != NULL)
++    {
++        char* full = g_build_filename(GOBO_USB_DIR, name, NULL);
++        /* lstat: links (such as an old /Mount/Media/Media) are not sticks */
++        if (lstat(full, &st) == 0 && S_ISDIR(st.st_mode) && st.st_dev != top_st.st_dev)
++        {
++            FmPath* path = fm_path_new_for_str(full);
++            char* label = g_filename_display_name(name);
++            new_path_item(store, &it, path, FM_PLACES_ID_USB_STICK, label,
++                          "drive-removable-media", NULL);
++            g_free(label);
++            fm_path_unref(path);
++        }
++        g_free(full);
++    }
++    g_dir_close(dir);
++}
++
++static gboolean on_usb_refresh_timeout(gpointer user_data)
++{
++    FmPlacesModel* model = FM_PLACES_MODEL(user_data);
++    refresh_usb_sticks(model);
++    /* devmon creates the folder first and mounts a moment later: look again */
++    if (++model->usb_refresh_count < 3)
++        return TRUE;
++    model->usb_refresh_handler = 0;
++    return FALSE;
++}
++
++static void on_usb_dir_changed(GFileMonitor* mon, GFile* gf, GFile* other,
++                               GFileMonitorEvent evt, FmPlacesModel* model)
++{
++    model->usb_refresh_count = 0;
++    if (model->usb_refresh_handler == 0)
++        model->usb_refresh_handler = gdk_threads_add_timeout_seconds(1, on_usb_refresh_timeout, model);
++}
++
++static void create_usb_items(FmPlacesModel* model, FmFileInfoJob* job)
++{
++    GtkTreeIter it;
++    FmPath* path;
++    GFile* gf;
++
++    if (!g_file_test(GOBO_USB_DIR, G_FILE_TEST_IS_DIR))
++        return;
++    path = fm_path_new_for_str(GOBO_USB_DIR);
++    new_path_item(GTK_LIST_STORE(model), &it, path, FM_PLACES_ID_USB,
++                  _("USB drives"), "usb", job); /* Papirus: blue USB symbol */
++    fm_path_unref(path);
++    gf = g_file_new_for_path(GOBO_USB_DIR);
++    model->usb_monitor = g_file_monitor_directory(gf, G_FILE_MONITOR_NONE, NULL, NULL);
++    g_object_unref(gf);
++    if (model->usb_monitor)
++        g_signal_connect(model->usb_monitor, "changed", G_CALLBACK(on_usb_dir_changed), model);
++    /* sticks already mounted: list them once the model is complete */
++    model->usb_refresh_count = 2;
++    model->usb_refresh_handler = gdk_threads_add_idle(on_usb_refresh_timeout, model);
++}
++
+ static void on_places_unmounted_changed(FmConfig* cfg, gpointer user_data)
+ {
+     FmPlacesModel *model = FM_PLACES_MODEL(user_data);
+@@ -1032,6 +1133,9 @@
+         fm_path_unref(path);
+     }
+ 
++    /* GoboRefined: fixed "USB drives" entry, last of the places (bookmarks stay below it) */
++    create_usb_items(self, job);
++
+     /* volumes */
+     self->vol_mon = g_volume_monitor_get();
+     if(self->vol_mon)
+@@ -1253,6 +1357,19 @@
+     g_return_if_fail(FM_IS_PLACES_MODEL(object));
+     self = (FmPlacesModel*)object;
+ 
++    if(self->usb_refresh_handler)
++    {
++        g_source_remove(self->usb_refresh_handler);
++        self->usb_refresh_handler = 0;
++    }
++    if(self->usb_monitor)
++    {
++        g_signal_handlers_disconnect_by_func(self->usb_monitor, on_usb_dir_changed, self);
++        g_file_monitor_cancel(self->usb_monitor);
++        g_object_unref(self->usb_monitor);
++        self->usb_monitor = NULL;
++    }
++
+     if(self->jobs)
+     {
+         GSList* l;
+diff -ruN libfm-1.2.5/src/gtk/fm-progress-dlg.c ../libfm-1.2.5/src/gtk/fm-progress-dlg.c
+--- libfm-1.2.5/src/gtk/fm-progress-dlg.c	2016-12-10 00:11:18.000000000 +0100
++++ libfm-1.2.5/src/gtk/fm-progress-dlg.c	2026-11-14 12:25:07.593000300 +0100
+@@ -363,9 +363,9 @@
+         {
+             /* FIXME: parent window might be already destroyed! */
+             if(fm_yes_no(parent, NULL,
+-                        _("Some files cannot be moved to trash can because "
+-                        "the underlying file systems don't support this operation.\n"
+-                        "Do you want to delete them instead?"), TRUE))
++                        /* GoboRefined: see fm-file-ops-job-delete.c */
++                        _("Files on USB drives and other disks are not moved to the Trash.\n"
++                        "Delete them for good? This cannot be undone."), FALSE))
+             {
+                 job = fm_file_ops_job_new(FM_FILE_OP_DELETE, unsupported);
+                 fm_file_ops_job_run_with_progress(parent, job);
+diff -ruN libfm-1.2.5/src/job/fm-file-ops-job-delete.c ../libfm-1.2.5/src/job/fm-file-ops-job-delete.c
+--- libfm-1.2.5/src/job/fm-file-ops-job-delete.c	2016-02-20 01:18:25.000000000 +0100
++++ libfm-1.2.5/src/job/fm-file-ops-job-delete.c	2026-11-14 12:24:09.019480000 +0100
+@@ -30,6 +30,7 @@
+ #include "fm-config.h"
+ #include "fm-file.h"
+ #include <glib/gi18n-lib.h>
++#include <sys/stat.h>
+ 
+ static const char query[] =  G_FILE_ATTRIBUTE_STANDARD_TYPE","
+                                G_FILE_ATTRIBUTE_STANDARD_NAME","
+@@ -344,20 +345,20 @@
+         ret = FALSE;
+         if(fm_config->no_usb_trash)
+         {
+-            GMount *mnt = g_file_find_enclosing_mount(gf, NULL, &err);
++            /* GoboRefined: without gvfs, g_mount_can_unmount() cannot tell a USB
++               stick. Only files on the home folder's file system go to the trash
++               (~/.local/share/Trash, the one the Trash window shows); files on USB
++               sticks or other disks are offered for deletion for good instead. */
++            char *fpath = g_file_get_path(gf);
++            struct stat fst, hst;
+ 
+-            if(mnt)
++            if(fpath && lstat(fpath, &fst) == 0 &&
++               stat(g_get_home_dir(), &hst) == 0 && fst.st_dev != hst.st_dev)
+             {
+-                ret = g_mount_can_unmount(mnt); /* TRUE if it's removable media */
+-                g_object_unref(mnt);
+-                if(ret)
+-                    fm_path_list_push_tail(unsupported, FM_PATH(l->data));
+-            }
+-            else
+-            {
+-                g_error_free(err);
+-                err = NULL;
++                ret = TRUE;
++                fm_path_list_push_tail(unsupported, FM_PATH(l->data));
+             }
++            g_free(fpath);
+         }
+ 
+         if(!ret)

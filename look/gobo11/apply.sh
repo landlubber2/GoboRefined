@@ -44,9 +44,14 @@ done
 if [ ! -e "$home/.config/mimeapps.list" ]
 then cp "$here/xdg/mimeapps.list" "$home/.config/mimeapps.list"
 fi
-# File manager side pane: a "USB drives" entry (devmon mounts sticks under /Mount/Media)
-if [ ! -e "$home/.config/gtk-3.0/bookmarks" ]
-then echo "file:///Mount/Media USB drives" > "$home/.config/gtk-3.0/bookmarks"
+# File manager side pane: "USB drives" is a fixed entry of the spin's LibFM since 0.6 (last of
+# the places, drive icon, mounted sticks listed below it). 0.5 wrote it as a bookmark: remove
+# that line, keep the user's own bookmarks.
+bm="$home/.config/gtk-3.0/bookmarks"
+if [ -f "$bm" ] && grep -qx 'file:///Mount/Media USB drives' "$bm"
+then
+   grep -vx 'file:///Mount/Media USB drives' "$bm" > "$bm.tmp" || true
+   if [ -s "$bm.tmp" ]; then mv -f "$bm.tmp" "$bm"; else rm -f "$bm.tmp" "$bm"; fi
 fi
 # Standard folders (0.6) and their XDG names, used by the GTK file chooser, PCManFM and
 # the screenshot tool. Run on the skeleton by the ISO build, so the live user and every
@@ -54,6 +59,23 @@ fi
 for d in Desktop Documents Downloads Music Pictures Pictures/Screenshots Videos
 do mkdir -p "$home/$d"
 done
+# Trash icon on the desktop (0.6): opens the Trash window (gobo-trash: restore, empty, automatic
+# clean-up after 1/3/6 months). Written once; a user who deletes it does not get it back.
+if [ ! -e "$home/.config/gobo11-trash-icon" ]
+then
+   cat > "$home/Desktop/Trash.desktop" <<'TRASH'
+[Desktop Entry]
+Type=Application
+Name=Trash
+Comment=Restore deleted files, empty the Trash, choose when old items are deleted
+Icon=user-trash
+Exec=gobo-trash
+Terminal=false
+TRASH
+   chmod 755 "$home/Desktop/Trash.desktop"
+   echo "Trash.desktop was put on the desktop by apply.sh (0.6); delete this file to get it again." \
+      > "$home/.config/gobo11-trash-icon"
+fi
 if [ ! -e "$home/.config/user-dirs.dirs" ]
 then
    cat > "$home/.config/user-dirs.dirs" <<'DIRS'

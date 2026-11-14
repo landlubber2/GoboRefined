@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Trash
+Comment=Restore deleted files or delete them for good
+Icon=user-trash
+Exec=gobo-trash
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=trash;bin;deleted;restore;recycle;
