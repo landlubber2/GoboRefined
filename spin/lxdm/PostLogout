@@ -6,4 +6,6 @@
 [ -n "$USER" ] && [ "$USER" != root ] || exit 0
 pkill -u "$USER" -x xss-lock
 pkill -u "$USER" -x xsecurelock
+# USB automounter (devmon, from ~/.xinitrc): unmounts its drives when it is stopped
+pkill -u "$USER" -x devmon
 exit 0

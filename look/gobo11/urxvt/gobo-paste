@@ -1,0 +1,22 @@
+#! perl
+# gobo-paste: the right mouse button pastes the clipboard (gobo11 look of the spin).
+# Together with the stock selection-to-clipboard extension (selecting text also
+# copies it to the clipboard) this gives mouse-only copy and paste, also to and
+# from Firefox/GTK apps. Shift+right click keeps urxvt's own "extend selection".
+# Limitation: urxvt gives extensions no way to see whether the running program has
+# turned on mouse reporting, so programs like mc or htop no longer get right clicks.
+
+sub on_button_press {
+   my ($self, $event) = @_;
+   return () unless $event->{button} == 3;
+   return () if $event->{state} & (urxvt::ShiftMask | urxvt::ControlMask | urxvt::Mod1Mask);
+   $self->{gobo_paste} = 1;
+   1
+}
+
+sub on_button_release {
+   my ($self, $event) = @_;
+   return () unless $event->{button} == 3 && delete $self->{gobo_paste};
+   $self->selection_request (urxvt::CurrentTime, 3);   # 3 = CLIPBOARD
+   1
+}

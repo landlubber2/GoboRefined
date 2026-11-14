@@ -268,3 +268,84 @@ VM snapshots now: `not even installed`, `iso-build-env-2`, `iso-final-installed-
 UEFI default install of ISO 0.4, user lab, LXDM). Rebuild 0.4 from `iso-build-env-4`.
 
 Next: the user tries ISO 0.4 on the real PC (checkpoint 3), then stage 4 (boot experience).
+
+## ISO 0.4 feedback fixed in the build VM — ISO 0.5 not built yet (2026-11-14)
+
+The user ran 0.4 on a real PC (NVIDIA, works) and reported six problems. All were worked on in the
+build VM; **rebuild 0.5 from snapshot `iso-build-env-5`** with `spin/build-iso.sh` (VERSION=0.5;
+`vm/serve/build-iso.sh` identical). Before building: refresh `vm/serve/gobo11.tgz`
+(`vm/push-look.sh` does it), and keep `vm/serve/` copies of `spin/gobo-command-not-found`,
+`docs/software-install.md` (as `software-install.txt`), `spin/patches/*.patch`, `spin/build-programs.sh`.
+
+| # | Report | State | What changed |
+|---|---|---|---|
+| 1 | Double click on title bar does not maximize | done | `rc.lua`: 2nd press within 300 ms toggles maximize; moving starts only after the pointer moves > 3 px (a plain click on a window at the top edge used to trigger awful's edge snap and resize it to half the screen) |
+| 2 | Right click does not paste in the terminal | done | `look/gobo11/urxvt/gobo-paste` (perl ext, installed to `~/.urxvt/ext`) + stock `selection-to-clipboard`: select = copy (PRIMARY and CLIPBOARD), right click = paste CLIPBOARD, Shift+right click = old extend-selection, Ctrl+Shift+C/V; `Xresources.append` |
+| 3 | USB stick: no pop-up, `/Mount/Media` dangling link | done | Udevil 0.4.4 (+ GoboLinux patch), devmon from `xinitrc`, `awesome/spin/usb.lua` (notification + taskbar drive icon: Open / Safely remove), "USB drives" bookmark in PCManFM, installer removes the `/Mount/Media/Media` link |
+| 4 | TP-Link Archer TX20U Plus Wi-Fi | partly (no hardware) | USB-ModeSwitch 2.6.1 + udev rule for `0bda:1a2b`; RTL8852AU driver (lwfinger, 865ab0f) built for 6.12.16-Gobo; see `docs/wifi-notes.md` |
+| 5 | OnlyOffice wanted | done | ONLYOFFICE Desktop Editors 10.0.0 official x64 tarball under `/Programs/OnlyOffice/10.0.0`; default for docx/xlsx/pptx/odt/ods/odp via `~/.config/mimeapps.list` from the look |
+| 6 | Installing software is confusing | investigated, hint fixed | `spin/gobo-command-not-found` replaces the hint's `InstallPackage` with `sudo Compile`; `docs/software-install.md` |
+
+Also: installer summary now has a `login` line (login screen / text login / automatic login) and the
+closing line matches the login method; `bash -n` clean, behaviour otherwise unchanged.
+
+### Findings worth remembering
+
+- **libudev "udev" monitors do not work on GoboLinux.** libudev only subscribes to udevd's events
+  if `/dev` itself is a devtmpfs mount; here `/dev` is a link to `/System/Kernel/Devices`, so
+  `udevadm monitor --udev` (and udevil's monitor) receive nothing. `spin/patches/udevil-0.4.4-gobo-monitor.patch`
+  makes udevil listen to kernel events and wait for udevd. Anything else using libudev monitors
+  (Xorg input hotplug?) may be affected the same way — not checked.
+- devmon looked for `/dev/sdX` in `/proc/mounts`, which lists `/System/Kernel/Devices/sdX`, so a
+  pulled-out stick stayed mounted; same patch.
+- The kernel build tree (`/lib/modules/6.12.16-Gobo/build`) is complete but lacks
+  `include/config/kernel.release`: out-of-tree modules build only with `KERNELRELEASE=6.12.16-Gobo`
+  on the make command line.
+- `/System/Index/lib/modules` is a link into the Linux program, so modules from other programs are
+  linked by hand into `Linux/Current/lib/modules/<krel>/updates/` and `depmod` is run (build-iso does it).
+- The 017 binary package server lists 2 packages; `InstallPackage` is a dead end. `sudo Compile X`
+  works (tested with Figlet as root: it clones the 500 MB recipe store first). No JDK recipe exists.
+- Kernel has vfat, exfat, ntfs3 as modules; no FUSE NTFS tools. udevil's NTFS mounts go to ntfs3
+  through a `mount.ntfs` helper (the kernel registers only `ntfs3`). Only vfat was mounted in tests.
+- GTK's file chooser (Save As in OnlyOffice and others) lists proc, pts, shm, sys, efivars, ESP in
+  its side pane (no gvfs); not fixed.
+
+### Not tested (needs the real PC)
+
+The Wi-Fi mode switch and driver with the adapter; exfat/NTFS sticks (no mkfs tools on the image);
+ONLYOFFICE on NVIDIA (VM uses vmwgfx); right-click paste inside programs that use the mouse
+themselves (mc, htop: right click now pastes there too — urxvt gives extensions no way to tell);
+LXDM log-out path stopping devmon (tested only the console `startx` path, where Awesome's exit
+handler stops it).
+
+### Size added (installed / in `spin/programs/`)
+
+Udevil 0.5 MB / 0.1 MB; USB-ModeSwitch 0.1 MB / 0.03 MB; RTL8852AU 9.6 MB / 2.5 MB;
+**OnlyOffice 1.2 GB / 422 MB** (zstd ~370 MB, so the squashfs and ISO grow by roughly 0.35–0.4 GB).
+
+### Downloads (0.5)
+
+| Name | Version | URL | Licence |
+|---|---|---|---|
+| udevil (+ devmon) | 0.4.4 | https://github.com/IgnorantGuru/udevil/archive/refs/tags/0.4.4.tar.gz | GPL-3.0 |
+| usb-modeswitch | 2.6.1 | https://www.draisberghof.de/usb_modeswitch/usb-modeswitch-2.6.1.tar.bz2 | GPL-2.0+ |
+| rtl8852au | git 865ab0f (2024-05-06) | https://github.com/lwfinger/rtl8852au | GPL-2.0 (driver; contains Realtek firmware as C arrays) |
+| ONLYOFFICE Desktop Editors | 10.0.0 | https://github.com/ONLYOFFICE/DesktopEditors/releases/download/v10.0.0/onlyoffice-desktopeditors-x64.tar.xz | AGPL-3.0 (bundles third-party libs: Qt 5, CEF, ICU...) |
+| GoboLinux Recipes (test only, not in image) | git | https://github.com/gobolinux/Recipes | GPL-2.0 |
+| figlet (test only, removed) | 2.2.4 | ftp://ftp.figlet.org/pub/figlet/program/unix/figlet-2.2.4.tar.gz | BSD-3-Clause |
+
+### Lab notes
+
+- VM now has an xHCI USB controller and a storage controller "USB" with
+  `vm/GoboLinux-017.01/usbstick.vdi` (256 MB, FAT32 "GOBOSTICK"). Hot-plug works:
+  `VBoxManage storageattach GoboLinux-017.01 --storagectl USB --port 0 --device 0 --medium none`
+  and again with `--type hdd --medium <path>`. The build disk sees it as `/dev/sdb`.
+- xsecurelock locks the lab desktop after 10 idle minutes (simulated input does not count); a black
+  screenshot means locked: `pkill xsecurelock; su lab -c "DISPLAY=:0 xset s off"`.
+- **Screenshot tty1 before typing a login**: in this build VM a logout from awesome can leave the zsh
+  on tty1 running, and typed credentials then land in the shell (visible on screen).
+- `vm/lua.sh` code is wrapped in single quotes: use double quotes inside the Lua.
+- `xclip -i` over `vm/ssh.sh` keeps the ssh session open unless its output is redirected.
+
+VM snapshots: `iso-build-env-5` (= -4 + Udevil, USB-ModeSwitch, RTL8852AU, OnlyOffice, the 0.5 look
+for `lab`, updated LXDM PostLogout; taken powered off). **Current.**

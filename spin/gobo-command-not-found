@@ -1,0 +1,23 @@
+#!/bin/sh
+# Friendlier "command not found" hint for the GoboLinux spin. The shells' hooks call this
+# instead of GoboLinux's CommandNotFound (patched by spin/build-iso.sh), which suggests
+# "InstallPackage <Name>" - but the 017 binary package server holds almost nothing, and both
+# commands need root.
+cmd="$1"
+case "$cmd" in
+   apt|apt-get|aptitude|dnf|yum|pacman|zypper|emerge|snap|flatpak|brew)
+      echo "GoboLinux does not use '$cmd'. Programs are built from GoboLinux recipes:"
+      echo "   sudo Compile <Program>      for example:  sudo Compile Htop"
+      echo "Recipe names: https://github.com/gobolinux/Recipes (one folder per program)."
+      echo "More: /Programs/GoboSpin/Current/share/doc/software-install.txt"
+      exit 0
+      ;;
+esac
+out=$(/Programs/Scripts/Current/bin/CommandNotFound "$cmd")
+rc=$?
+[ -n "$out" ] && printf '%s\n' "$out" | sed \
+   -e 's/^You can install \(it\|one of these\) by typing.*/If a GoboLinux recipe exists for it, this builds it from source (needs internet):/' \
+   -e '/^ *InstallPackage /d' \
+   -e '/^or$/d' \
+   -e 's/^ *Compile \(.*\)/   sudo Compile \1/'
+exit $rc

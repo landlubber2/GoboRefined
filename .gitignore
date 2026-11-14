@@ -12,3 +12,6 @@
 /vm/serve/build-iso.sh
 /spin/programs/*.tgz
 /vm/serve/build-programs.sh
+/vm/serve/*.patch
+/vm/serve/gobo-command-not-found
+/vm/serve/software-install.txt

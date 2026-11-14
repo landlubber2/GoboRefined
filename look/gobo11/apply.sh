@@ -16,6 +16,9 @@ mkdir -p "$home/.config/awesome" "$home/.config/gtk-3.0"
 cp -r "$here/awesome/." "$home/.config/awesome/"
 cp "$here/picom.conf" "$home/.config/picom.conf"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
+# Terminal: right click pastes (perl extension, loaded via URxvt.perl-ext-common)
+mkdir -p "$home/.urxvt/ext"
+cp "$here/urxvt/gobo-paste" "$home/.urxvt/ext/gobo-paste"
 mkdir -p "$home/.config/fontconfig"
 cp "$here/fontconfig/fonts.conf" "$home/.config/fontconfig/fonts.conf"
 # File manager defaults (PCManFM/libfm); kept if the user already has their own.
@@ -27,6 +30,14 @@ do
       cp "$here/$conf" "$home/.config/$conf"
    fi
 done
+# Office documents open in ONLYOFFICE (kept if the user already has their own list)
+if [ ! -e "$home/.config/mimeapps.list" ]
+then cp "$here/xdg/mimeapps.list" "$home/.config/mimeapps.list"
+fi
+# File manager side pane: a "USB drives" entry (devmon mounts sticks under /Mount/Media)
+if [ ! -e "$home/.config/gtk-3.0/bookmarks" ]
+then echo "file:///Mount/Media USB drives" > "$home/.config/gtk-3.0/bookmarks"
+fi
 # Keep the keyboard layout the user already had unless one is given.
 if [ -z "$layout" ] && [ -e "$home/.xinitrc" ]
 then layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' "$home/.xinitrc" | head -n 1)

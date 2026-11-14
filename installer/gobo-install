@@ -200,6 +200,20 @@ echo "  firmware  $FIRMWARE"
 echo "  hostname  $HOSTNAME_NEW"
 echo "  user      $USER_NAME ($USER_FULLNAME)$([ "$AUTOLOGIN" = 1 ] && echo ', automatic login')"
 echo "  timezone  $TIMEZONE, keyboard $XKB_LAYOUT"
+# Same test as in step 4 (there on the copied system, here on the running one).
+if [ "$LOGIN_SCREEN" = 1 ] && [ -x /System/Index/sbin/lxdm-binary ] && [ -f /Programs/LXDM/Settings/lxdm/lxdm.conf ]
+then
+   if [ "$AUTOLOGIN" = 1 ]
+   then login_method="automatic login to the desktop (graphical login screen after logging out)"
+   else login_method="graphical login screen"
+   fi
+else
+   if [ "$AUTOLOGIN" = 1 ]
+   then login_method="automatic login on the text console, then the desktop starts"
+   else login_method="text login on the console, then the desktop starts"
+   fi
+fi
+echo "  login     $login_method"
 if [ "$ASSUME_YES" != 1 ]
 then
    read -r -p "Type 'yes' to continue: " reply
@@ -259,6 +273,10 @@ ProfileInstall --super-user root "$profile" "$DEST" 2>&1 | tee -a "$LOG" | awk -
    /Installing program:/ { n++; printf "\r    %d/%d %-30s", n, total, $NF; fflush() }
    END { print "" }'
 [ -d "$DEST/Programs/Scripts" ] || die "the system copy did not complete"
+# ProfileInstall copies the live /media link and then runs "ln -s Mount/Media media" again,
+# which lands inside it as a dangling /Mount/Media/Media (shown as a broken file in the
+# file manager). USB drives are mounted under /Mount/Media/<label>, so remove it.
+[ -L "$DEST/Mount/Media/Media" ] && rm -f "$DEST/Mount/Media/Media"
 
 for d in proc sys dev
 do run mount --rbind /$d "$DEST/$d"
@@ -395,7 +413,7 @@ then
    for login in root "$USER_NAME"
    do
       run sh "$LOOK_DIR/apply.sh" "$DEST/Users/$login" "$XKB_LAYOUT"
-      in_target chown -R "$login" "/Users/$login/.config" "/Users/$login/.xinitrc" "/Users/$login/.Xresources"
+      in_target chown -R "$login" "/Users/$login/.config" "/Users/$login/.xinitrc" "/Users/$login/.Xresources" "/Users/$login/.urxvt"
    done
 fi
 
@@ -544,5 +562,10 @@ umount -R "$DEST" >> "$LOG" 2>&1 || umount -lR "$DEST" >> "$LOG" 2>&1 || true
 
 echo
 echo "${c_cyan}GoboLinux is installed on $DISK.${c_off}"
-echo "Remove the installation medium and reboot. Log in as '$USER_NAME' and the desktop starts."
+if [ "$AUTOLOGIN" = 1 ]
+then echo "Remove the installation medium and reboot. The desktop starts by itself (automatic login as '$USER_NAME')."
+elif [ "$LOGIN_SCREEN" = 1 ]
+then echo "Remove the installation medium and reboot, then log in as '$USER_NAME' on the login screen."
+else echo "Remove the installation medium and reboot. Log in as '$USER_NAME' on the text console and the desktop starts."
+fi
 echo "Full log: $LOG"

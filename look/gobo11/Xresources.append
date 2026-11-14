@@ -47,4 +47,12 @@ URxvt.color12: #6ea8ff
 URxvt.color13: #b4009e
 URxvt.color14: #61d6d6
 URxvt.color15: #f2f2f2
+! Mouse-only copy and paste: selecting text copies it (also to the clipboard),
+! right click pastes the clipboard (extension ~/.urxvt/ext/gobo-paste);
+! Ctrl+Shift+C / Ctrl+Shift+V copy and paste with the keyboard.
+URxvt.perl-ext-common: default,matcher,tabbedex,eval,selection-to-clipboard,gobo-paste
+URxvt.iso14755: false
+URxvt.iso14755_52: false
+URxvt.keysym.Shift-Control-C: eval:selection_to_clipboard
+URxvt.keysym.Shift-Control-V: eval:paste_clipboard
 ! ---- end of gobo11 look ----

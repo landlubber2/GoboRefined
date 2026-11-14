@@ -19,6 +19,10 @@ sh ~/.config/awesome/displays.sh
 xset s 600 5
 [ -x /bin/xss-lock ] && xss-lock -l -- sh ~/.config/awesome/lock.sh &
 
+# USB sticks: devmon (udevil) mounts them under /Mount/Media/<label>; the taskbar
+# shows a notification and a drive icon (open / safely remove). Awesome stops it at log out.
+[ -x /bin/devmon ] && devmon > /dev/null 2>&1 &
+
 # Shadows and fades
 [ -x /bin/picom ] && picom -b --config ~/.config/picom.conf
 

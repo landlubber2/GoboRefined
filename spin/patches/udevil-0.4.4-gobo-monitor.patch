@@ -1,0 +1,72 @@
+# GoboLinux spin: make devmon/udevil notice drives on GoboLinux.
+# 1. udevil --monitor: listen to kernel uevents (libudev refuses "udev" monitors because
+#    /dev is a link to /System/Kernel/Devices, not a devtmpfs mount) and wait for udevd.
+# 2. devmon: unmount a pulled-out drive (it looked for /dev/sdX in /proc/mounts only).
+--- a/src/udevil.c
++++ b/src/udevil.c
+@@ -374,6 +374,30 @@
+     return TRUE;
+ }
+ 
++// Wait (at most 5 s) until udevd has processed the event for this device:
++// the device is initialized in the udev database and the event queue is empty.
++static void wait_for_udev( struct udev_device *kdev )
++{
++    int i;
++    const char* syspath = udev_device_get_syspath( kdev );
++    struct udev_queue *queue = udev_queue_new( udev );
++    usleep( 100000 );
++    for ( i = 0; i < 50; i++ )
++    {
++        struct udev_device *d = syspath ?
++                        udev_device_new_from_syspath( udev, syspath ) : NULL;
++        int done = d && udev_device_get_is_initialized( d ) &&
++                        ( !queue || udev_queue_get_queue_is_empty( queue ) );
++        if ( d )
++            udev_device_unref( d );
++        if ( done )
++            break;
++        usleep( 100000 );
++    }
++    if ( queue )
++        udev_queue_unref( queue );
++}
++
+ static gboolean cb_udev_monitor_watch( GIOChannel *channel, GIOCondition cond,
+                                                             gpointer user_data )
+ {
+@@ -440,6 +464,10 @@
+     if ( udevice = udev_monitor_receive_device( umonitor ) )
+     {
+         action = udev_device_get_action( udevice );
++        // GoboLinux: the monitor listens to kernel events (see udev_monitor_new_from_netlink
++        // below); give udevd time to finish the event so --show-info sees its results.
++        if ( action && strcmp( action, "remove" ) )
++            wait_for_udev( udevice );
+         devnode = g_strdup( udev_device_get_devnode( udevice ) );
+         if ( action && devnode )
+         {
+@@ -4842,7 +4870,10 @@
+     parse_mounts( FALSE );
+ 
+     // start udev monitor
+-    umonitor = udev_monitor_new_from_netlink( udev, "udev" );
++    // GoboLinux: libudev refuses "udev" monitors when /dev is not itself a devtmpfs
++    // mount (on GoboLinux /dev is a link to /System/Kernel/Devices), so no events would
++    // arrive. Listen to the kernel's events instead and wait for udevd (wait_for_udev).
++    umonitor = udev_monitor_new_from_netlink( udev, "kernel" );
+     if ( !umonitor )
+     {
+         wlog( _("udevil: error 133: cannot create udev monitor\n"), NULL, 2 );
+--- a/src/devmon
++++ b/src/devmon
+@@ -1191,7 +1191,8 @@
+     elif [ "$event" = "removed" ]; then
+ 		eval unset devmounted${devtag}
+ 		# unmount if removed device is still mounted
+-		grep -qs "^${devpath} " /proc/mounts &> /dev/null
++		# (GoboLinux: /proc/mounts names devices /System/Kernel/Devices/..., /dev is a link)
++		grep -qs -e "^${devpath} " -e "^$(readlink -f /dev)/${devpath#/dev/} " /proc/mounts &> /dev/null
+ 		mounterr=$?
+ 		if [ $mounterr -ne 0 ]; then
+ 			grep -qs "^${devpath} " /etc/mtab &> /dev/null

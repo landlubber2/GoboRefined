@@ -9,6 +9,7 @@ local wibox = require("wibox")
 -- Notification library
 local naughty = require("naughty")
 local menubar = require("menubar")
+local GLib = require("lgi").GLib
 
 local gobonet = require("gobo.awesome.gobonet")
 local docking = require("gobo.awesome.docking")
@@ -17,6 +18,7 @@ local status = require("spin.status")
 local alttab = require("spin.alttab")
 local launcher = require("spin.launcher")
 local power = require("spin.power")
+local usb = require("spin.usb")
 local bluetooth = require("gobo.awesome.bluetooth")
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
@@ -415,6 +417,7 @@ awful.screen.connect_for_each_screen(function(s)
    if s == screen.primary then
       right_layout:add(status_icon(wibox.widget.systray()))
       right_layout:add(status_icon(bluetooth.new()))
+      right_layout:add(status_icon(usb.new({ icon = icon_theme():find_icon_path("drive-removable-media-usb", 48) or find_icon("drive-removable-media"), file_manager = file_manager })))
       right_layout:add(status_icon(gobonet.new()))
       right_layout:add(status_icon(status.battery()))
       right_layout:add(status_icon(light_widget))
@@ -900,8 +903,7 @@ awful.rules.rules = {
       placement = function(c) awful.placement.bottom_right(c, { honor_workarea = true, margins = 8 }) end } },
    { rule = { class = "Lxrandr" }, properties = { floating = true, placement = awful.placement.centered } },
    -- Add titlebars to normal clients and dialogs
-   { rule_any = {type = { "normal", "dialog" } }, properties = { titlebars_enabled = true } },
-}
+   { rule_any = {type = { "normal", "dialog" } }, properties = { titlebars_enabled = true } },}
 
 local no_decorations = {
     ["plugin-container"] = true,
@@ -990,14 +992,35 @@ client.connect_signal("request::titlebars", function(c, context, hints)
       return
    end
 
-   -- buttons for the titlebar
+   -- buttons for the titlebar: press + drag moves the window, a second press
+   -- within 300 ms (a double click) maximizes or restores it
+   local last_press = 0
    local buttons = awful.util.table.join(
       awful.button({}, 1,
          function()
             client.focus = c
             c:raise()
             window_menu.hide(c)
-            docking.smart_mouse_move(c)
+            local now = GLib.get_monotonic_time()   -- microseconds
+            if now - last_press < 300000 then
+               last_press = 0
+               c.maximized = not c.maximized
+               return
+            end
+            last_press = now
+            -- Start moving only once the pointer really moves (> 3 px): a plain click
+            -- must not trigger awful's edge snapping when the window touches the top.
+            local start = mouse.coords()
+            mousegrabber.run(function(m)
+               if not m.buttons[1] then return false end
+               if math.abs(m.x - start.x) > 3 or math.abs(m.y - start.y) > 3 then
+                  gears.timer.delayed_call(function()
+                     if c.valid and mouse.coords().buttons[1] then docking.smart_mouse_move(c) end
+                  end)
+                  return false
+               end
+               return true
+            end, "fleur")
          end),
       awful.button({}, 3,
          function()
@@ -1062,3 +1085,11 @@ client.connect_signal("focus", function(c) c.border_color = beautiful.border_foc
 client.connect_signal("unfocus", function(c) c.border_color = beautiful.border_normal end)
 client.connect_signal("property::maximized", adjust_border_width)
 
+
+-- devmon (USB automounter, started in ~/.xinitrc) belongs to this session: stop it when
+-- the desktop ends (not on a restart), so it unmounts the drives it mounted.
+awesome.connect_signal("exit", function(restart)
+   if not restart then
+      awful.spawn.with_shell("pkill -u \"$(id -u)\" -x devmon")
+   end
+end)
