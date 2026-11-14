@@ -30,11 +30,15 @@ function popups.register(name, hide)
 end
 
 -- The window under (x, y): the topmost visible client whose frame contains the point.
+-- The desktop window (PCManFM --desktop: type "desktop", not focusable) is skipped: it covers
+-- the whole screen and can sit high in this list (it is drawn below everything by its layer),
+-- and focusing it sends the keyboard nowhere (0.6 ISO test: window menu + click on a terminal).
 function popups.client_at(x, y)
    local stack = client.get(nil, true)   -- bottom to top
    for i = #stack, 1, -1 do
       local c = stack[i]
-      if c.valid and c:isvisible() and not c.minimized then
+      if c.valid and c:isvisible() and not c.minimized
+         and c.type ~= "desktop" and c.focusable ~= false then
          local g = c:geometry()
          if x >= g.x and x < g.x + g.width + 2 * c.border_width
             and y >= g.y and y < g.y + g.height + 2 * c.border_width then

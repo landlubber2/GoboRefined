@@ -76,6 +76,17 @@ certain item on the whole roadmap. Each program that fails is dropped or swapped
 > Wi-Fi adapter can only be tested on the real PC. Snapshot `iso-0.5-installed-efi`. The boot-experience stage below
 > therefore becomes ISO 0.6.
 
+> **Status 2026-11-14 (0.5 feedback → ISO 0.6):** the user's real-PC test of 0.5 asked for fixes and new
+> desktop features instead of the boot-experience stage, so **ISO 0.6** carries those: keyboard no longer stuck
+> after menus (Win+Escape safety net), Wi-Fi adapter auto-switch, real network icon, virtual desktops
+> (Win+Shift+Tab), screenshots (Win+Shift+S), clipboard history (Win+Shift+V), default folders, file search
+> (Ctrl+F), "USB drives" entry, desktop icons + Trash, folder colours. **`dist/GoboRefined-0.6.iso`** built and
+> installed in the VM (UEFI typed answers, BIOS `--autologin --swap 1024`, BIOS `--text-login`); three bugs found
+> in the test were fixed before the final build (sudo rule missing on installed systems, keyboard to the desktop
+> window after the window menu, desktop-icon dialogs on the wrong desktop); see HANDOFF. Open: the Wi-Fi adapter
+> (real PC only), second users get a US desktop keyboard layout, no default text editor. Snapshot
+> `iso-0.6-installed-efi`. Stage 4 (boot experience) moves to a later ISO.
+
 ## Stage 4 — Boot experience
 
 - GRUB menu themed to match the desktop (it is a static file our installer writes, so this is contained).

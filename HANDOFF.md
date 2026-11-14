@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current ISO: **`dist/GoboRefined-0.5.iso`** (see the last section). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current ISO: **`dist/GoboRefined-0.6.iso`** (see the last section; 0.5 is kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -647,3 +647,104 @@ Lab lessons (0.6 file-manager half):
 
 VM snapshots now: ..., `iso-build-env-6a`, **`iso-build-env-6b`** (current; taken powered off, VM started again
 headless; the lab X session is started with the openvt line of the 0.6 desktop half).
+
+## ISO 0.6 built and install-tested in the VM (2026-11-14)
+
+**`dist/GoboRefined-0.6.iso`**, 2,863,726,592 bytes, sha256 `0f01edeb327f476213a2ac9b26a5bfde78e3b2e2af639fce148461216e19bdf1` (`.sha256` next to it; matches the
+build VM's `sha256sum`). `dist/GoboRefined-0.5.iso` is kept. Built from snapshot `iso-build-env-6b` with
+`spin/build-iso.sh`. Two builds: the first (sha256 `28158cd0...`, 2,863,726,592 bytes) was tested, three bugs were
+found and fixed (below), and the ISO was rebuilt from a fresh restore of `iso-build-env-6b`; the first build's file
+in `dist/` was overwritten by the second.
+
+### Fixed during the test (all small, in the repo)
+
+| # | Bug | Cause | Fix |
+|---|---|---|---|
+| 1 | Installed systems had **no** `%users ... gobo-wifi-switch --session` sudo rule: `sudo -n` asked lab for a password, so the desktop's Wi-Fi switch trigger could not run (the udev trigger runs as root and was not affected) | `ProfileInstall` (used by `gobo-install`) replaces every program's `Settings` with `Current/Resources/Defaults/Settings`; build-iso had written only `Sudo/Settings/sudoers` (the live session runs as root; the 6a/6b workers tested in the build VM) | `spin/build-iso.sh` appends the rule to both copies and runs `visudo -c -f` on each |
+| 2 | Window menu (right click on a title bar) + click on a terminal: the **keyboard went to the desktop window** (input test `window-menu` failed 3 of 3 runs on the installed system) | `popups.client_at()` walks `client.get(nil, true)`; the PCManFM desktop window (type desktop, not focusable) was returned for a point inside the terminal, so the backdrop click focused it (focus trace: `popups.lua:53`) | `look/gobo11/awesome/spin/popups.lua`: `client_at` skips `type == "desktop"` and non-focusable clients |
+| 3 | On desktop 2, **Move to Trash on a desktop icon**: the Confirm dialog opened on desktop 1 (taskbar marked 1 urgent), invisible | the dialog is transient for the desktop window; Awesome's `ewmh.tag` gives a transient window its parent's tags, and the sticky desktop window's own tag is desktop 1 | `look/gobo11/awesome/rc.lua`: rule callback puts windows transient for the desktop window on the screen's selected desktop |
+
+Fixes 2 and 3 were checked on the first build's UEFI install after `vm/push-look.sh` (window-menu PASS twice;
+the Confirm dialog appeared on desktop 2), then again on the final ISO.
+
+### Tests (VM; keyboard through VirtualBox, mouse through `root.fake_input`)
+
+Final ISO (after a fresh restore of `iso-build-env-6b`): all three installs pass again.
+- (b) BIOS `--answers --autologin --swap 1024`: desktop at boot, 1 GB swap; as lab
+  `sudo -n /System/Index/bin/gobo-wifi-switch --session` runs without a password (log: "no adapter in CD mode ...
+  nothing to do"), `sudo -n true` and `... --udev` are refused (fix 1).
+- (c) BIOS `--answers --text-login`: tty1 login starts the desktop.
+- (a) UEFI, typed answers (lab, Europe/Warsaw, pl): GRUB entries, greeter, LXDM login; `gobo-trash-purge --auto`
+  removed a planted 8.5-month-old item about 20 s after login; the seven folders belong to lab; the sudo rule as in
+  (b); `modprobe 8852au`; udev rule link; efibootmgr entry "GoboLinux"; **`vm/input-test.sh` 32 of 32** (fix 2);
+  from desktop 2, Move to Trash on a desktop icon opens Confirm on desktop 2 (fix 3). This install is the snapshot
+  `iso-0.6-installed-efi`.
+The GUI checks in the table below were not all repeated on the final ISO; the image differs from the first build
+only in the sudoers rule and the two look files, which the table's GUI checks already ran with.
+
+Checks on the **first** build (identical except the three fixes; the GUI checks of install (a) were made after
+pushing the fixed look):
+
+| Check | Result | How |
+|---|---|---|
+| ISO boots (BIOS and UEFI), welcome text GoboRefined | pass | screenshots; `/sys/firmware/efi` present in the UEFI live session |
+| GRUB "GoboRefined 0.6 (GoboLinux 017.01)" + safe graphics | pass | BIOS and UEFI screenshots |
+| (a) UEFI, typed answers (lab, Europe/Warsaw, pl), LXDM login | pass | summary + greeter screenshots; desktop after typed login |
+| (b) BIOS `--answers --autologin --swap 1024` | pass | desktop at boot; `swapon -s` 1 GB; Log out -> greeter |
+| (c) BIOS `--answers --text-login` | pass | tty1 login -> desktop; no LXDM in inittab or process list; Log out -> tty1 prompt |
+| Live session (root): desktop icons, Trash (delete/restore), Ctrl+F, USB drives + stick | pass | screenshots `0.6-iso-live-*` |
+| `vm/input-test.sh` on (a) | 31/32 (window-menu) -> fix 2 -> window-menu PASS | log |
+| Title-bar double click max/restore | pass | 720x432 -> 1280x752 maximized -> 720x432 |
+| Terminal select = copy, right click paste | pass | xclip PRIMARY+CLIPBOARD "copyword42"; pasted at the prompt |
+| USB: unplug/replug virtual stick -> automount, notification (one button), click opens PCManFM | pass | mount list; screenshots |
+| ONLYOFFICE starts / PaVuControl from volume icon / Displays... (menu) opens LxRandr | pass | client classes; screenshot |
+| Lock (Win+L) + unlock with password | pass | xsecurelock running -> gone after typing |
+| Light/dark switch | pass | screenshot; `beautiful.mode` back to dark |
+| Log out + log in again (LXDM) | pass | greeter, login as second, then lab again |
+| `apt update` hint | pass | screenshot |
+| Win+Shift+Tab: 1 desktop at first, add (2, 3), remove (back to 2), still 2 after re-login | pass | `#screen.primary.tags`; `~/.cache/awesome/spin-desktops` |
+| Win+Shift+S: area / window / whole screen | pass | `~/Pictures/Screenshots`: 300x200, 724x436, 1280x800 |
+| Win+Shift+V: text pick pastes; picture pick puts image/png on the clipboard | pass | terminal + `xclip -t TARGETS` |
+| Win+Escape | pass | input-test scenarios panic-in-menu, desktops-escape, shot-escape |
+| Network icon wired -> `setlinkstate1 off` -> on | pass | `0.6-iso-network-wired-off-wired.png` (dim icon with red cross while off) |
+| Default folders exist, owned by the user | pass | `stat`: lab:users 755 for all seven (also on (b)) |
+| Ctrl+F "report" in home: all folders (3 hits incl. sub/deep, case-insensitive) and only this folder (1) | pass | screenshots; `recursive=1/0` in the search URI |
+| "USB drives" below the fixed places, GOBOSTICK listed | pass | screenshot |
+| File created in ~/Desktop appears on the desktop | pass | screenshot |
+| Trash: delete -> restore -> empty (confirm) | pass | file system + `gobo-trash.log` "emptied the trash" |
+| `gobo-trash-purge --auto` at login | pass | planted items 8.5 and 10.5 months old: removed about 20 s after each login, a 4-day-old item kept; log lines |
+| Folder colour in home; refused outside | pass | green Documents icon, `.directory` Icon=...73d216.svg; `/tmp`: menu entry absent, `--check` 1, `--set` refused |
+| `sudo -n .../gobo-wifi-switch --session` without password; `sudo -n true` fails | **fail** on the first build -> fix 1 (final ISO: see above) | as lab |
+| udev rule where udevd reads it | pass | `/usr/lib/udev/rules.d/40-gobo-realtek-wifi.rules` -> USB-ModeSwitch (Eudev 243 reads `/usr/lib/udev/rules.d` = `/System/Index/lib/udev/rules.d`) |
+| `modprobe 8852au` | pass | loaded with cfg80211; alias `usb:v2357p013F` |
+| Second user (`AddUser -f "Second User" second`, password via `openssl passwd -6` + `usermod -p`) | pass, one gap | look, all folders, Trash icon, desktop after LXDM login; **its desktop keyboard layout is `us`** (skeleton `.xinitrc`), while the login screen and the installed user use `pl` |
+
+### Findings, not fixed (decide later)
+
+- **Second users get keyboard layout `us` on the desktop**: the installer writes the chosen layout only into
+  root's and the installed user's `~/.xinitrc` and into the X config for the login screen; the skeleton keeps `us`.
+- `AddUser` sets the password through `passwd`, which needs a terminal; from a script it fails ("Authentication
+  token manipulation error") and the account is left without a password.
+- **Plain text files open with nothing** (task item): the only text editors on the image are Vim/gvim and Nano,
+  so, as instructed, no `text/plain` default was set in `look/gobo11/xdg/mimeapps.list`.
+- The desktops list shows "Pcmanfm" (the desktop window) among the windows of desktop 1.
+- After the light/dark switch (an Awesome restart) the view returns to desktop 1 (windows keep their desktops).
+- The application search does not find LxRandr by "displays" (Menu -> Desktop -> Displays... works).
+- During the test the build VM's leftover `/Data/Build/GoboLinux-017.01-spin.iso` (0.1 era) was deleted to make
+  room; it still exists inside snapshot `iso-build-env-6b` (the restore for the rebuild brought it back).
+
+### Lab lessons (0.6 ISO)
+
+- Over ssh, `pgrep -f "gobo-install --answers"` matches the remote shell running the pgrep itself: use a bracket
+  pattern (`gobo-[i]nstall`) when waiting for the installer to exit.
+- After a BIOS install (MBR, no ESP) the UEFI firmware boots the DVD without any clean-up; the efibootmgr/ESP
+  clean-up from the 0.4 notes is only needed when the disk still holds a UEFI install.
+- No ImageMagick on the host: crop screenshots with PowerShell's `System.Drawing`.
+- `setlinkstate1 off` cuts SSH; take screenshots and turn the link back on before the next ssh command.
+- Restoring `iso-build-env-6b` for the rebuild discards the test install; the install tests are then redone.
+
+VM snapshots now: ..., `iso-build-env-6a`, `iso-build-env-6b` (build env for 0.6), **`iso-0.6-installed-efi`**
+(current, powered off: UEFI install of the final 0.6 ISO, typed answers, user lab, LXDM, layout pl,
+Europe/Warsaw).
+
+Next: the user tries ISO 0.6 on the real PC, Wi-Fi adapter first (`dist/README.md`).

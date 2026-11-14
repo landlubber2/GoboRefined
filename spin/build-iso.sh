@@ -105,11 +105,15 @@ chmod 4755 $R/Programs/GoboNet/Current/bin/gobonet_backend
 chmod 4755 $R/Programs/Udevil/Current/bin/udevil
 # 0.6: the desktop session may run the Wi-Fi adapter switch (gobo-wifi-switch, in USB-ModeSwitch)
 # as root, with exactly this argument and nothing else. The live user is root; installed users
-# are in group "users". The installer copies /Programs, so installed systems get this rule too.
-SUDOERS=$R/Programs/Sudo/Settings/sudoers
-grep -q gobo-wifi-switch $SUDOERS || \
-   echo '%users ALL=(root) NOPASSWD: /System/Index/bin/gobo-wifi-switch --session' >> $SUDOERS
-chroot $R visudo -c > /dev/null
+# are in group "users". The installer's ProfileInstall replaces every program's Settings with
+# Current/Resources/Defaults/Settings, so the rule goes into both copies (0.6 ISO test: with only
+# Settings/sudoers, installed systems had no rule).
+for SUDOERS in $R/Programs/Sudo/Settings/sudoers $R/Programs/Sudo/Current/Resources/Defaults/Settings/sudoers
+do
+   grep -q gobo-wifi-switch $SUDOERS || \
+      echo '%users ALL=(root) NOPASSWD: /System/Index/bin/gobo-wifi-switch --session' >> $SUDOERS
+   chroot $R visudo -c -f ${SUDOERS#$R} > /dev/null
+done
 [ -x $R/Programs/USB-ModeSwitch/Current/bin/gobo-wifi-switch ] || { echo "gobo-wifi-switch missing"; exit 1; }
 grep -q 'gobo-wifi-switch --udev' $R/Programs/USB-ModeSwitch/Current/lib/udev/rules.d/40-gobo-realtek-wifi.rules
 # 0.6 file tools: Trash window + purge, folder colours (PCManFM menu entry = libfm custom action)

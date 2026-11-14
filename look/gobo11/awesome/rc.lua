@@ -972,7 +972,15 @@ awful.rules.rules = {
    -- 0.6: PCManFM's desktop window (icons of ~/Desktop): on every desktop, never in the taskbar,
    -- and it never takes the keyboard focus (a click on an icon or the desktop leaves it where it was)
    { rule = { type = "desktop" }, properties = { sticky = true, border_width = 0, titlebars_enabled = false,
-      skip_taskbar = true, focusable = false, below = true } },}
+      skip_taskbar = true, focusable = false, below = true } },
+   -- Its dialogs (Move to Trash?, Rename, Properties...) are transient for it, and Awesome gives a
+   -- transient window its parent's desktop: the sticky desktop window's own tag, desktop 1. Open
+   -- them on the desktop being looked at (0.6 ISO test: from desktop 2 they appeared on desktop 1).
+   { rule = {}, callback = function(c)
+        if c.transient_for and c.transient_for.type == "desktop" then
+           c:tags(c.transient_for.screen.selected_tags)
+        end
+     end },}
 
 local no_decorations = {
     ["plugin-container"] = true,
