@@ -108,4 +108,13 @@ then
    fi
 fi
 cat "$here/Xresources.append" >> "$home/.Xresources"
+# 0.8: apply.sh runs again for every home after a system update. The GTK settings were just
+# replaced by the dark defaults: put back the colour mode the user chose (power menu).
+if [ -f "$home/.config/awesome/mode" ] && [ "$(cat "$home/.config/awesome/mode")" = light ]
+then HOME="$home" sh "$home/.config/awesome/set-mode.sh" light
+fi
+# Which spin version's look this home has (share/spin-version next to share/gobo11 on the image).
+if [ -f "$here/../spin-version" ]
+then head -n 1 "$here/../spin-version" > "$home/.config/awesome/look-version"
+fi
 echo "gobo11 look applied to $home (log out and back in to see all of it)"

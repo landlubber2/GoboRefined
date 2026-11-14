@@ -1,0 +1,38 @@
+# Generated caches (GoboRefined A/B, 0.8). On the first start of a different system version the
+# initramfs (90goboab/goboab-root.sh) removes these from the overlay layers (install, upper), so
+# the new image's own copies show through; gobo-update --boot-task then regenerates them when the
+# user has added programs. One absolute path per line; '*' allowed; resolved inside the slot.
+# Installed as /Programs/GoboSpin/Current/share/gobo-update/generated-caches.
+/System/Settings/ld.so.cache
+/Data/Variable/cache/ldconfig/aux-cache
+/Data/Variable/cache/fontconfig/*
+/System/Index/share/icons/*/icon-theme.cache
+/System/Index/share/mime/mime.cache
+/System/Index/share/mime/aliases
+/System/Index/share/mime/globs
+/System/Index/share/mime/globs2
+/System/Index/share/mime/icons
+/System/Index/share/mime/generic-icons
+/System/Index/share/mime/magic
+/System/Index/share/mime/subclasses
+/System/Index/share/mime/treemagic
+/System/Index/share/mime/types
+/System/Index/share/mime/XMLnamespaces
+/System/Index/share/mime/version
+/System/Index/share/mime/application
+/System/Index/share/mime/audio
+/System/Index/share/mime/font
+/System/Index/share/mime/image
+/System/Index/share/mime/inode
+/System/Index/share/mime/message
+/System/Index/share/mime/model
+/System/Index/share/mime/multipart
+/System/Index/share/mime/text
+/System/Index/share/mime/video
+/System/Index/share/mime/x-content
+/System/Index/share/mime/x-epoc
+/System/Index/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache
+/System/Index/lib/gio/modules/giomodule.cache
+/System/Index/share/glib-2.0/schemas/gschemas.compiled
+/System/Index/lib/gtk-3.0/3.0.0/immodules.cache
+/System/Index/share/applications/mimeinfo.cache

@@ -1,0 +1,11 @@
+# GoboRefined (0.8, A/B system): the system's own partitions are never offered as removable
+# drives, also when the system disk is a USB disk. udevil (and so devmon) treats a device with
+# UDISKS_SYSTEM_INTERNAL=1 as internal and does not mount it for normal users.
+# Installed as /Programs/GoboSpin/Current/lib/udev/rules.d/80-gobo-internal.rules.
+SUBSYSTEM!="block", GOTO="gobo_internal_end"
+ENV{ID_PART_ENTRY_NAME}=="GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+ENV{ID_FS_LABEL}=="GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+GOTO="gobo_internal_end"
+LABEL="gobo_internal_set"
+ENV{UDISKS_SYSTEM_INTERNAL}="1", ENV{UDISKS_PRESENTATION_NOPOLICY}="1", ENV{UDISKS_IGNORE}="1"
+LABEL="gobo_internal_end"

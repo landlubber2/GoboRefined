@@ -16,3 +16,5 @@
 /vm/serve/gobo-command-not-found
 /vm/serve/software-install.txt
 /vm/serve/gobo-wifi-switch
+/vm/keys/
+/dist/*.update

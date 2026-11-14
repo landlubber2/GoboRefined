@@ -21,7 +21,9 @@ xset s 600 5
 
 # USB sticks: devmon (udevil) mounts them under /Mount/Media/<label>; the taskbar
 # shows a notification and a drive icon (open / safely remove). Awesome stops it at log out.
-[ -x /bin/devmon ] && devmon > /dev/null 2>&1 &
+# The system's own partitions (A/B layout, 0.8) are never mounted as drives.
+[ -x /bin/devmon ] && devmon --ignore-label GOBO_BOOT --ignore-label GOBO_A --ignore-label GOBO_B \
+   --ignore-label GOBO_DATA > /dev/null 2>&1 &
 
 # Clipboard history: CopyQ keeps the last 20 copies, also after their program has closed
 # (no tray icon; Win+Shift+V lists them). Settings in ~/.config/copyq/.

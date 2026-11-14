@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current ISO: **`dist/GoboRefined-0.6.iso`** (see the last section; 0.5 is kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8-dev (A/B system)**, `dist/GoboRefined-0.8-dev*.iso` + `.update` (see the last section; 0.5 and 0.6 kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -748,3 +748,151 @@ VM snapshots now: ..., `iso-build-env-6a`, `iso-build-env-6b` (build env for 0.6
 Europe/Warsaw).
 
 Next: the user tries ISO 0.6 on the real PC, Wi-Fi adapter first (`dist/README.md`).
+
+## 0.8: A/B system (two system slots + data partition) — built and tested in the VM (2026-11-14)
+
+Specification: `docs/ab-design.md` (corrected where reality differs; deviations below). ISOs
+**`dist/GoboRefined-0.8-dev1.iso`** (sha256 `5ebd9d6f...`) and **`-dev2.iso`** (`d5e07efb...`), each 2,867,200,000
+bytes, with **`GoboRefined-0.8-dev1.update`** (`bcec6e74...`) and **`-dev2.update`** (`fd10f726...`), each
+2,734,067,712 bytes; `.sha256` files next to them. dev2 = dev1 + the lab test variant (`vm/serve/ab-test-variant.sh`:
+new program HelloAB, one changed line in CoreUtils' Description). 0.5 and 0.6 ISOs kept. `dist/*.update` is gitignored.
+
+### How it works
+
+- **Disk (GPT):** `BIOSBOOT` 1 MiB, `GOBO_BOOT` 512 MiB FAT32 (ESP; GRUB, `grub.cfg`, `grubenv`), `GOBO_A` 12 GiB,
+  `GOBO_B` 12 GiB, `GOBO_DATA` rest. GPT names = file system labels. Disks under 32,000,000,000 bytes are refused.
+- **Root** (`spin/ab/dracut/90goboab/`, dracut module `goboab`, active only with `root=gobo`): the data partition is
+  checked (`e2fsck -p`) and mounted, the slot read-only, overlay
+  `lowerdir=System-Overlay/install:slot, upperdir=System-Overlay/upper` (or a tmpfs upper for "without my system
+  changes", with the current account files copied in); `/Users` and `/Data/Variable` bind-mounted from the data
+  partition; the data partition is moved to `/System/Data`, the slot to `/System/Slot`. A slot without
+  `/gobo-slot.env` refuses to boot. The initramfs also performs a requested reset (`upper` -> `previous-upper`,
+  accounts kept) and, on a version change, removes the files listed in `share/gobo-update/generated-caches` from both
+  overlay layers and `/Data/Variable`, then writes `System-Overlay/first-boot-pending`. The initramfs is built by
+  `build-iso.sh` (`dracut --no-hostonly -L 4 --add goboab`; same module set as the stock image, which was built with
+  plain `dracut --kver 6.12.16-Gobo`; the module directory lives in GoboSpin and is linked into Dracut's `modules.d`).
+  The live ISO keeps its own stock initramfs (isolinux/efiboot are replayed unchanged).
+- **`gobo-make-system SOURCE TARGET`** (GoboSpin bin): mounts the live squashfs with a tmpfs layer, runs upstream
+  `ProfileInstall` *inside the image* into TARGET, then applies the generic settings (wired DHCP, boot task line in
+  BootUp, locale, inittab link, resolv.conf, power sudo rule, mount points, `System/Kernel/Boot/initramfs` link).
+  Used by gobo-install for slot A and by build-iso for the update, so both are the same tree.
+- **Installer:** partitions, formats (GPT names checked, never a mounted device or the running root), slot A via
+  gobo-make-system, writes `gobo-slot.env`, copies the slot's `/Users` and `/Data/Variable` to the data partition,
+  assembles the target as the initramfs would but with **`System-Overlay/install`** as the writable layer; the old
+  configuration steps then run unchanged (accounts, hostname, fstab without "/", swap file, time zone, look,
+  LXDM/text login). GRUB: EFI image via grub-mkimage (finds GOBO_BOOT by UUID) + efibootmgr entry; BIOS via
+  `grub-install --boot-directory=<GOBO_BOOT>` into the BIOS boot partition (worked first time). `--source IMAGE`
+  (development) installs from another squashfs or an unpacked tree and allows running outside the live session (used
+  for the prototype on a spare disk). Question flow unchanged; no `dialog`.
+- **GRUB menu** (static `grub.cfg` on GOBO_BOOT; UUIDs/PARTUUIDs as `set gobo_*` lines that gobo-update also reads):
+  per filled slot: normal, "without my system changes", "safe graphics"; an empty slot is listed as "Slot B: empty"
+  and only prints a message. grubenv: `slot`, `try_slot`, `tries_left`, `rollback_from`. Try boots get
+  `rd.shell=0 rd.emergency=reboot panic=10` and GRUB's `fallback` (old slot). Screenshot `0.8-boot-menu.png`.
+- **`gobo-update`**: `FILE`, `--status`, `--rollback`, `--reset-system-changes`, `--yes`, internal `--boot-task`.
+  Update file = squashfs + 8 KiB trailer (manifest + RSA-3072 signature, base64). Checks: signature, size, sha256;
+  target slot found by PARTUUID, GPT name `GOBO_X` checked, not mounted anywhere, not the running slot (UUID and
+  `/System/Slot`), same disk; formatted with the slot's old file system UUID; `gobo-slot.env` written last; grubenv
+  changed by copy + rename. `--boot-task` (end of BootUp): first start of a new version (ldconfig; the other caches
+  only when the user added programs; new `/Data/Variable` folders; `apply.sh` for every home as its owner), then
+  marks the slot good or turns a rollback into `/Data/Variable/lib/gobo-update/notice`. Log:
+  `/Data/Variable/log/gobo-update.log`. Screenshot `0.8-status.png`.
+- **Desktop:** `look/gobo11/awesome/spin/updates.lua` shows "System updated" / "System update undone" once per user.
+  `apply.sh` now keeps the user's light/dark choice (it used to reset GTK to dark) and writes
+  `~/.config/awesome/look-version`. Still overwritten by apply.sh, as before: `~/.config/awesome/*`, `picom.conf`,
+  `fonts.conf`, `.xinitrc` (layout kept), the gobo11 block of `.Xresources`.
+- **Internal partitions:** udev rule `80-gobo-internal.rules` (GoboSpin) sets `UDISKS_SYSTEM_INTERNAL=1` (+ IGNORE,
+  NOPOLICY) for `GOBO_*` by GPT name or label, so udevil refuses them for users; `xinitrc` starts devmon with
+  `--ignore-label` for all four. The "USB drives" place only lists what is mounted under `/Mount/Media`, so it never
+  shows them (libfm itself was not changed).
+- **Signing key:** public `spin/ab/update-signing.pub.pem` (in the image); private `vm/keys/update-signing.pem`
+  (gitignored, never printed). For a build it is piped into the build VM's RAM (`/dev/shm`); build-iso deletes it.
+
+### Build
+
+Snapshot **`iso-build-env-8a`** (= 6b + one build run; `/Data/Build/work3` and `Recipes-git` were deleted for
+space; the stock ISO must be attached as `/dev/sr0`). Refresh `vm/serve/ab.tgz` (`cd spin && tar czf
+../vm/serve/ab.tgz ab`), `gobo11.tgz` and the `build-iso.sh` copy, put the key into RAM
+(`vm/ssh.sh 'umask 077; cat > /dev/shm/gobo-update-signing.pem' < vm/keys/update-signing.pem`), then in the VM
+`VERSION=0.8-devN nohup bash /Data/Build/build-iso.sh > /Data/Build/build.log 2>&1 &` (~22 min; peak ~12 GB in
+/Data/Build: copy ISO + update to the host and delete them in the VM before the next build). Default in the file:
+`VERSION=0.8-dev2`.
+
+### Tests (VM)
+
+| Test plan point | UEFI | BIOS | How verified |
+|---|---|---|---|
+| 1 install, boot, login, 0.6 checks | pass | pass (`--autologin --swap 1024`) | install 83 s / 77 s from the ISO; greeter login (UEFI) / autologin (BIOS) to the desktop; `vm/input-test.sh` 32/32 on both; USB stick automounted with notification; GOBO_* never mounted (also with a second GoboRefined disk attached); swap file on the data partition active |
+| 2 persistence | pass | (part of 3) | `vm/serve/ab-persist-test.sh`: user `second`, a line in `/System/Settings/hosts`, hand-installed `/Programs/TinyAB` with a shared library (`SymlinkProgram`, `ldconfig`) — all there after reboot |
+| 3 update dev1 -> dev2 | pass | pass | `gobo-update` 37-38 s; after reboot slot B 0.8-dev2 default; point-2 changes intact; `hello-ab` (new program) and the CoreUtils line visible; ld.so.cache regenerated with libtinyab; `look-version` 0.8-dev2 in every home; light mode kept; "System updated" notification (`0.8-updated-notification.png`) |
+| 4 rollback by hand | pass | pass | `--rollback` -> A (dev1), again -> B |
+| 4 automatic rollback | pass | pass | new slot's init overwritten: kernel panic "Attempted to kill init", reboot after 10 s, twice, then GRUB starts the old slot; notice + red "System update undone" (`0.8-rollback-notification.png`); `--status` shows "last rollback" |
+| 5 without my system changes | pass | not tested | inittab in the overlay stripped of getty/LXDM: normal boot ends in "no more processes left"; "... without my system changes" boots to the login screen; `--status` says "WITHOUT system changes" (`0.8-status-safe-mode.png`); then `--reset-system-changes` + normal boot: login works, user `second` kept, hosts line and TinyAB gone, old upper in `previous-upper` |
+| 6 power cut during an update | pass | not tested | VM killed while unpacking into slot A (6.3 of 8.1 GB written): slot B started normally, menu and `--status` show slot A empty; a later update into A worked |
+
+Also seen: an update file copied into the system just before a power cut came back with zeros at its end, and
+gobo-update refused it (bad signature) — the check works; `sync` after copying an update.
+
+Final state: snapshot **`iso-0.8-dev-installed-efi`** — UEFI install of dev1 (with the repo's installer, see below),
+updated to dev2: slot A 0.8-dev1, slot B 0.8-dev2 running/default. The spare prototype disk
+`vm/GoboLinux-017.01/proto-ab.vdi` (35 GB dynamic, added for this work on SATA port 2) is detached but kept; it is
+attached in `iso-build-env-8a`. VM firmware EFI, powered off.
+
+### Measured
+
+Install 76-83 s (VM). Update 37-38 s (2.6 GB file: verify ~15 s, unpack ~20 s). Update file 2.73 GB; system tree
+8.1 GB (not 6.7 GB as in the design; OnlyOffice etc.) -> **3.1 GB free in a 12 GiB slot**. Data partition on the
+40 GB VM disk 15.5 GiB. Overlay right after install ~200 KB; after the first update with a user program ~9.4 MB.
+
+### Deviations from the design (why)
+
+1. **Three layers instead of one overlay** (read-only `install` layer for install-time settings): with one overlay,
+   "without my system changes" and the reset would also drop accounts/hostname/login setup — nobody could log in.
+2. **"Without my system changes" copies the current account files** into the memory layer, so passwords changed
+   later work. If the broken file is `passwd`/`shadow`, this entry does not help.
+3. **Generic settings moved into the image** (`gobo-make-system`) so updates can change them.
+4. **Caches are regenerated only when the user added programs**; otherwise removing them from the overlay is enough.
+   Removal happens in the initramfs (a lower layer cannot be changed at run time).
+5. **Slot completeness marker** `/gobo-slot.env` and **fixed file system UUIDs per slot** — needed for a static
+   grub.cfg and for power-cut safety.
+6. **"32 GB"** = 32,000,000,000 bytes; the data partition is then ~5 GB (design: 8 GB or more).
+7. **Signing in the build VM with the key in RAM only**; build-iso refuses to run without it.
+8. The slot is marked good at the **end of BootUp** (just before getty/LXDM start), not when the greeter is drawn.
+9. `dialog` menus not added (as instructed).
+
+### Changed after the dev2 ISO was built (in the repo, NOT in any ISO yet)
+
+- `installer/gobo-install`, `gobo-update`: ext4 made with `-O ^orphan_file`. After power cuts the kernel logged
+  "EXT4-fs error ... bad orphan inode" on the data partition (state "clean with errors"). The final install (made
+  with this installer, copied over the ISO's in the live session) showed no error after one power cut — one test,
+  not conclusive.
+- `goboab-root.sh`: logs "data partition check: e2fsck exit N". Tested by patching slot A's initramfs on the BIOS test
+  install: **e2fsck exits 0, yet the kernel still replays the journal at mount** — e2fsck in the initramfs does not
+  seem to replay it. Not solved (the kernel replay works, so data was fine), but the pre-mount repair does not do
+  what it is meant to.
+- `gobo-update`: no bash "ignored null byte" warning on a damaged trailer.
+
+### Fragile / not trusted yet on a real PC
+
+- e2fsck in the initramfs (above). Slots are never fsck'd (read-only after the update completes).
+- A slot holds 8.1 of 12 GiB: an image 3 GB larger will not fit (gobo-update checks and refuses).
+- The update file is verified, then read again by unsquashfs: whoever can change it in between (physical access to
+  the stick) could slip in other content. Copying it to the data partition first would close that.
+- GRUB itself and grub.cfg are never updated by gobo-update.
+- New system accounts in a future image would be hidden by the install layer's passwd.
+- `/` shows the slot's `gobo-slot.env` and `lost+found` (cosmetic). `--status` needs root.
+- Shutdown does not explicitly unmount the data partition (busy under the overlay); relies on the journal.
+- NVMe partition names, real UEFI firmware and efibootmgr on real firmware untested; Wi-Fi etc. unchanged from 0.6.
+
+### Lab lessons (0.8)
+
+- `vm/vbox-keys.sh`: tty switch, typing, screenshots, and the lab passwords from `lab-answers.env` without printing
+  them. Installed systems: tty2 root login + `lab-ssh2.sh` after every boot (or the lab-only sshd line in BootUp,
+  which lives in the overlay and goes away with a reset).
+- VirtualBox EFI: a snapshot restore can reset NVRAM boot entries; `efibootmgr -n <CD-ROM entry>` boots the ISO
+  once; with a second GoboRefined disk attached the firmware may start that one instead.
+- `lsinitrd ... | grep -q` under `set -o pipefail` fails (SIGPIPE): capture the list first.
+- GoboLinux links are absolute (`/System/Index/bin/x -> /Programs/...`): `-x` on them from outside the tree fails.
+- A stopped build-iso run can leave proc mounted inside the rootfs; build-iso now refuses to pack in that case.
+- openssl on Windows writes CRLF PEM files: convert before comparing keys.
+
+Downloads: none.

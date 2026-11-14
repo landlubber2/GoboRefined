@@ -495,6 +495,9 @@ wifi_switch.start({ icon = find_icon("network-wireless", "network-wireless-symbo
 -- Files in ~/Desktop on the desktop (PCManFM --desktop, spin/desktop_icons.lua); Trash clean-up
 desktop_icons.start({ menu = function() mymainmenu:toggle() end })   -- same as a root right click
 
+-- 0.8: "System updated" / "System update undone" notice after a system update (spin/updates.lua)
+require("spin.updates").start()
+
 -- Mouse bindings
 root.buttons(awful.util.table.join(
    awful.button({}, 1, function() popups.close_all() end),

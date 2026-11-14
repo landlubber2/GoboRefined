@@ -1,0 +1,464 @@
+#!/bin/bash
+# gobo-update — whole-system updates for GoboRefined (A/B system slots, 0.8).
+#
+#   sudo gobo-update FILE                  install GoboRefined-<version>.update into the other slot
+#   sudo gobo-update --status              show both slots, their versions and what starts next
+#   sudo gobo-update --rollback            start the other slot from the next restart on
+#   sudo gobo-update --reset-system-changes
+#                                          at the next restart, forget all changes made to system
+#                                          files since the install (accounts and home folders stay)
+#
+# The running slot is never written. An update is only selected after it was verified (signature,
+# checksum), unpacked and checked; GRUB then tries it twice, and goes back to the old slot by
+# itself if it does not start. --boot-task is run by the boot scripts (not by hand).
+set -euo pipefail
+umask 022
+
+PUBKEY=/Programs/GoboSpin/Current/share/gobo-update/update-signing.pub.pem
+STATE=/Data/Variable/lib/gobo-update      # root-owned: lock, notice for the desktop, slot versions
+LOG=/Data/Variable/log/gobo-update.log
+OVERLAY=/System/Data/System-Overlay       # the data partition, mounted by the initramfs
+TRAILER_SIZE=8192
+APPLY_LOOK=/Programs/GoboSpin/Current/share/gobo11/apply.sh
+ASSUME_YES=0
+
+c_cyan=$'\033[1;36m'; c_red=$'\033[1;31m'; c_off=$'\033[0m'
+[ -t 1 ] || { c_cyan=""; c_red=""; c_off=""; }
+log()  { mkdir -p "${LOG%/*}"; echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null || true; }
+say()  { echo "$*"; log "$*"; }
+step() { echo "${c_cyan}==> $*${c_off}"; log "==> $*"; }
+die()  { echo "${c_red}gobo-update: $*${c_off}" >&2; log "ERROR: $*"; exit 1; }
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+### Where we are ###############################################################
+
+cmdline_arg() { # cmdline_arg NAME -> value of NAME=... on the kernel command line
+   local w
+   for w in $(cat /proc/cmdline)
+   do case "$w" in "$1="*) echo "${w#*=}"; return 0 ;; esac
+   done
+   return 0
+}
+
+uuid_of() { # "UUID=x" -> x
+   case "$1" in UUID=*) echo "${1#UUID=}" ;; *) echo "" ;; esac
+}
+
+load_layout() {
+   [ "$(cmdline_arg root)" = gobo ] || die "this system was not started from an A/B layout (no root=gobo)"
+   CUR=$(cmdline_arg gobo.slot)
+   case "$CUR" in a) OTHER=b ;; b) OTHER=a ;; *) die "unknown running slot '$CUR'" ;; esac
+   CUR_UUID=$(uuid_of "$(cmdline_arg gobo.root)")
+   BOOT_UUID=$(uuid_of "$(cmdline_arg gobo.boot)")
+   [ -n "$CUR_UUID" ] && [ -n "$BOOT_UUID" ] || die "gobo.root= / gobo.boot= missing on the kernel command line"
+   MODE=normal
+   [ "$(cmdline_arg gobo.system-changes)" = off ] && MODE=safe
+   CUR_VERSION=$(slot_version_in /System/Slot)
+   return 0
+}
+
+slot_version_in() { # slot_version_in DIR (a mounted slot) -> version or empty
+   [ -f "$1/gobo-slot.env" ] || return 0
+   grub-editenv "$1/gobo-slot.env" list 2>/dev/null | sed -n 's/^slot_version=//p' | tr -dc '0-9A-Za-z.-'
+}
+
+letter_upper() { [ "$1" = a ] && echo A || echo B; }
+
+TMP=""
+BOOT=""
+cleanup() {
+   local m
+   set +e
+   if [ -n "$TMP" ]
+   then
+      for m in "$TMP/slot" "$TMP/peek" "$TMP/boot"
+      do mountpoint -q "$m" 2>/dev/null && { umount "$m" || umount -l "$m"; }
+      done
+      rm -rf "$TMP"
+   fi
+}
+trap cleanup EXIT
+
+need_root() { [ "$(id -u)" = 0 ] || die "must be run as root (sudo gobo-update ...)"; }
+
+lock() {
+   mkdir -p "$STATE"; chmod 755 "$STATE"
+   exec 9> "$STATE/lock"
+   flock -n 9 || die "another gobo-update is running"
+}
+
+make_tmp() { [ -n "$TMP" ] || TMP=$(mktemp -d /tmp/gobo-update.XXXXXX); }
+
+mount_boot() { # mounts GOBO_BOOT at $TMP/boot, reads the layout from grub.cfg
+   local dev
+   make_tmp
+   [ -n "$BOOT" ] && return 0
+   dev=$(blkid -U "$BOOT_UUID" 2>/dev/null) || true
+   [ -n "$dev" ] && [ -b "$dev" ] || die "boot partition (UUID $BOOT_UUID) not found"
+   [ "$(blkid -s LABEL -o value "$dev")" = GOBO_BOOT ] || die "$dev is not labelled GOBO_BOOT"
+   mkdir -p "$TMP/boot"
+   mount -t vfat -o umask=0077 "$dev" "$TMP/boot" || die "cannot mount the boot partition $dev"
+   BOOT="$TMP/boot"
+   [ -f "$BOOT/grub/grub.cfg" ] && [ -f "$BOOT/grub/grubenv" ] || die "no grub.cfg/grubenv on the boot partition"
+   for v in uuid_a uuid_b uuid_data partuuid_a partuuid_b
+   do
+      val=$(sed -n "s/^set gobo_$v=\([0-9A-Fa-f-]*\)\$/\1/p" "$BOOT/grub/grub.cfg" | head -n 1)
+      [ -n "$val" ] || die "grub.cfg has no gobo_$v"
+      printf -v "L_$v" '%s' "$val"
+   done
+   [ "$(eval echo "\$L_uuid_$CUR")" = "$CUR_UUID" ] || die "grub.cfg does not match the running slot"
+}
+
+env_get() { grub-editenv "$BOOT/grub/grubenv" list | sed -n "s/^$1=//p" | head -n 1; }
+
+env_write() { # env_write set k=v ... | unset k ...   (several: env_write set a=1 -- unset b)
+   local f="$BOOT/grub/grubenv"
+   cp "$f" "$f.new"
+   while [ $# -gt 0 ]
+   do
+      case "$1" in
+         set)   shift; while [ $# -gt 0 ] && [ "$1" != -- ]; do grub-editenv "$f.new" set "$1"; shift; done ;;
+         unset) shift; while [ $# -gt 0 ] && [ "$1" != -- ]; do grub-editenv "$f.new" unset "$1"; shift; done ;;
+         --)    shift ;;
+         *)     die "env_write: $1" ;;
+      esac
+   done
+   sync
+   mv -f "$f.new" "$f"
+   sync
+   log "grubenv: $(grub-editenv "$f" list | tr '\n' ' ')"
+}
+
+peek_slot_version() { # peek_slot_version LETTER -> version of a slot that is not running, or empty
+   local dev
+   make_tmp
+   dev=$(slot_device "$1") || return 0
+   [ -n "$dev" ] || return 0
+   mkdir -p "$TMP/peek"
+   if mount -t ext4 -o ro,noload "$dev" "$TMP/peek" 2>/dev/null
+   then
+      slot_version_in "$TMP/peek"
+      umount "$TMP/peek"
+   fi
+   return 0
+}
+
+slot_device() { # slot_device LETTER -> block device, by PARTUUID from grub.cfg, checked by name
+   local pu dev
+   pu=$(eval echo "\$L_partuuid_$1")
+   dev=$(blkid -t PARTUUID="$pu" -o device 2>/dev/null | head -n 1) || true
+   [ -n "$dev" ] && [ -b "$dev" ] || return 1
+   [ "$(lsblk -no PARTLABEL "$dev" 2>/dev/null)" = "GOBO_$(letter_upper "$1")" ] || return 1
+   readlink -f "$dev"
+}
+
+is_mounted() { # is_mounted DEV: anywhere, under any of its names
+   local dev="$1" name mm
+   name=$(basename "$dev")
+   mm=$(lsblk -dno MAJ:MIN "$dev" | tr -d ' ')
+   grep -qE "^(/dev|/System/Kernel/Devices)/$name " /proc/mounts && return 0
+   [ -n "$(findmnt -rn -S "$dev" 2>/dev/null)" ] && return 0
+   awk -v mm="$mm" '$3 == mm { found = 1 } END { exit !found }' /proc/self/mountinfo && return 0
+   return 1
+}
+
+### Update file ################################################################
+
+verify_update() { # verify_update FILE: sets U_VERSION, U_IMAGE_SIZE, U_INSTALLED
+   local f="$1" size sum expect
+   [ -f "$f" ] && [ -r "$f" ] || die "cannot read $f"
+   [ -f "$PUBKEY" ] || die "public key $PUBKEY missing"
+   make_tmp
+   size=$(stat -c %s "$f")
+   [ "$size" -gt $((TRAILER_SIZE * 2)) ] || die "$f is too small to be an update"
+   tail -c $TRAILER_SIZE "$f" > "$TMP/trailer"
+   [ "$(head -n 1 "$TMP/trailer" | tr -d '\000')" = "GOBOREFINED-UPDATE 1" ] || die "$f is not a GoboRefined update file"
+   sed '/^-----BEGIN SIGNATURE-----$/,$d' "$TMP/trailer" > "$TMP/manifest"
+   sed -n '/^-----BEGIN SIGNATURE-----$/,/^-----END SIGNATURE-----$/p' "$TMP/trailer" | sed '1d;$d' |
+      openssl base64 -d -A > "$TMP/sig" 2>/dev/null || true
+   [ -s "$TMP/sig" ] || die "the update file is not signed"
+   openssl dgst -sha256 -verify "$PUBKEY" -signature "$TMP/sig" "$TMP/manifest" > /dev/null 2>&1 ||
+      die "the signature does not match: the file was not made by GoboRefined or was changed"
+   mf() { sed -n "s/^$1=//p" "$TMP/manifest" | head -n 1; }
+   [ "$(mf name)" = GoboRefined ] || die "not a GoboRefined update"
+   U_VERSION=$(mf version)
+   U_IMAGE_SIZE=$(mf image_size)
+   U_INSTALLED=$(mf installed_bytes)
+   expect=$(mf image_sha256)
+   [[ "$U_VERSION" =~ ^[0-9A-Za-z.-]+$ ]] || die "bad version in the manifest"
+   [[ "$U_IMAGE_SIZE" =~ ^[0-9]+$ ]] && [[ "$U_INSTALLED" =~ ^[0-9]+$ ]] || die "bad sizes in the manifest"
+   [[ "$expect" =~ ^[0-9a-f]{64}$ ]] || die "bad checksum in the manifest"
+   [ "$size" -eq $((U_IMAGE_SIZE + TRAILER_SIZE)) ] || die "the file has the wrong size (incomplete download?)"
+   step "Checking the file (GoboRefined $U_VERSION, $((size / 1048576)) MB)"
+   sum=$(head -c "$U_IMAGE_SIZE" "$f" | sha256sum | cut -d' ' -f1)
+   [ "$sum" = "$expect" ] || die "checksum mismatch: the file is damaged"
+   say "    signature and checksum are correct"
+}
+
+cmd_update() {
+   local file dev slotsize need
+   file=$(readlink -f "$1")
+   need_root; load_layout; lock
+   [ "$MODE" = normal ] || die "started without the system changes: restart normally to update"
+   verify_update "$file"
+   mount_boot
+   dev=$(slot_device "$OTHER") || die "slot $(letter_upper "$OTHER") not found (PARTUUID $(eval echo "\$L_partuuid_$OTHER") with name GOBO_$(letter_upper "$OTHER"))"
+   # Never the running system: a second, independent check of what is about to be erased.
+   [ "$(readlink -f "$(blkid -U "$CUR_UUID")")" != "$dev" ] || die "$dev is the running slot"
+   is_mounted "$dev" && die "$dev is mounted; refusing to format it"
+   [ "$(findmnt -rn -o SOURCE /System/Slot 2>/dev/null | xargs -r readlink -f)" != "$dev" ] || die "$dev is the running slot"
+   [ "$(lsblk -no PKNAME "$dev")" = "$(lsblk -no PKNAME "$(blkid -U "$CUR_UUID")")" ] || die "$dev is not on the system disk"
+   slotsize=$(lsblk -bdno SIZE "$dev")
+   need=$((U_INSTALLED + U_INSTALLED / 20 + 268435456))
+   [ "$slotsize" -ge "$need" ] || die "the update needs $((need / 1048576)) MB, slot $(letter_upper "$OTHER") has $((slotsize / 1048576)) MB"
+
+   say "Running: slot $(letter_upper "$CUR") (GoboRefined ${CUR_VERSION:-?}). The update goes to slot $(letter_upper "$OTHER") ($dev)."
+   if [ "$ASSUME_YES" != 1 ] && [ -t 0 ]
+   then
+      read -r -p "Install GoboRefined $U_VERSION into slot $(letter_upper "$OTHER")? Its old content is erased. [y/N] " reply
+      case "$reply" in y|Y|yes) ;; *) die "nothing was changed" ;; esac
+   fi
+
+   # From here on slot OTHER is incomplete: make sure nothing chooses it until it is done.
+   if [ "$(env_get try_slot)" = "$OTHER" ] || [ "$(env_get slot)" = "$OTHER" ]
+   then env_write set "slot=$CUR" -- unset try_slot tries_left
+   fi
+   echo "" > "$STATE/slot-$OTHER"
+
+   step "Formatting slot $(letter_upper "$OTHER")"
+   mkfs.ext4 -F -q -O ^orphan_file -L "GOBO_$(letter_upper "$OTHER")" -U "$(eval echo "\$L_uuid_$OTHER")" "$dev" >> "$LOG" 2>&1 ||
+      die "formatting $dev failed"
+   mkdir -p "$TMP/slot"
+   mount -t ext4 "$dev" "$TMP/slot" || die "cannot mount the new slot"
+   step "Unpacking GoboRefined $U_VERSION (a few minutes)"
+   local t0=$SECONDS
+   if [ -t 1 ]
+   then unsquashfs -f -d "$TMP/slot" "$file" || die "unpacking failed"
+   else unsquashfs -no-progress -f -d "$TMP/slot" "$file" >> "$LOG" 2>&1 || die "unpacking failed"
+   fi
+   log "unpacked in $((SECONDS - t0)) s"
+   step "Checking the new system"
+   for p in System/Kernel/Boot/kernel System/Kernel/Boot/initramfs System/Index/bin/gobo-update Programs/Scripts
+   do [ -e "$TMP/slot/$p" ] || die "the new system has no $p"
+   done
+   [ "$(head -n 1 "$TMP/slot/Programs/GoboSpin/Current/share/spin-version" | tr -dc '0-9A-Za-z.-')" = "$U_VERSION" ] ||
+      die "the new system's version does not match the update file"
+   sync
+   # Written last: GRUB and the initramfs treat a slot without this file as empty.
+   grub-editenv "$TMP/slot/gobo-slot.env" create
+   grub-editenv "$TMP/slot/gobo-slot.env" set "slot_version=$U_VERSION"
+   sync
+   say "    $(df -h --output=used,avail "$TMP/slot" | tail -n 1 | awk '{print $1 " used, " $2 " free"}') in slot $(letter_upper "$OTHER")"
+   umount "$TMP/slot"
+   echo "$U_VERSION" > "$STATE/slot-$OTHER"
+
+   env_write set "try_slot=$OTHER" "tries_left=2"
+   umount "$BOOT"; BOOT=""
+   step "Done"
+   say "GoboRefined $U_VERSION is ready in slot $(letter_upper "$OTHER"). It starts at the next restart."
+   say "If it does not start, the computer goes back to ${CUR_VERSION:-the current version} by itself."
+   log "update to $U_VERSION in slot $OTHER finished in $SECONDS s"
+   if [ "$ASSUME_YES" != 1 ] && [ -t 0 ]
+   then
+      read -r -p "Restart now? [y/N] " reply
+      case "$reply" in y|Y|yes) cleanup; trap - EXIT; exec reboot ;; esac
+   fi
+}
+
+### Status, rollback, reset ####################################################
+
+cmd_status() {
+   local v_cur v_other def try left rb name
+   need_root; load_layout; mount_boot
+   v_cur="$CUR_VERSION"
+   v_other=$(peek_slot_version "$OTHER")
+   def=$(env_get slot); [ "$def" = b ] || def=a
+   try=$(env_get try_slot); left=$(env_get tries_left); rb=$(env_get rollback_from)
+   echo "GoboRefined system slots"
+   for s in a b
+   do
+      if [ "$s" = "$CUR" ]; then name="${v_cur:-?}"; else name="${v_other:-empty}"; fi
+      printf '  slot %s  %-14s' "$(letter_upper $s)" "$name"
+      [ "$s" = "$CUR" ] && printf ' [running%s]' "$([ "$MODE" = safe ] && echo ', WITHOUT system changes')"
+      [ "$s" = "$def" ] && printf ' [default]'
+      [ "$s" = "$try" ] && printf ' [new: being tried, %s tries left]' "${left:-0}"
+      echo
+   done
+   if [ "$try" = a ] || [ "$try" = b ]
+   then echo "  next start: slot $(letter_upper "$try") (if it does not start: slot $(letter_upper "$def"))"
+   else echo "  next start: slot $(letter_upper "$def")"
+   fi
+   [ -n "$rb" ] && echo "  slot $(letter_upper "$rb") did not start and was set aside (rollback)"
+   if [ -f "$STATE/notice" ] && grep -q '^kind=rolled-back' "$STATE/notice"
+   then echo "  last rollback: $(sed -n 's/^failed_version=//p' "$STATE/notice") did not start ($(sed -n 's/^date=//p' "$STATE/notice"))"
+   fi
+   if [ -d "$OVERLAY/upper" ]
+   then
+      echo "  system changes since the install: $(du -sh "$OVERLAY/upper" 2>/dev/null | cut -f1)$([ -e "$OVERLAY/reset-requested" ] && echo ' (will be removed at the next start)')"
+      echo "  data partition: $(df -h --output=avail /System/Data | tail -n 1 | tr -d ' ') free"
+   fi
+}
+
+cmd_rollback() {
+   local v
+   need_root; load_layout; lock; mount_boot
+   v=$(peek_slot_version "$OTHER")
+   [ -n "$v" ] || die "slot $(letter_upper "$OTHER") is empty or incomplete: nothing to go back to"
+   env_write set "slot=$OTHER" -- unset try_slot tries_left
+   say "From the next restart on, slot $(letter_upper "$OTHER") (GoboRefined $v) starts."
+}
+
+cmd_reset() {
+   need_root; load_layout; lock
+   [ -d "$OVERLAY" ] || die "$OVERLAY not found"
+   if [ "$ASSUME_YES" != 1 ]
+   then
+      echo "At the next restart all changes made to system files since the install are removed"
+      echo "(programs you compiled, edited settings in /System/Settings, ...). Kept: user accounts"
+      echo "and passwords, home folders, /Data. The removed changes stay in"
+      echo "$OVERLAY/previous-upper until the next reset."
+      read -r -p "Type 'yes' to continue: " reply
+      [ "$reply" = yes ] || die "nothing was changed"
+   fi
+   : > "$OVERLAY/reset-requested"
+   sync
+   say "System changes will be removed at the next restart."
+}
+
+### Boot task (BootUp) #########################################################
+
+notice() { # notice KIND key=value ...: one notice for the desktop (spin/updates.lua shows it once)
+   local kind="$1"; shift
+   mkdir -p "$STATE"
+   {
+      echo "id=$(date +%s)-$kind"
+      echo "kind=$kind"
+      echo "date=$(date '+%F %R')"
+      for kv in "$@"; do echo "$kv"; done
+   } > "$STATE/notice.new"
+   chmod 644 "$STATE/notice.new"
+   mv -f "$STATE/notice.new" "$STATE/notice"
+}
+
+user_programs_present() { # a program version that is not part of the slot's image
+   local d
+   for d in /Programs/*/*/
+   do
+      d=${d%/}
+      case "${d##*/}" in Current|Settings|Variable) continue ;; esac
+      [ -L "$d" ] && continue
+      [ -e "/System/Slot$d" ] || { log "user program: $d"; return 0; }
+   done
+   return 1
+}
+
+regenerate_caches() {
+   local d
+   ldconfig
+   if ! user_programs_present
+   then log "no programs added by the user: the image's caches are used"; return 0
+   fi
+   step "Updating caches for the programs you added"
+   command -v fc-cache > /dev/null && fc-cache > /dev/null 2>&1
+   for d in /System/Index/share/icons/*/
+   do [ -f "$d/index.theme" ] && gtk-update-icon-cache -q -f "$d" > /dev/null 2>&1
+   done
+   command -v update-mime-database > /dev/null && update-mime-database /System/Index/share/mime > /dev/null 2>&1
+   command -v gdk-pixbuf-query-loaders > /dev/null && gdk-pixbuf-query-loaders --update-cache > /dev/null 2>&1
+   command -v gio-querymodules > /dev/null && gio-querymodules /System/Index/lib/gio/modules > /dev/null 2>&1
+   command -v glib-compile-schemas > /dev/null && glib-compile-schemas /System/Index/share/glib-2.0/schemas > /dev/null 2>&1
+   command -v gtk-query-immodules-3.0 > /dev/null && gtk-query-immodules-3.0 --update-cache > /dev/null 2>&1
+   command -v update-desktop-database > /dev/null && update-desktop-database /System/Index/share/applications > /dev/null 2>&1
+   return 0
+}
+
+first_boot() {
+   local version h u
+   version=$(head -n 1 "$OVERLAY/first-boot-pending" | tr -dc '0-9A-Za-z.-')
+   log "first start of version $version"
+   regenerate_caches || true
+   # New state folders of the new version (the data partition's copy hides the slot's).
+   for d in /System/Slot/Data/Variable/*
+   do
+      case "${d##*/}" in run|tmp|log|cache|'*') continue ;; esac
+      cp -an "$d" /Data/Variable/ 2>/dev/null || true
+   done
+   # The look lives in the home folders: refresh it (apply.sh keeps the user's own settings).
+   if [ -f "$APPLY_LOOK" ]
+   then
+      for h in /Users/*/
+      do
+         h=${h%/}; u=${h##*/}
+         id -u "$u" > /dev/null 2>&1 || continue
+         [ "$(stat -c %U "$h")" = "$u" ] || continue
+         if [ "$u" = root ]
+         then sh "$APPLY_LOOK" "$h" >> "$LOG" 2>&1 || log "apply.sh failed for $h"
+         else su -s /bin/sh "$u" -c 'sh "$0" "$1"' "$APPLY_LOOK" "$h" >> "$LOG" 2>&1 || log "apply.sh failed for $h"
+         fi
+      done
+   fi
+   rm -f "$OVERLAY/first-boot-pending"
+}
+
+mark_good() {
+   local def try left rb vfail
+   mount_boot
+   def=$(env_get slot); [ "$def" = b ] || def=a
+   try=$(env_get try_slot); left=$(env_get tries_left); rb=$(env_get rollback_from)
+   echo "$CUR_VERSION" > "$STATE/slot-$CUR"
+   if [ "$rb" = a ] || [ "$rb" = b ]
+   then
+      # GRUB used up the tries of a new slot and came back here.
+      vfail=$(cat "$STATE/slot-$rb" 2>/dev/null || true)
+      notice rolled-back "failed_slot=$rb" "failed_version=${vfail:-?}" "running_version=$CUR_VERSION"
+      env_write unset rollback_from
+      log "rollback: slot $rb (${vfail:-?}) did not start, running $CUR ($CUR_VERSION)"
+   fi
+   if [ "$try" = "$CUR" ]
+   then
+      env_write set "slot=$CUR" -- unset try_slot tries_left
+      notice updated "running_version=$CUR_VERSION" "previous_version=$(cat "$STATE/slot-$def" 2>/dev/null || true)"
+      log "slot $CUR ($CUR_VERSION) started fine: it is the default now"
+   elif { [ "$try" = a ] || [ "$try" = b ]; } && { [ -z "$left" ] || [ "$left" = 0 ]; }
+   then
+      # The new slot's last try ended here (GRUB fell back, e.g. its kernel did not load).
+      vfail=$(cat "$STATE/slot-$try" 2>/dev/null || true)
+      env_write unset try_slot tries_left
+      notice rolled-back "failed_slot=$try" "failed_version=${vfail:-?}" "running_version=$CUR_VERSION"
+      log "rollback: slot $try (${vfail:-?}) did not start, running $CUR ($CUR_VERSION)"
+   fi
+}
+
+cmd_boot_task() {
+   [ "$(cmdline_arg root)" = gobo ] || return 0
+   need_root; load_layout
+   mkdir -p "$STATE"; chmod 755 "$STATE"
+   if [ "$MODE" = safe ]
+   then log "started without the system changes: no first-start work, slot not marked"; return 0
+   fi
+   [ -f "$OVERLAY/first-boot-pending" ] && first_boot
+   mark_good
+}
+
+### Main #######################################################################
+
+[ $# -gt 0 ] || { usage; exit 1; }
+args=()
+for a in "$@"
+do
+   case "$a" in
+      -y|--yes) ASSUME_YES=1 ;;
+      *) args+=("$a") ;;
+   esac
+done
+set -- "${args[@]}"
+case "${1:-}" in
+   -h|--help) usage ;;
+   --status) cmd_status ;;
+   --rollback) cmd_rollback ;;
+   --reset-system-changes) cmd_reset ;;
+   --boot-task) cmd_boot_task ;;
+   -*) usage >&2; die "unknown option $1" ;;
+   *) [ $# -eq 1 ] || die "give one update file"; cmd_update "$1" ;;
+esac

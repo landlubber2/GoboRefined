@@ -1,11 +1,11 @@
 #!/bin/bash
-# gobo-install — thin installer of GoboRefined, an unofficial spin of GoboLinux 017.01,
+# gobo-install — installer of GoboRefined, an unofficial spin of GoboLinux 017.01,
 # for its live environment.
 #
-# Replaces the upstream graphical Installer for the common case: one disk,
-# whole-disk install. It reuses upstream's ProfileInstall for the file copy and
-# writes a small static grub.cfg itself, so it never calls grub-mkconfig (the
-# step that hangs in the stock Installer).
+# Installs to one whole disk with the A/B layout of 0.8 (GPT): a boot partition with GRUB,
+# two system slots (A gets the system, B stays empty until the first gobo-update) and a data
+# partition for everything that survives updates. The system slot holds only the pristine
+# image; this computer's settings go into the overlay on the data partition.
 #
 # Run as root from the live session:
 #     gobo-install                 # asks questions
@@ -24,15 +24,16 @@ USER_PASSWORD=""
 TIMEZONE=""             # asked; default UTC; a path under /System/Index/share/zoneinfo
 KEYMAP=""               # console keymap; default: same as the X layout if such a map exists, else us
 XKB_LAYOUT=""           # X keyboard layout; asked; default: the live session's
-LANG_NEW="en_US"
 AUTOLOGIN=0             # 1 = log USER_NAME in without a password
 LOGIN_SCREEN=1          # 1 = graphical login screen (LXDM) if the image has it; 0 = text login on tty1
-SWAP_MB=0               # size of a swap file; 0 = none
-EXCLUDE_PROGRAMS="LiveCD"
+SWAP_MB=0               # size of a swap file on the data partition; 0 = none
 CLOCK_MODE="GMT"        # hardware clock: GMT (UTC, the Linux norm) or LocalTime (dual boot with Windows)
 LOOK_DIR=""             # folder with the gobo11 look; default: found automatically
+SOURCE=""               # live image to install from; default: the live session's squashfs
 ASSUME_YES=0
 
+MIN_DISK_BYTES=32000000000   # "32 GB"
+SLOT_MIB=12288               # each system slot: 12 GiB
 DEST=/Mount/GoboLinux
 LOG=/tmp/gobo-install.log
 SPIN_NAME="GoboRefined"  # the spin's name (unofficial; based on GoboLinux 017.01)
@@ -46,18 +47,22 @@ die()  { echo "${c_red}gobo-install: $*${c_off}" >&2; exit 1; }
 run()  { echo "+ $*" >> "$LOG"; "$@" >> "$LOG" 2>&1; }
 in_target() { run chroot "$DEST" "$@"; }
 
+work=""
 cleanup() {
    local rc=$?
    trap - EXIT
-   if mountpoint -q "$DEST" 2>/dev/null
-   then
-      umount -R "$DEST" >> "$LOG" 2>&1 || umount -lR "$DEST" >> "$LOG" 2>&1 || true
-   fi
+   set +e
+   for m in "$DEST" "${work:+$work/boot}" "${work:+$work/data}" "${work:+$work/slot}"
+   do
+      [ -n "$m" ] || continue
+      mountpoint -q "$m" 2>/dev/null && { umount -R "$m" >> "$LOG" 2>&1 || umount -lR "$m" >> "$LOG" 2>&1; }
+   done
+   [ -n "$work" ] && rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null
    [ -L /dev/root ] && [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
    if [ $rc -ne 0 ]
    then
       echo "${c_red}Installation failed. Last lines of $LOG:${c_off}" >&2
-      tail -n 15 "$LOG" >&2 || true
+      tail -n 15 "$LOG" >&2
    fi
    exit $rc
 }
@@ -67,7 +72,7 @@ usage() {
    cat <<EOF
 
 Options:
-  --disk DEV          disk to erase and install to (e.g. /dev/sda)
+  --disk DEV          disk to erase and install to (e.g. /dev/sda; at least 32 GB)
   --hostname NAME     (default: gobolinux)
   --user LOGIN        regular user to create
   --fullname "NAME"
@@ -76,11 +81,36 @@ Options:
   --xkb LAYOUT        X keyboard layout (default: same as the live session)
   --autologin         log the user in without a password
   --text-login        no graphical login screen: log in on the text console, the desktop starts after it
-  --swap MB           create a swap file of this size
+  --swap MB           create a swap file of this size (on the data partition)
   --firmware efi|bios install the bootloader for this firmware (default: what the live session booted with)
   --answers FILE      read settings (shell variables) from FILE
   --yes               do not ask anything; needs --disk and passwords from --answers
+  --source IMAGE      install from this live image (squashfs file or unpacked folder) instead of the
+                      running live session's (for development; allows running outside the live session)
 EOF
+}
+
+part_dev() { # part_dev N -> partition N of $DISK
+   case "$DISK" in
+      *[0-9]) echo "${DISK}p$1" ;;   # nvme0n1 -> nvme0n1p1
+      *)      echo "${DISK}$1" ;;
+   esac
+}
+
+dev_is_mounted() { # also under GoboLinux's /System/Kernel/Devices name
+   local name; name=$(basename "$(readlink -f "$1")")
+   grep -qE "^(/dev|/System/Kernel/Devices)/$name " /proc/mounts && return 0
+   [ -n "$(findmnt -rn -S "$1" 2>/dev/null)" ]
+}
+
+check_part() { # check_part DEV NAME: refuse unless DEV is named NAME in the new table and not in use
+   local dev="$1" name="$2" got
+   [ -b "$dev" ] || die "partition $dev did not appear"
+   got=$(lsblk -no PARTLABEL "$dev" 2>/dev/null | head -n 1)
+   [ "$got" = "$name" ] || die "$dev is named '$got', expected $name; not formatting it"
+   dev_is_mounted "$dev" && die "$dev is mounted; not formatting it"
+   [ "$(findmnt -rn -o SOURCE / | xargs -r readlink -f)" != "$(readlink -f "$dev")" ] || die "$dev is the running root"
+   return 0
 }
 
 ### Arguments ##################################################################
@@ -97,6 +127,7 @@ do
       --xkb)       XKB_LAYOUT="$2"; shift ;;
       --swap)      SWAP_MB="$2"; shift ;;
       --firmware)  FIRMWARE="$2"; shift ;;
+      --source)    SOURCE="$2"; shift ;;
       --answers)   [ -r "$2" ] || die "cannot read answers file $2"; . "$2"; shift ;;
       --autologin) AUTOLOGIN=1 ;;
       --text-login) LOGIN_SCREEN=0 ;;
@@ -110,21 +141,34 @@ done
 ### Checks #####################################################################
 
 [ "$(id -u)" = 0 ] || die "must be run as root"
-grep -q 'Boot=LiveCD' /proc/cmdline || die "this is not the GoboLinux live environment"
-for tool in ProfileInstall AddUser SymlinkProgram grub-install parted mkfs.ext4 wipefs blkid openssl usermod
+if [ -z "$SOURCE" ]
+then
+   grep -q 'Boot=LiveCD' /proc/cmdline || die "this is not the GoboLinux live environment"
+   for f in /Data/Variable/run/initramfs/live/gobolinux-live.squashfs /run/initramfs/live/gobolinux-live.squashfs
+   do [ -f "$f" ] && SOURCE="$f" && break
+   done
+   [ -n "$SOURCE" ] || die "the live image (gobolinux-live.squashfs) was not found"
+fi
+[ -e "$SOURCE" ] || die "no such image: $SOURCE"
+[[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "--swap needs a size in MB"
+for tool in parted mkfs.ext4 mkfs.fat wipefs blkid lsblk findmnt openssl usermod grub-editenv grub-mkimage grub-install mksquashfs
 do command -v $tool > /dev/null || die "required tool not found: $tool"
 done
 
 : > "$LOG"
+self_dir="$(dirname "$(readlink -f "$0")")"
+MAKE_SYSTEM=""
+for f in "$self_dir/gobo-make-system" /Programs/GoboSpin/Current/bin/gobo-make-system
+do [ -z "$MAKE_SYSTEM" ] && [ -x "$f" ] && MAKE_SYSTEM="$f"
+done
+[ -n "$MAKE_SYSTEM" ] || die "gobo-make-system not found (next to gobo-install or in GoboSpin)"
 if [ -z "$LOOK_DIR" ]
 then
    # Next to this script (development), or in the GoboSpin program's share/ (on the spin ISO).
-   self_dir="$(dirname "$(readlink -f "$0")")"
    for d in "$self_dir/gobo11" "$self_dir/../share/gobo11"
    do [ -d "$d" ] && LOOK_DIR="$d" && break
    done
 fi
-self_dir="$(dirname "$(readlink -f "$0")")"
 for f in "$self_dir/../share/spin-version" /Programs/GoboSpin/Current/share/spin-version
 do
    if [ -z "$SPIN_VERSION" ] && [ -f "$f" ]
@@ -132,7 +176,6 @@ do
    fi
 done
 SPIN_LABEL="$SPIN_NAME${SPIN_VERSION:+ $SPIN_VERSION}"
-SPIN_TITLE="$SPIN_LABEL (GoboLinux 017.01)"
 if [ -z "${FIRMWARE:-}" ]
 then [ -d /sys/firmware/efi ] && FIRMWARE=efi || FIRMWARE=bios
 fi
@@ -174,6 +217,9 @@ then
 fi
 [ -b "$DISK" ] || die "$DISK is not a block device"
 [ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "$DISK is not a whole disk"
+disk_bytes=$(lsblk -bdno SIZE "$DISK")
+[ "$disk_bytes" -ge "$MIN_DISK_BYTES" ] ||
+   die "$DISK has $((disk_bytes / 1000000000)) GB; $SPIN_NAME needs a disk of at least 32 GB (two system slots and a data partition)"
 
 ask USER_NAME "Login name for your user" "user"
 [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid login name: $USER_NAME"
@@ -205,9 +251,11 @@ then
    fi
 fi
 
+data_gib=$(( (disk_bytes / 1048576 - 514 - 2 * SLOT_MIB) / 1024 ))
 echo
 echo "About to install $SPIN_LABEL, an unofficial spin of GoboLinux 017.01:"
 echo "  disk      $DISK ($(lsblk -dno SIZE "$DISK" | tr -d ' ')) - EVERYTHING ON IT WILL BE ERASED"
+echo "  layout    two system slots of $((SLOT_MIB / 1024)) GB (A and B, for updates), data partition ${data_gib} GB"
 echo "  firmware  $FIRMWARE"
 echo "  hostname  $HOSTNAME_NEW"
 echo "  user      $USER_NAME ($USER_FULLNAME)$([ "$AUTOLOGIN" = 1 ] && echo ', automatic login')"
@@ -226,6 +274,7 @@ else
    fi
 fi
 echo "  login     $login_method"
+[ "$SWAP_MB" -gt 0 ] && echo "  swap      ${SWAP_MB} MB swap file on the data partition"
 if [ "$ASSUME_YES" != 1 ]
 then
    read -r -p "Type 'yes' to continue: " reply
@@ -233,6 +282,9 @@ then
 fi
 
 trap cleanup EXIT
+t_start=$SECONDS
+work=$(mktemp -d /tmp/gobo-install.XXXXXX)
+mkdir -p "$work/slot" "$work/data" "$work/boot"
 
 ### 1. Partition and format ####################################################
 
@@ -241,65 +293,72 @@ umount -R "$DEST" 2>/dev/null || true
 for part in $(lsblk -lno NAME "$DISK" | tail -n +2)
 do umount "/dev/$part" 2>/dev/null || true
 done
+for part in $(lsblk -lno NAME "$DISK" | tail -n +2)
+do dev_is_mounted "/dev/$part" && die "/dev/$part is still in use (the live medium?); not erasing $DISK"
+done
 run wipefs -a "$DISK"
 
-case "$DISK" in
-   *[0-9]) psep=p ;;   # nvme0n1 -> nvme0n1p1
-   *)      psep="" ;;
-esac
-
-if [ "$FIRMWARE" = efi ]
-then
-   run parted -s "$DISK" mklabel gpt \
-      mkpart ESP fat32 1MiB 513MiB set 1 esp on \
-      mkpart GoboLinux ext4 513MiB 100%
-   ESP_PART="${DISK}${psep}1"
-   ROOT_PART="${DISK}${psep}2"
-else
-   run parted -s "$DISK" mklabel msdos \
-      mkpart primary ext4 1MiB 100% set 1 boot on
-   ESP_PART=""
-   ROOT_PART="${DISK}${psep}1"
-fi
+a_end=$((514 + SLOT_MIB)); b_end=$((a_end + SLOT_MIB))
+run parted -s "$DISK" mklabel gpt \
+   mkpart BIOSBOOT 1MiB 2MiB set 1 bios_grub on \
+   mkpart GOBO_BOOT fat32 2MiB 514MiB set 2 esp on \
+   mkpart GOBO_A ext4 514MiB ${a_end}MiB \
+   mkpart GOBO_B ext4 ${a_end}MiB ${b_end}MiB \
+   mkpart GOBO_DATA ext4 ${b_end}MiB 100%
 run partprobe "$DISK" || true
 run udevadm settle || true
-[ -b "$ROOT_PART" ] || die "partition $ROOT_PART did not appear"
+BOOT_PART=$(part_dev 2); A_PART=$(part_dev 3); B_PART=$(part_dev 4); DATA_PART=$(part_dev 5)
 
-step "Formatting $ROOT_PART"
-run mkfs.ext4 -F -q -L GoboLinux "$ROOT_PART"
-[ -n "$ESP_PART" ] && run mkfs.fat -F 32 -n GOBOESP "$ESP_PART"
+step "Formatting"
+check_part "$BOOT_PART" GOBO_BOOT; run mkfs.fat -F 32 -n GOBO_BOOT "$BOOT_PART"
+check_part "$A_PART" GOBO_A;       run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_A "$A_PART"
+check_part "$B_PART" GOBO_B;       run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_B "$B_PART"
+check_part "$DATA_PART" GOBO_DATA; run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_DATA "$DATA_PART"
 run udevadm settle || true
 
+uuid()     { blkid -s UUID -o value "$1"; }
+partuuid() { blkid -s PARTUUID -o value "$1"; }
+UUID_BOOT=$(uuid "$BOOT_PART"); UUID_A=$(uuid "$A_PART"); UUID_B=$(uuid "$B_PART"); UUID_DATA=$(uuid "$DATA_PART")
+PARTUUID_A=$(partuuid "$A_PART"); PARTUUID_B=$(partuuid "$B_PART")
+for v in UUID_BOOT UUID_A UUID_B UUID_DATA PARTUUID_A PARTUUID_B
+do [ -n "${!v}" ] || die "could not read $v"
+done
+
+### 2. The system: slot A ######################################################
+
+run mount "$A_PART" "$work/slot"
+step "Copying the system into slot A (this takes a few minutes)"
+"$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" || die "the system copy failed"
+grub-editenv "$work/slot/gobo-slot.env" create
+grub-editenv "$work/slot/gobo-slot.env" set "slot_version=${SPIN_VERSION:-unknown}"
+sync
+run mount -o remount,ro "$work/slot"
+
+### 3. The data partition and the overlay ######################################
+
+step "Preparing the data partition"
+run mount "$DATA_PART" "$work/data"
+mkdir -p "$work/data/System-Overlay/install" "$work/data/System-Overlay/upper" \
+         "$work/data/System-Overlay/work" "$work/data/System-Overlay/work-install"
+cp -a "$work/slot/Users" "$work/data/Users"
+cp -a "$work/slot/Data/Variable" "$work/data/Variable"
+echo "${SPIN_VERSION:-unknown}" > "$work/data/System-Overlay/booted-version"
+mkdir -p "$work/data/Variable/lib/gobo-update"
+echo "${SPIN_VERSION:-unknown}" > "$work/data/Variable/lib/gobo-update/slot-a"
+
+# Assemble the new system the way its initramfs will, but with the install layer on top, so
+# everything below lands in System-Overlay/install (settings) or on the data partition (homes).
 mkdir -p "$DEST"
-run mount "$ROOT_PART" "$DEST"
-
-### 2. Copy the system #########################################################
-
-profile=/tmp/gobo-install.profile
-ls /Programs | grep -v -x -F -f <(tr ' ' '\n' <<< "$EXCLUDE_PROGRAMS") > "$profile"
-total=$(wc -l < "$profile")
-
-step "Copying the system ($total programs, this takes a few minutes)"
-echo "+ ProfileInstall" >> "$LOG"
-ProfileInstall --super-user root "$profile" "$DEST" 2>&1 | tee -a "$LOG" | awk -v total="$total" '
-   /Installing program:/ { n++; printf "\r    %d/%d %-30s", n, total, $NF; fflush() }
-   END { print "" }'
-[ -d "$DEST/Programs/Scripts" ] || die "the system copy did not complete"
-# ProfileInstall copies the live /media link and then runs "ln -s Mount/Media media" again,
-# which lands inside it as a dangling /Mount/Media/Media (shown as a broken file in the
-# file manager). USB drives are mounted under /Mount/Media/<label>, so remove it.
-[ -L "$DEST/Mount/Media/Media" ] && rm -f "$DEST/Mount/Media/Media"
-
+run mount -t overlay gobo-install -o "lowerdir=$work/slot,upperdir=$work/data/System-Overlay/install,workdir=$work/data/System-Overlay/work-install,redirect_dir=off,index=off,metacopy=off" "$DEST"
+run mount --bind "$work/data/Users" "$DEST/Users"
+run mount --bind "$work/data/Variable" "$DEST/Data/Variable"
 for d in proc sys dev
 do run mount --rbind /$d "$DEST/$d"
 done
 
-### 3. Configure ###############################################################
+### 4. Configure (this computer's settings, into the overlay) ##################
 
 step "Configuring the system"
-ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
-ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT_PART")
-[ -n "$ROOT_UUID" ] && [ -n "$ROOT_PARTUUID" ] || die "could not read UUIDs of $ROOT_PART"
 
 # Boot options
 bootopts="$DEST/Programs/BootScripts/Settings/BootOptions"
@@ -309,26 +368,17 @@ bootopts="$DEST/Programs/BootScripts/Settings/BootOptions"
    sed -e "s|^KeymapLayout=.*|KeymapLayout=$KEYMAP|" \
        -e "s|^ClockMode=.*|ClockMode=$CLOCK_MODE|" \
        -e "s|^    fuse$|    fuse\n    snd-pcm-oss\n    snd-mixer-oss|" \
-       /Programs/BootScripts/Current/Resources/Defaults/Settings/BootOptions
-} > "$bootopts"
-in_target ln -sfn /Programs/BootScripts/Settings/inittab /System/Settings/inittab
-
-# Wired network: the stock boot script only brings up the loopback device.
-cat >> "$DEST/Programs/BootScripts/Settings/BootScripts/BootUp" <<'BOOTUP'
-
-# Added by gobo-install: get an address on the wired interface (in the
-# background, so a missing cable does not delay the boot).
-Exec "Starting wired network..."               dhcpcd -b -q -h "$HostName" eth0
-BOOTUP
-
+       "$DEST/Programs/BootScripts/Current/Resources/Defaults/Settings/BootOptions"
+} > "$bootopts.new"
+mv "$bootopts.new" "$bootopts"
 echo "127.0.0.1 localhost.localdomain localhost $HOSTNAME_NEW" > "$DEST/System/Settings/hosts"
-printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$DEST/System/Settings/resolv.conf"
-cp "$DEST/System/Settings/resolv.conf" "$DEST/System/Settings/resolv.conf.tail"
 
-# fstab
+# fstab: "/" is put together by the initramfs (system slot + overlay), so it is not listed.
 {
    cat <<EOF
 # Generated by gobo-install on $(date)
+# GoboRefined A/B layout: "/" = slot GOBO_A or GOBO_B (read-only) + overlay on GOBO_DATA,
+# /Users and /Data/Variable from GOBO_DATA - all mounted by the initramfs, not from here.
 
 proc      /proc                  proc      defaults 0 0
 none      /sys                   sysfs     defaults 0 0
@@ -344,19 +394,13 @@ EOF
 /dev      /System/Kernel/Devices none      rbind    0 0
 /proc     /System/Kernel/Status  none      rbind    0 0
 
-# Root partition.
-UUID=$ROOT_UUID / ext4 defaults 1 1
+# Boot partition (GRUB, grubenv): mounted only when needed ("mount /System/Kernel/ESP").
+UUID=$UUID_BOOT /System/Kernel/ESP vfat noauto,umask=0077 0 0
 EOF
-   if [ -n "$ESP_PART" ]
-   then
-      echo
-      echo "# EFI System Partition."
-      echo "UUID=$(blkid -s UUID -o value "$ESP_PART") /System/Kernel/ESP vfat defaults 0 0"
-   fi
    if [ "$SWAP_MB" -gt 0 ]
    then
       echo
-      echo "# Swap file."
+      echo "# Swap file (on the data partition)."
       echo "/Data/Variable/swap none swap pri=1 0 0"
    fi
 } > "$DEST/System/Settings/fstab"
@@ -369,29 +413,16 @@ then
    run mkswap "$DEST/Data/Variable/swap"
 fi
 
-# Locale and timezone
-printf 'export LANG=%s.UTF-8\nexport LC_ALL=%s.UTF-8\n' "$LANG_NEW" "$LANG_NEW" \
-   > "$DEST/Programs/BootScripts/Current/Resources/Environment"
-in_target SymlinkProgram BootScripts
+# Timezone
 in_target ln -sfn "/System/Index/share/zoneinfo/$TIMEZONE" /Programs/Glibc/Settings/localtime
 in_target ln -sfn "/System/Index/share/zoneinfo/$TIMEZONE" /System/Settings/localtime
 
-rm -f "$DEST/etc/mtab"
-ln -s /proc/mounts "$DEST/etc/mtab"
-
-### 4. Users ###################################################################
+### 5. Users ###################################################################
 
 step "Creating users"
 in_target AddUser -f "$USER_FULLNAME" -p '!' --skel "$USER_NAME"
 in_target usermod -aG sys,lpadmin "$USER_NAME"     # sys = may use sudo
-# The desktop's power menu runs these four commands through sudo; allow them
-# without a password for the "sys" group (the group that may use sudo at all).
-sudoers="$DEST/Programs/Sudo/Settings/sudoers"
-if [ -f "$sudoers" ] && ! grep -q 'NOPASSWD: /System/Index/bin/shutdown' "$sudoers"
-then
-   echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown, /System/Index/bin/reboot, /System/Index/bin/poweroff, /System/Index/bin/halt' >> "$sudoers"
-   chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is no longer valid"
-fi
+chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is not valid"
 
 # Passwords are hashed here and written with usermod: chpasswd on 017.01
 # exits 0 without changing anything. (Not logged, so hashes stay out of $LOG.)
@@ -403,7 +434,6 @@ set_password() { # set_password LOGIN PASSWORD
 }
 set_password root "$ROOT_PASSWORD"
 set_password "$USER_NAME" "$USER_PASSWORD"
-chmod 700 "$DEST/Users/root"       # ProfileInstall leaves it at 600
 rm -f "$DEST/Users/$USER_NAME/Desktop/Manager.desktop"
 
 # Desktop session: same .xinitrc as the live session, with the chosen keyboard.
@@ -415,7 +445,8 @@ do
       cp "/Users/root/$rc" "$DEST/Users/$login/$rc"
       in_target chown "$login" "/Users/$login/$rc"
    done
-   sed -i "s|^setxkbmap .*|setxkbmap -model pc104 -layout $XKB_LAYOUT|" "$DEST/Users/$login/.xinitrc"
+   [ -e "$DEST/Users/$login/.xinitrc" ] &&
+      sed -i "s|^setxkbmap .*|setxkbmap -model pc104 -layout $XKB_LAYOUT|" "$DEST/Users/$login/.xinitrc"
 done
 
 # The modern look, if it is available next to the installer.
@@ -495,91 +526,170 @@ EOF
    fi
 fi
 
-### 5. Bootloader ##############################################################
+step "Closing the system"
+sync
+for d in proc sys dev
+do umount -R "$DEST/$d" >> "$LOG" 2>&1 || umount -lR "$DEST/$d" >> "$LOG" 2>&1 || true
+done
+umount "$DEST/Data/Variable" "$DEST/Users" >> "$LOG" 2>&1
+umount "$DEST" >> "$LOG" 2>&1 || die "could not unmount the new system"
+
+### 6. Bootloader (on GOBO_BOOT) ###############################################
 
 step "Installing the GRUB bootloader ($FIRMWARE)"
-kernel_file=$(readlink "$DEST/System/Kernel/Boot/kernel")        # kernel-6.12.16-Gobo
-kernel_version=${kernel_file#kernel-}
-initramfs="initramfs-$kernel_version.img"
-[ -e "$DEST/System/Kernel/Boot/$initramfs" ] || die "no initramfs for kernel $kernel_version"
-
-# grub-probe looks for /dev/root in some setups; point it at the target.
-if [ ! -e /dev/root ]
-then ln -s "$ROOT_PART" /dev/root; made_dev_root=1
-fi
-
-grubdir=/System/Kernel/Boot/grub
+run mount -t vfat "$BOOT_PART" "$work/boot"
+grubdir="$work/boot/grub"
+mkdir -p "$grubdir"
 if [ "$FIRMWARE" = efi ]
 then
-   # grub-install cannot be used here: with GoboLinux's /System/Kernel/Devices
-   # it fails to detect the partition table and produces a loader that cannot
-   # read the disk. Build the loader image directly instead, with a small
-   # embedded script that finds the root filesystem by UUID. It goes to the
-   # removable-media path, which firmware boots without needing a boot entry.
-   mkdir -p "$DEST/System/Kernel/ESP"
-   run mount "$ESP_PART" "$DEST/System/Kernel/ESP"
-   moddir=/Programs/GRUB-EFI/Current/lib/grub/x86_64-efi
-   [ -d "$DEST$moddir" ] || die "GRUB EFI modules not found in $moddir"
-   mkdir -p "$DEST$grubdir/x86_64-efi" "$DEST/System/Kernel/ESP/EFI/BOOT"
-   cp "$DEST$moddir"/*.mod "$DEST$moddir"/*.lst "$DEST$grubdir/x86_64-efi/"
-   cat > "$DEST/tmp/grub-early.cfg" <<EOF
-search --no-floppy --fs-uuid --set=root $ROOT_UUID
-set prefix=(\$root)$grubdir
+   # grub-install cannot be used here: with GoboLinux's /System/Kernel/Devices it fails to
+   # detect the partition table and produces a loader that cannot read the disk. Build the
+   # loader image directly instead, with a small embedded script that finds the boot
+   # partition by UUID. It goes to the removable-media path, which firmware boots without
+   # needing a boot entry.
+   moddir="$work/slot/Programs/GRUB-EFI/Current/lib/grub/x86_64-efi"
+   [ -d "$moddir" ] || die "GRUB EFI modules not found in $moddir"
+   mkdir -p "$grubdir/x86_64-efi" "$work/boot/EFI/BOOT"
+   cp "$moddir"/*.mod "$moddir"/*.lst "$grubdir/x86_64-efi/"
+   cat > "$work/grub-early.cfg" <<EOF
+search --no-floppy --fs-uuid --set=root $UUID_BOOT
+set prefix=(\$root)/grub
 configfile \$prefix/grub.cfg
 EOF
    echo "+ grub-mkimage (efi)" >> "$LOG"
-   chroot "$DEST" grub-mkimage -d "$moddir" -O x86_64-efi \
-      -o /System/Kernel/ESP/EFI/BOOT/BOOTX64.EFI -c /tmp/grub-early.cfg -p "$grubdir" \
-      part_gpt part_msdos fat ext2 normal configfile search search_fs_uuid linux \
-      all_video efi_gop efi_uga gfxterm font echo ls test >> "$LOG" 2>&1 || die "grub-mkimage failed"
-   rm -f "$DEST/tmp/grub-early.cfg"
-   [ -s "$DEST/System/Kernel/ESP/EFI/BOOT/BOOTX64.EFI" ] || die "the EFI loader was not written"
+   grub-mkimage -d "$moddir" -O x86_64-efi \
+      -o "$work/boot/EFI/BOOT/BOOTX64.EFI" -c "$work/grub-early.cfg" -p /grub \
+      part_gpt part_msdos fat ext2 normal configfile search search_fs_uuid linux loadenv \
+      test echo sleep all_video efi_gop efi_uga gfxterm font ls >> "$LOG" 2>&1 || die "grub-mkimage failed"
+   rm -f "$work/grub-early.cfg"
+   [ -s "$work/boot/EFI/BOOT/BOOTX64.EFI" ] || die "the EFI loader was not written"
    # Also register a named boot entry where the firmware allows it (optional).
-   chroot "$DEST" efibootmgr -c -d "$DISK" -p 1 -L GoboLinux -l '\EFI\BOOT\BOOTX64.EFI' >> "$LOG" 2>&1 || true
-   partmod=part_gpt
+   run efibootmgr -c -d "$DISK" -p 2 -L GoboLinux -l '\EFI\BOOT\BOOTX64.EFI' || true
+   video="insmod all_video"
 else
+   # GRUB's core image goes into the BIOS boot partition (1), its files to GOBO_BOOT.
+   if [ ! -e /dev/root ]
+   then ln -s "$A_PART" /dev/root; made_dev_root=1
+   fi
    echo "+ grub-install (bios)" >> "$LOG"
-   timeout 300 chroot "$DEST" grub-install --no-floppy \
-      --modules="normal part_gpt part_msdos multiboot biosdisk nativedisk fat" \
+   timeout 300 grub-install --target=i386-pc --no-floppy --boot-directory="$work/boot" \
+      --modules="part_gpt fat ext2 biosdisk search search_fs_uuid normal configfile loadenv test" \
       "$DISK" >> "$LOG" 2>&1 || die "grub-install failed"
-   partmod=part_msdos
+   [ -f "$grubdir/i386-pc/normal.mod" ] || die "GRUB's BIOS modules were not installed"
+   video="insmod vbe"
 fi
 
-step "Writing $grubdir/grub.cfg"
-cmdline="root=PARTUUID=$ROOT_PARTUUID vt.default_utf8=1 rootwait net.ifnames=0"
-mkdir -p "$DEST$grubdir"
-cat > "$DEST$grubdir/grub.cfg" <<EOF
-# Written by gobo-install. This file is static: edit it by hand, or rerun
-# GenGrubConf if you want GRUB's own generator instead.
+step "Writing the boot menu"
+cat > "$grubdir/grub.cfg" <<EOF
+# Written by gobo-install: GoboRefined A/B boot menu. Static; gobo-update only changes grubenv
+# (slot = the default slot, try_slot/tries_left = a new slot being tried, rollback_from =
+# a new slot whose tries ran out). The gobo_* lines are read by gobo-update as well.
+set gobo_uuid_boot=$UUID_BOOT
+set gobo_uuid_a=$UUID_A
+set gobo_uuid_b=$UUID_B
+set gobo_uuid_data=$UUID_DATA
+set gobo_partuuid_a=$PARTUUID_A
+set gobo_partuuid_b=$PARTUUID_B
+set gobo_args="vt.default_utf8=1 rootwait net.ifnames=0"
 
 set timeout=5
-set default=0
-
-insmod $partmod
+insmod part_gpt
+insmod fat
 insmod ext2
-search --no-floppy --fs-uuid --set=root $ROOT_UUID
+insmod loadenv
+insmod test
+$video
 
-menuentry "$SPIN_TITLE" {
-    linux /System/Kernel/Boot/kernel $cmdline
-    initrd /System/Kernel/Boot/$initramfs
+load_env -f \$prefix/grubenv
+
+# What each slot holds (gobo-slot.env is written last when a slot is filled).
+set ver_a=""
+set ver_b=""
+if search --no-floppy --fs-uuid --set=dev_a \$gobo_uuid_a; then
+   if [ -f (\$dev_a)/gobo-slot.env ]; then
+      set slot_version="?"
+      load_env -f (\$dev_a)/gobo-slot.env slot_version
+      set ver_a="\$slot_version"
+   fi
+fi
+if search --no-floppy --fs-uuid --set=dev_b \$gobo_uuid_b; then
+   if [ -f (\$dev_b)/gobo-slot.env ]; then
+      set slot_version="?"
+      load_env -f (\$dev_b)/gobo-slot.env slot_version
+      set ver_b="\$slot_version"
+   fi
+fi
+
+# Which slot starts: the default, or a new one for at most two tries.
+if [ "\$slot" != b ]; then set slot=a; fi
+set boot_slot=\$slot
+set try_args=""
+if [ "\$try_slot" = a -o "\$try_slot" = b ]; then
+   if [ "\$tries_left" = 2 ]; then
+      set tries_left=1
+      save_env -f \$prefix/grubenv tries_left
+      set boot_slot=\$try_slot
+   elif [ "\$tries_left" = 1 ]; then
+      set tries_left=0
+      save_env -f \$prefix/grubenv tries_left
+      set boot_slot=\$try_slot
+   else
+      set rollback_from=\$try_slot
+      set try_slot=""
+      set tries_left=""
+      save_env -f \$prefix/grubenv rollback_from try_slot tries_left
+   fi
+fi
+if [ "\$boot_slot" = a -a -z "\$ver_a" ]; then set boot_slot=b; fi
+if [ "\$boot_slot" = b -a -z "\$ver_b" ]; then set boot_slot=a; fi
+if [ -n "\$try_slot" -a "\$boot_slot" = "\$try_slot" ]; then
+   # A slot that does not start reboots (instead of waiting at a prompt), so the tries run out.
+   set try_args="rd.shell=0 rd.emergency=reboot panic=10"
+   set fallback="slot-\$slot"
+fi
+set default="slot-\$boot_slot"
+export dev_a dev_b gobo_uuid_a gobo_uuid_b gobo_uuid_data gobo_uuid_boot gobo_args try_slot try_args
+
+function gobo_boot {
+   if [ "\$1" = a ]; then set d=\$dev_a; set u=\$gobo_uuid_a; else set d=\$dev_b; set u=\$gobo_uuid_b; fi
+   set x=""
+   if [ "\$1" = "\$try_slot" ]; then set x="\$try_args"; fi
+   echo "Starting GoboRefined from slot \$1 ..."
+   linux (\$d)/System/Kernel/Boot/kernel root=gobo gobo.slot=\$1 gobo.root=UUID=\$u gobo.data=UUID=\$gobo_uuid_data gobo.boot=UUID=\$gobo_uuid_boot \$gobo_args \$x \$2 \$3
+   initrd (\$d)/System/Kernel/Boot/initramfs
 }
 
-menuentry "$SPIN_TITLE (safe graphics)" {
-    linux /System/Kernel/Boot/kernel $cmdline nomodeset
-    initrd /System/Kernel/Boot/$initramfs
-}
+if [ -n "\$ver_a" ]; then
+   menuentry "GoboRefined \$ver_a (slot A)" --id slot-a { gobo_boot a }
+   menuentry "GoboRefined \$ver_a (slot A) - without my system changes" --id slot-a-pristine { gobo_boot a gobo.system-changes=off }
+   menuentry "GoboRefined \$ver_a (slot A) - safe graphics" --id slot-a-safe { gobo_boot a nomodeset }
+else
+   menuentry "Slot A: empty" --id empty-a { echo "Slot A is empty or incomplete. A system update fills it."; sleep 5 }
+fi
+if [ -n "\$ver_b" ]; then
+   menuentry "GoboRefined \$ver_b (slot B)" --id slot-b { gobo_boot b }
+   menuentry "GoboRefined \$ver_b (slot B) - without my system changes" --id slot-b-pristine { gobo_boot b gobo.system-changes=off }
+   menuentry "GoboRefined \$ver_b (slot B) - safe graphics" --id slot-b-safe { gobo_boot b nomodeset }
+else
+   menuentry "Slot B: empty" --id empty-b { echo "Slot B is empty. The first system update (gobo-update) fills it."; sleep 5 }
+fi
 EOF
+grub-editenv "$grubdir/grubenv" create
+grub-editenv "$grubdir/grubenv" set slot=a
+sync
 
 ### Done #######################################################################
 
 step "Unmounting"
 sync
 trap - EXIT
-umount -R "$DEST" >> "$LOG" 2>&1 || umount -lR "$DEST" >> "$LOG" 2>&1 || true
+umount "$work/boot" "$work/data" "$work/slot" >> "$LOG" 2>&1 || true
+rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null || true
 [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
+echo "+ install time $((SECONDS - t_start)) s" >> "$LOG"
 
 echo
-echo "${c_cyan}$SPIN_NAME is installed on $DISK.${c_off}"
+echo "${c_cyan}$SPIN_NAME is installed on $DISK (system slot A; slot B is filled by the first update).${c_off}"
 if [ "$AUTOLOGIN" = 1 ]
 then echo "Remove the installation medium and reboot. The desktop starts by itself (automatic login as '$USER_NAME')."
 elif [ "$LOGIN_SCREEN" = 1 ]

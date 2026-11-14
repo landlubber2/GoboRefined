@@ -1,0 +1,164 @@
+#!/bin/bash
+# gobo-make-system — build the pristine GoboRefined system tree (what a system slot holds).
+#
+#   gobo-make-system [--log FILE] SOURCE TARGET
+#
+# SOURCE is the live image (gobolinux-live.squashfs) or an unpacked copy of it (a directory);
+# TARGET is an empty directory, normally a freshly formatted slot partition.
+#
+# Used by gobo-install (slot A at install time) and by spin/build-iso.sh (the .update file),
+# so both are made the same way from the same image: upstream ProfileInstall runs inside the
+# image itself (overlay with a throw-away layer in memory), then the spin's generic settings
+# are applied. Nothing machine-specific is written here: gobo-install puts that into the
+# install layer of the overlay (see dracut/90goboab/goboab-root.sh).
+set -euo pipefail
+
+LOG=/dev/null
+EXCLUDE_PROGRAMS="LiveCD"
+
+die() { echo "gobo-make-system: $*" >&2; exit 1; }
+
+while [ $# -gt 0 ]
+do
+   case "$1" in
+      --log) LOG="$2"; shift ;;
+      -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      -*) die "unknown option $1" ;;
+      *) break ;;
+   esac
+   shift
+done
+[ $# -eq 2 ] || die "usage: gobo-make-system [--log FILE] SOURCE TARGET"
+SRC="$1"
+TGT="$(readlink -f "$2")"
+
+[ "$(id -u)" = 0 ] || die "must be run as root"
+[ -e "$SRC" ] || die "no such image: $SRC"
+[ -d "$TGT" ] || die "target $TGT is not a directory"
+[ "$TGT" != / ] || die "refusing / as target"
+if [ -n "$(ls -A "$TGT" | grep -v -x lost+found || true)" ]
+then die "target $TGT is not empty"
+fi
+
+work=$(mktemp -d /tmp/gobo-make-system.XXXXXX)
+mounts=()
+domount() { # domount MOUNTPOINT mount-args...
+   local mp="$1"; shift
+   mount "$@" "$mp" || die "mount $* $mp failed"
+   mounts+=("$mp")
+}
+cleanup() {
+   local i
+   set +e
+   for (( i=${#mounts[@]}-1; i>=0; i-- ))
+   do umount -R "${mounts[i]}" 2>/dev/null || umount -lR "${mounts[i]}" 2>/dev/null
+   done
+   rmdir "$work/lower" "$work/root" "$work/rw" 2>/dev/null
+   rmdir "$work" 2>/dev/null
+}
+trap cleanup EXIT
+
+mkdir -p "$work/lower" "$work/rw" "$work/root"
+if [ -f "$SRC" ]
+then
+   domount "$work/lower" -t squashfs -o ro,loop "$SRC"
+   lower="$work/lower"
+else
+   lower="$(readlink -f "$SRC")"
+fi
+[ -d "$lower/Programs/Installer" ] || die "$SRC does not look like a GoboLinux live image"
+domount "$work/rw" -t tmpfs -o mode=0755,size=2g gobo-make-system
+mkdir -p "$work/rw/upper" "$work/rw/work"
+domount "$work/root" -t overlay -o "lowerdir=$lower,upperdir=$work/rw/upper,workdir=$work/rw/work" gobo-make-system
+R="$work/root"
+mkdir -p "$R/Mount/GoboLinux"
+domount "$R/Mount/GoboLinux" --bind "$TGT"
+for pair in Status:/proc Objects:/sys Devices:/dev
+do
+   domount "$R/System/Kernel/${pair%%:*}" --rbind "${pair#*:}"
+   mount --make-rslave "$R/System/Kernel/${pair%%:*}"
+done
+
+ls "$R/Programs" | grep -v -x -F -f <(tr ' ' '\n' <<< "$EXCLUDE_PROGRAMS") > "$R/gobo-make-system.profile"
+total=$(wc -l < "$R/gobo-make-system.profile")
+echo "+ ProfileInstall ($total programs)" >> "$LOG"
+chroot "$R" ProfileInstall --super-user root /gobo-make-system.profile /Mount/GoboLinux 2>&1 | tee -a "$LOG" |
+   awk -v total="$total" '
+      /Installing program:/ { n++; printf "\r    %d/%d %-30s", n, total, $NF; fflush() }
+      END { print "" }'
+[ -d "$TGT/Programs/Scripts" ] && [ -d "$TGT/System/Index/bin" ] || die "the system copy did not complete"
+
+# The image's own tree is done; leave the build environment before touching the copy.
+cleanup
+set -e
+mounts=()
+trap - EXIT
+T="$TGT"
+tmounts=()
+tcleanup() {
+   local i
+   for (( i=${#tmounts[@]}-1; i>=0; i-- ))
+   do umount -R "${tmounts[i]}" 2>/dev/null || umount -lR "${tmounts[i]}" 2>/dev/null || true
+   done
+}
+trap tcleanup EXIT
+for pair in Status:/proc Objects:/sys Devices:/dev
+do
+   mount --rbind "${pair#*:}" "$T/System/Kernel/${pair%%:*}"
+   mount --make-rslave "$T/System/Kernel/${pair%%:*}"
+   tmounts+=("$T/System/Kernel/${pair%%:*}")
+done
+
+### Generic settings of the spin (the same on every computer) ###############################
+
+# ProfileInstall copies the live /media link and then runs "ln -s Mount/Media media" again,
+# which lands inside it as a dangling /Mount/Media/Media. USB drives are mounted there.
+[ -L "$T/Mount/Media/Media" ] && rm -f "$T/Mount/Media/Media"
+chmod 700 "$T/Users/root"          # ProfileInstall leaves it at 600
+rm -f "$T/System/Settings/mtab"
+ln -s /proc/mounts "$T/System/Settings/mtab"
+
+# Boot scripts: English UTF-8 locale, inittab link, wired network, the A/B boot task.
+printf 'export LANG=en_US.UTF-8\nexport LC_ALL=en_US.UTF-8\n' \
+   > "$T/Programs/BootScripts/Current/Resources/Environment"
+chroot "$T" SymlinkProgram BootScripts >> "$LOG" 2>&1
+ln -sfn /Programs/BootScripts/Settings/inittab "$T/System/Settings/inittab"
+bootup="$T/Programs/BootScripts/Settings/BootScripts/BootUp"
+grep -q 'gobo-update --boot-task' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined: get an address on the wired interface (in the background, so a
+# missing cable does not delay the boot).
+Exec "Starting wired network..."               dhcpcd -b -q -h "$HostName" eth0
+
+# Added by GoboRefined (0.8, A/B system): first start of a new system version (caches, look),
+# and mark this system slot as good now that the boot has come this far (see gobo-update).
+Exec "Checking the system version..."          /System/Index/bin/gobo-update --boot-task
+BOOTUP
+printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
+cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
+
+# The desktop's power menu runs these through sudo; group "sys" (may use sudo at all) may
+# run them without a password.
+sudoers="$T/Programs/Sudo/Settings/sudoers"
+if [ -f "$sudoers" ] && ! grep -q 'NOPASSWD: /System/Index/bin/shutdown' "$sudoers"
+then
+   echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown, /System/Index/bin/reboot, /System/Index/bin/poweroff, /System/Index/bin/halt' >> "$sudoers"
+fi
+chroot "$T" visudo -c > /dev/null || die "the sudo configuration is not valid"
+
+# A/B layout: mount points used by the initramfs, a fixed name for GRUB to load.
+mkdir -p "$T/System/Slot" "$T/System/Data" "$T/System/Kernel/ESP"
+kernel_file=$(readlink "$T/System/Kernel/Boot/kernel")        # kernel-6.12.16-Gobo
+initramfs="initramfs-${kernel_file#kernel-}.img"
+[ -e "$T/System/Kernel/Boot/$initramfs" ] || die "no $initramfs in the image"
+ln -sfn "$initramfs" "$T/System/Kernel/Boot/initramfs"
+initramfs_list=$(lsinitrd "$T/System/Kernel/Boot/$initramfs" 2>/dev/null || true)
+grep -q 'bin/goboab-root' <<< "$initramfs_list" ||
+   die "the image's initramfs has no GoboRefined A/B support (goboab)"
+[ -x "$T/Programs/GoboSpin/Current/bin/gobo-update" ] && [ -L "$T/System/Index/bin/gobo-update" ] ||
+   die "gobo-update is missing in the image"   # (links are absolute: check the program and the link)
+
+tcleanup
+trap - EXIT
+sync
+echo "System tree ready in $T ($(du -sh "$T" 2>/dev/null | cut -f1))"
