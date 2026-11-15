@@ -988,3 +988,11 @@ passwords; booted, LXDM login with the menu-set password.
 - Background loops in the Bash tool are moved to the background after 3 minutes; use Monitor for long waits.
 
 Downloads: none.
+
+## Clean-up 2026-11-15 (owner approved)
+
+Deleted to free disk space (107 GB → 240 GB free on C:): `dist/GoboRefined-0.5.iso`, the `0.8-dev1` and
+`0.8-dev2` ISO and update files, two unreferenced VM disk images, and the snapshots `iso-0.4-installed-efi`,
+`iso-0.5-installed-efi`, `iso-0.6-installed-efi`, `iso-0.8-dev-installed-efi`. Mentions of these further up
+are history. Remaining snapshots: `not even installed`, `iso-build-env-2` … `-6b`, `iso-build-env-8a`,
+`iso-0.8-installed-efi` (current).
