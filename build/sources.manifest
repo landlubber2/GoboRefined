@@ -11,7 +11,8 @@
 # lab build (HANDOFF.md) or taken from the copy kept in the lab's build VM (/Data/Build) on
 # 2026-11-15; the stock ISO's value is the one published on gobolinux.org/downloads.html;
 # the RTL8852AU archive was downloaded fresh (its files are identical to the git checkout of
-# that commit used before).
+# that commit used before). In the from-scratch build of 2026-11-15 (GoboRefined 0.8.3) every
+# file below was downloaded from its URL and matched.
 
 iso             017.01        GoboLinux-017.01-x86_64.iso                  8cd66e3e06c865c375134d099b8b483776ef16edc6d3cd617740c36f6ba53bd3  GoboLinux-mixed      https://gobolinux.neonsys.org/017.01-ISO/GoboLinux-017.01-x86_64.iso
 xorriso         1.5.6.pl02    xorriso-1.5.6.pl02.tar.gz                    786f9f5df9865cc5b0c1fecee3d2c0f5e04cab8c9a859bd1c9c7ccd4964fdae1  GPL-3.0-or-later     https://www.gnu.org/software/xorriso/xorriso-1.5.6.pl02.tar.gz

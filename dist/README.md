@@ -1,3 +1,23 @@
+# GoboRefined 0.8.3 — hotfix for Intel laptop graphics
+
+GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
+
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.3.update` | 2,734,542,848 bytes (2.7 GB) | `75b18965db301a37b632d9f81ecb7d325754934380dd17883dc37204498554ab` |
+| `GoboRefined-0.8.3.iso` | 2,867,658,752 bytes (2.9 GB) | `b621802d745234f1bdd3029b7bbe12ac4cc3c70cebf042ba57a498100428f244` |
+
+- **Fix:** on laptops with Intel graphics (seen on a ThinkPad with Tiger Lake Xe graphics) the desktop showed
+  only a thin strip at the top: the X server picked the old "intel" driver. Intel graphics now use the kernel's
+  modesetting driver (`/System/Settings/X11/xorg.conf.d/20-intel-modesetting.conf`). Other graphics (NVIDIA,
+  AMD, virtual machines) are not affected. Nothing else changed from 0.8.2.
+- This is the first release **built from the repository alone** (`build/build.sh`, see `BUILDING.md`): the stock
+  017.01 ISO, the checkout and pinned downloads, compiled from scratch in a fresh VM.
+- **Update from 0.8.2 (or 0.8.1):** copy `GoboRefined-0.8.3.update` onto the PC, then
+  `sudo gobo-update /path/to/GoboRefined-0.8.3.update` (or Settings > Updates > Install update from file...) and
+  restart. Going back: `sudo gobo-update --rollback`. On an Intel laptop where the desktop is unusable, do it from a
+  text console (Ctrl+Alt+F2, log in, run the command, then `sudo reboot`).
+
 # GoboRefined 0.8.2 — Settings app, Bluetooth and hotspot (experimental), desktop fixes
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).

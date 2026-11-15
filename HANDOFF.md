@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-15. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8 release candidate (A/B system, installer menus)**, `dist/GoboRefined-0.8.iso` + `GoboRefined-0.8.update` (see the last section; 0.5, 0.6 and the 0.8 dev builds kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-15. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8.3** (`dist/GoboRefined-0.8.3.iso` + `.update`), the first release built from the repository alone with `build/build.sh` (see the last section and `BUILDING.md`). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -1336,42 +1336,125 @@ The fresh install was made after it and discarded by restoring it. VM powered of
 Downloads (0.8.2 part 2): dnsmasq 2.91, https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz (sha256
 `f622682848b33677adb2b6ad08264618a2ae0a01da486a93fd8cd91186b3d153`; upstream GPG signature not checked), GPL-2.0 or GPL-3.0.
 
-## Rebuild from the repository alone (build/, BUILDING.md) — IN PROGRESS (2026-11-15)
+## Rebuild from the repository alone + GoboRefined 0.8.3 (2026-11-15)
 
-**Where it stands (host shutdown interrupted the work):**
-- The VM runs (was being shut down cleanly by the main session) from snapshot `not even installed`:
-  stock 017.01 live session, BIOS firmware, the 40 GB disk formatted as ext4 (label BUILD) and used as
-  the build disk. No snapshot `repo-build-proof` was taken yet; the build disk's state is lost unless
-  the VM is snapshotted powered off before restoring anything else. (Check `VBoxManage snapshot ... list`.)
-- On that disk: `/Mount/Build/goborefined` (the repository from `vm/push-repo.sh --tarball`, i.e.
-  `vm/serve/goborefined-src.tgz`), `WORK=/Mount/Build/work`. **Every download verified** against
-  `build/sources.manifest` (all 19 files plus the stock ISO from `/dev/sr0` matched). **All 19 program
-  steps built** (xorriso ... dnsmasq; times: rtl8852au 377 s, copyq 470 s, the rest short).
-- `build.sh image` was running (run4): packing the live image passed, then it stopped at
-  "system update file": `bash: .../work/image/rootfs/Programs/GoboSpin/1.0/bin/gobo-make-system: No such
-  file or directory`. Not yet diagnosed (GoboSpin had been written into the image overlay earlier in the
-  same run; suspect something unmounted the image overlay `work/image/rootfs` between packing and
-  this step — look at the mounts and at build-iso's dracut `umount -R` lines first).
-- Fixed on the way (in the repo): LibFM's `lxshortcut.desktop` edit ran before `make install` (worked
-  in the lab only because the file was left from an older build); build-iso's folder-colour link check
-  resolved an absolute link against the build machine (now `chroot $R test -e`); wget timeouts.
-- **Next command** (after booting the live session, network `dhcpcd -b enp0s3`, clock check,
-  `mount /dev/sda /Mount/Build`): `WORK=/Mount/Build/work bash /Mount/Build/goborefined/build/build.sh`
-  (it skips the finished downloads and program steps and redoes the image). Push a fixed checkout first
-  with `vm/push-repo.sh --tarball` and re-unpack it into `/Mount/Build/goborefined`.
-- Still to do after the build passes: copy the output to the host, power off, snapshot `repo-build-proof`,
-  UEFI install of the new ISO with `--answers`, login, `vm/input-test.sh`, `vm/settings-test.sh`, Settings,
-  `gobo-update --status`, apply the new `.update` to slot B and reboot; compare `/Programs` with 0.8.2;
-  fill in the time/disk numbers (XX) in `BUILDING.md`; finish this section; restore `iso-0.8.2-updated-efi`.
+**Result:** an outsider with the stock 017.01 ISO, a checkout of this repository and internet access can build
+the ISO and update file with one script, `build/build.sh` (see **`BUILDING.md`**). Proven from scratch in the
+VM; the result is release **0.8.3** (hotfix for Intel laptop graphics), signed with the project key.
 
-**What changed (lab flow):** `spin/build-iso.sh` takes every project file from the checkout (`REPO`)
-instead of `http://10.0.2.2:8766/`; `spin/build-programs.sh` reads patches, LXDM files,
-`gobo-wifi-switch` and GoboFiles from `SPIN` and the sources from `SRC` (no downloads) and has new steps
-xorriso, xrandr, inter, jetbrains-mono, papirus, l3afpad (rtl8852au from GitHub's commit archive). The
-`vm/serve/` copies (build-iso.sh, build-programs.sh, patches, ab.tgz, spin-extra.tgz, lxdm-files.tgz,
-gobofiles.tgz, gobo-wifi-switch, software-install.txt, gobo-command-not-found) are gone and the
-"must be identical" rule no longer applies; `welcome.src` moved to `spin/welcome.src`;
-`vm/serve/grub.cfg.in` (duplicate) removed. Lab: `vm/push-repo.sh` copies the checkout (tracked + new
-non-ignored files, uncommitted edits included, nothing committed) into the VM. The project key goes in
-with `GOBO_SIGNING_KEY` (pipe it into the guest's /dev/shm as before). Old snapshots `iso-build-env-*`
-still work with build-iso.sh directly (PROGRAMS_FROM empty = the VM's own /Programs).
+### The build (what `build/build.sh` does)
+
+- Runs as root in the stock 017.01 **live session** (or a stock install) with `WORK` on a scratch disk;
+  checks prerequisites (017.01, x86_64, tools, overlay/squashfs, 30 GB free, clock, RAM) and lists what is missing.
+- Stock ISO: `ISO=`, `WORK/sources/`, the DVD drive, or download from the official mirror; checked against the
+  sha256 published on gobolinux.org (pinned in `build/sources.manifest`).
+- Downloads every third-party file in **`build/sources.manifest`** (19 files: name, version, URL, sha256,
+  licence); a file with another sha256 is refused. Restartable (`wget -c`, timeouts).
+- **Build root:** an overlay over the stock squashfs (mounted read-only from the ISO), entered with `chroot`;
+  the `spin/build-programs.sh` steps run there in order (xorriso, xrandr, inter, jetbrains-mono, papirus,
+  menu-cache, libfm, pcmanfm, pavucontrol, lxrandr, lxdm, udevil, usb-modeswitch, rtl8852au, onlyoffice,
+  copyq, gobofiles, l3afpad, dnsmasq). A step is redone only when its code, sources or repository files change
+  (hash in `WORK/state/`), or with `REBUILD="step ..."`. The machine running the build is not changed.
+- **Image:** a fresh overlay over the stock image; `spin/build-iso.sh` with `REPO`, `PROGRAMS_FROM`, `ISO`,
+  `XORRISO`, `SIGNING_KEY`, `PUBKEY`. Output in `WORK/output/`: ISO, update, `.sha256` files, the public key,
+  the build log.
+- **Signing:** `GOBO_SIGNING_KEY=<private key>` (copied into `/dev/shm` under a random name, deleted after
+  use; only its public half goes into the image), otherwise a key pair generated once in `WORK/keys/`, with a
+  note that such updates only apply to systems installed from that build. `build-iso.sh` refuses a public key
+  file that contains a private key and checks GoboSpin for one.
+
+### Lab flow now (replaces the "vm/serve copies must be identical" rule)
+
+- `spin/build-iso.sh` takes every project file from the checkout; `spin/build-programs.sh` takes patches,
+  LXDM files, `gobo-wifi-switch` and GoboFiles from `SPIN`, sources from `SRC` (no downloads, no lab server).
+  The old `vm/serve/` copies are gone; `welcome.src` moved to `spin/welcome.src`; `spin/programs/*.tgz` are no
+  longer used (still gitignored).
+- `vm/push-repo.sh` copies the checkout as an outsider would get it (tracked + new non-ignored files,
+  uncommitted edits included, nothing committed): over SSH to `/Data/Build/repo`, or `--tarball` to
+  `vm/serve/goborefined-src.tgz`.
+- **Next release build:** restore `repo-build-proof` (powered off; stock live ISO attached, BIOS), boot, Enter
+  twice (language, keymap), type `dhcpcd -b enp0s3; wget -qO- http://10.0.2.2:8766/lab-ssh.sh | sh`; from the
+  host set the guest clock (`date -u -s ...`), `mount /dev/sda /Mount/Build`, `vm/push-repo.sh --tarball` and
+  unpack it over `/Mount/Build/goborefined`, put the project key into RAM
+  (`vm/ssh.sh 'umask 077; cat > /dev/shm/gobo-update-signing.pem' < vm/keys/update-signing.pem`), then
+  `GOBO_SIGNING_KEY=/dev/shm/gobo-update-signing.pem WORK=/Mount/Build/work nohup bash
+  /Mount/Build/goborefined/build/build.sh > /Mount/Build/run.out 2>&1 &` (programs are kept; the image takes
+  about 55 min). Copy the output with `vm/ssh.sh 'cat FILE' > dist/FILE`; delete the key file in /dev/shm.
+- The old snapshots `iso-build-env-*` still work with `build-iso.sh` directly (`PROGRAMS_FROM` empty = the
+  VM's own /Programs) but are no longer needed.
+
+### Problems found by building from nothing (all fixed)
+
+1. LibFM's `lxshortcut.desktop` edit ran before `make install` (worked in the lab only because the file was
+   left from an earlier build).
+2. build-iso's folder-colour link check followed an absolute GoboLinux link on the build machine (now
+   `chroot $R test -e`, like the 0.8.2 checks).
+3. **Image packing read empty files, then the image tree was gone** ("Failed to read file ... creating empty
+   file" for Rust files, then `gobo-make-system: No such file or directory`): the dracut step's
+   `mount --rbind /dev` and `/sys` into the image tree were not made slaves, so their `umount -R` propagated
+   and took mounts below the work folder with them in the live session. Now `--make-rslave` right after each
+   rbind (as gobo-make-system does); the next run packed cleanly, with no read errors.
+4. A download stalled without a timeout (ONLYOFFICE): `--timeout=60 --tries=10`, resumed by `-c`.
+
+### 0.8.3 = 0.8.2 + Intel graphics fix
+
+`spin/ab/20-intel-modesetting.conf` (OutputClass, `MatchDriver "i915"`, `Driver "modesetting"`) is installed
+into GoboSpin `share/gobo-xorg/`; `gobo-make-system` copies it into `/System/Settings/X11/xorg.conf.d/` of every
+system tree (so it is in the pristine slot and arrives with the update); build-iso also puts it into the live
+image. VirtualBox: X uses the `vmware` driver as before ("Matched vmware as autoconfigured driver 0"), X starts,
+the snippet does not match. Not testable here: a real i915 machine.
+
+**Files:** `dist/GoboRefined-0.8.3.iso` (2,867,658,752 bytes, sha256
+`b621802d745234f1bdd3029b7bbe12ac4cc3c70cebf042ba57a498100428f244`), `dist/GoboRefined-0.8.3.update`
+(2,734,542,848 bytes, sha256 `75b18965db301a37b632d9f81ecb7d325754934380dd17883dc37204498554ab`), `.sha256` files
+next to them, checked on the host after copying. Signed with the project key (build output: "project key: yes").
+
+### Measured (VirtualBox, 2 CPUs, 4 GB RAM, stock live session, BIOS)
+
+Downloads a few minutes (all 19 files and the stock ISO in the DVD drive matched their pins); programs about
+20 minutes (rtl8852au 377 s, CopyQ 470 s, dnsmasq 51 s, the rest a minute or two at most); image 55 minutes
+(slower than the lab's 22: the stock image is read through an overlay from the virtual DVD). The 40 GB build
+disk ended with 7.1 GB used (sources 0.4, build root 1.5, output 5.3); the peak while the image is made is
+estimated at about 20 GB (not measured).
+
+### Comparison with the released 0.8.2 (update images, `unsquashfs -l`)
+
+Same 458 programs with the same versions. File lists: nothing missing; 11 paths more in 0.8.3: the Intel
+snippet (GoboSpin `share/gobo-xorg/...`, its Index link, `System/Settings/X11/xorg.conf.d/...`),
+`Resources/Description` for L3afpad and XRandR-Tool (the lab had built them by hand without one), and
+`xkeystone` (installed by xrandr's own `make install`; the lab's 0.1-era copy had only `xrandr`). The diff is
+kept as `work/logs/files-vs-0.8.2.diff` on the build disk in snapshot `repo-build-proof`.
+
+### Tests
+
+| Test | Result |
+|---|---|
+| UEFI `--answers --yes` install of the new ISO (40 GB disk) | pass; greeter, lab login, desktop; `gobo-update --status` slot A 0.8.3 |
+| `vm/settings-test.sh` (fresh install) | 35/35 (+ removal) |
+| Settings opens (as lab) | pass (window Gobo-settings, Appearance page) |
+| `.update` into slot B + restart (fresh install) | pass, 46 s; "slot b (0.8.3) started fine" |
+| `vm/input-test.sh` (fresh install) | not completed: the runs were disturbed by lab artefacts (keyboard on tty2, the ISO's automount notification, VirtualBox keystrokes still queued after a killed run, which sent Ctrl+Alt+Del to a text console and rebooted the VM) |
+| **Release test**: `iso-0.8.2-updated-efi` + `gobo-update` with the 0.8.3 file | pass, 43 s into slot A; signature accepted (project key) |
+| restart -> version | slot A 0.8.3 running/default, spin-version 0.8.3, snippet present |
+| `vm/input-test.sh` (updated system) | 32/50 in the full run; all 18 failures follow from `menu-click-gtk` opening Settings (its click on the zenity window lands on the open menu's "Settings" entry); the other 17 scenarios re-run with Settings closed: 22/22 checks pass. `menu-click-gtk` alone fails **the same way on 0.8.2** after the rollback, so it is a test-geometry artefact of this desktop state, not a 0.8.3 change |
+| `vm/settings-test.sh` (updated system) | 35/35 after removing a leftover group `tester` (see findings) |
+| `--rollback` -> 0.8.2 -> `--rollback` -> 0.8.3 | pass (`--status` after each boot; snippet absent in 0.8.2, present in 0.8.3) |
+
+### Findings, not fixed
+
+- **`gobo-settings-helper remove-user` leaves the user's group behind** (017.01's `userdel` does not remove
+  it): adding the same login again fails with "the name ... is already used by a group". Found as group
+  `tester` (gid 1004) left over in the 0.8.2 snapshot; reproduced on 0.8.3. Fix idea: `groupdel` the user's
+  private group when nobody else is in it.
+- `input-test.sh menu-click-gtk` depends on where zenity is placed relative to the open menu.
+- `gobo-settings PAGE` on a first start opened Appearance, not the page (not looked into).
+- Lab: after killing `vm/input-test.sh`, VirtualBox may still type its queued keys for a while; wait before
+  typing logins, and screenshot first. One such queued key sequence put a lab test password on the tty2
+  screen (lab-only credential, screenshots deleted).
+
+### VM state
+
+Snapshots added: `repo-build-wip` (taken by the coordinator after a hard power-off mid-build),
+**`repo-build-proof`** (the finished build environment, powered off), **`iso-0.8.3-updated-efi`** (current,
+powered off: the 0.8.2 install updated to 0.8.3; slot A 0.8.3, slot B 0.8.2). The fresh UEFI install of 0.8.3
+was made on top of `repo-build-proof` (firmware switched to EFI) and discarded by the restore. Nothing deleted.

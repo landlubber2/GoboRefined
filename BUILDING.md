@@ -10,17 +10,20 @@ checked against a pinned sha256 (`build/sources.manifest`). One script does the 
 - A virtual machine (VirtualBox, QEMU/KVM, ...) or a spare PC, x86_64.
 - **RAM:** 4 GB (2 GB is the minimum the script accepts).
 - **Disk:** an empty disk of **40 GB** for the build (it needs 30 GB free at the first run).
-  The from-scratch build of 2026-11-15 used about XX GB of it.
-- **Internet access** for the downloads (about 3 GB including the stock ISO, 0.6 GB without it).
-- **Time:** about XX minutes on 2 virtual CPUs (most of it compiling CopyQ, LibFM/PCManFM and LXDM,
-  and packing the image twice).
+  The from-scratch build of 2026-11-15 ended with 7.1 GB used (sources 0.4 GB, build root 1.5 GB,
+  output 5.3 GB); while the image is made, the unpacked system tree (8.1 GB) and the packed images exist
+  at the same time, so expect a peak of roughly 20 GB (estimated from those sizes, not measured).
+- **Internet access** for the downloads (about 2.8 GB including the stock ISO, 0.4 GB without it).
+- **Time:** about 80 minutes on 2 virtual CPUs and 4 GB RAM in VirtualBox (2026-11-15): downloads a few
+  minutes, compiling the programs about 20 minutes (CopyQ 8 min, the Wi-Fi driver 6 min), making the image
+  about 55 minutes (packing the live image and the update file, reading the stock image from the DVD).
 - The stock ISO **GoboLinux-017.01-x86_64.iso** (2.4 GB). If you do not have it, the script
   downloads it from the official mirror and checks it.
 
 ## Steps
 
 1. **Create the VM**: 4 GB RAM, 2 CPUs, NAT network, an empty 40 GB disk, the stock
-   `GoboLinux-017.01-x86_64.iso` in the DVD drive (BIOS or UEFI both work). Download the ISO from
+   `GoboLinux-017.01-x86_64.iso` in the DVD drive (the tested build ran in BIOS mode). Download the ISO from
    https://gobolinux.org/downloads.html; its sha256 must be
    `8cd66e3e06c865c375134d099b8b483776ef16edc6d3cd617740c36f6ba53bd3`.
 

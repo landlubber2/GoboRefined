@@ -270,3 +270,10 @@ Part 2 (needs hardware the VM lacks — shipped as experimental until the owner 
 8. Wi-Fi hotspot in the Settings app. **Done as experimental page (wpa_supplicant AP mode + Dnsmasq 2.91 + iptables NAT; tested with virtual radios mac80211_hwsim; real adapter untested).**
 
 Then: build 0.8.2 (ISO + update file), update test 0.8.1 → 0.8.2 in the VM. **Done (HANDOFF, 0.8.2 part 2). Also: new users get no old update notice, power menu starts on "Lock", Settings opens only one window; GTK file-chooser side pane (proc, sys, ESP...) still not fixed.**
+
+### 0.8.3 — hotfix (2026-11-15)
+
+Intel laptop graphics (ThinkPad, Tiger Lake Xe): Xorg picked the old "intel" driver and showed only a strip of
+the desktop; Intel graphics now use the modesetting driver (`spin/ab/20-intel-modesetting.conf`). First
+release built from the repository alone (`build/build.sh`). Built, update-tested from 0.8.2 in the VM; real
+Intel laptop to confirm.
