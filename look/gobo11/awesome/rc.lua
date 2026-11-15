@@ -11,7 +11,7 @@ local naughty = require("naughty")
 local menubar = require("menubar")
 local GLib = require("lgi").GLib
 
-local gobonet = require("gobo.awesome.gobonet")
+local gobonet = require("spin.gobonet_menu")   -- 0.8.1: patched copy of GoboNet's menu
 local docking = require("gobo.awesome.docking")
 -- The spin's own modules (in ~/.config/awesome/spin/)
 local popups = require("spin.popups")   -- first: it filters every keyboard grab (Win+Escape)
@@ -498,6 +498,19 @@ desktop_icons.start({ menu = function() mymainmenu:toggle() end })   -- same as 
 -- 0.8: "System updated" / "System update undone" notice after a system update (spin/updates.lua)
 require("spin.updates").start()
 
+-- 0.8.1: after the light/dark switch (spin/power.lua) show the desktop that was shown before
+do
+   local path = (os.getenv("HOME") or "") .. "/.cache/awesome-restart-desktop"
+   local f = io.open(path, "r")
+   if f then
+      local i = tonumber(f:read("*l") or "")
+      f:close()
+      os.remove(path)
+      local t = i and screen.primary.tags[i]
+      if t then gears.timer.delayed_call(function() t:view_only() end) end
+   end
+end
+
 -- Mouse bindings
 root.buttons(awful.util.table.join(
    awful.button({}, 1, function() popups.close_all() end),
@@ -506,6 +519,11 @@ root.buttons(awful.util.table.join(
    --awful.button({}, 5, awful.tag.viewprev)
 ))
 
+
+-- 0.8.1: the screenshot keys also work while a menu or popup holds the keyboard
+-- (spin/popups.lua closes it first)
+popups.pass({}, "Print", function() screenshot.take("screen") end)
+popups.pass({ modkey, "Shift" }, "s", function() screenshot.show() end)
 
 -- Key bindings
 local globalkeys = awful.util.table.join(
@@ -946,6 +964,46 @@ local clientbuttons = awful.util.table.join(
          awful.mouse.client.resize(c)
       end)
 )
+
+-- 0.8.1: a tap on the Win key alone (press and release, nothing else in between, under
+-- 0.6 s) opens the dots menu; holding Win for a shortcut does not.
+-- Binding Super_L makes X send every key to that grab (the root window) while Win is held,
+-- so the window keys with Win (Win+F, Win+arrows, ...) would no longer reach the window's
+-- own bindings: they are mirrored as global keys acting on the focused window.
+local function tap_used() end
+do
+   local GLib = require("lgi").GLib
+   local tap = { down = false, used = false, t = 0 }
+   local function now() return GLib.get_monotonic_time() / 1e6 end
+   tap_used = function() tap.used = true end
+   for _, k in ipairs(globalkeys) do k:connect_signal("press", tap_used) end
+   for _, k in ipairs(clientkeys) do k:connect_signal("press", tap_used) end
+   local extra = {}
+   for _, k in ipairs(clientkeys) do
+      local mods = k.modifiers or {}
+      if gears.table.hasitem(mods, modkey) and not gears.table.hasitem(mods, "Lock")
+         and not gears.table.hasitem(mods, "Mod2") then
+         for _, g in ipairs(awful.key(mods, k.key, function()
+            local c = client.focus
+            if c then k:emit_signal("press", c) end
+         end)) do table.insert(extra, g) end
+      end
+   end
+   for _, g in ipairs(awful.key({}, "Super_L", function()
+      if not tap.down then tap.down, tap.used, tap.t = true, false, now() end
+   end)) do table.insert(extra, g) end
+   for _, g in ipairs(awful.key({ modkey }, "Super_L", nil, function()
+      local open = tap.down and not tap.used and now() - tap.t < 0.6
+      tap.down = false
+      if open then mymainmenu:toggle() end
+   end)) do table.insert(extra, g) end
+   globalkeys = awful.util.table.join(globalkeys, extra)
+   spin_debug.mainmenu = mymainmenu   -- lab input test (win-tap scenarios)
+   -- a click with Win held also counts (the click still reaches the window)
+   for _, b in ipairs({ 1, 2, 3 }) do
+      clientbuttons = awful.util.table.join(clientbuttons, awful.button({ modkey }, b, tap_used))
+   end
+end
 
 -- Set keys
 root.keys(globalkeys)

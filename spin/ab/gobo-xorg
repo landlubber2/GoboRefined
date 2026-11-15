@@ -1,0 +1,9 @@
+#!/bin/sh
+# gobo-xorg (GoboRefined 0.8.1): /System/Index/bin/X points here (gobo-make-system), so the
+# login screen starts the X server with gobo-udev-dev.so preloaded. Without it Xorg never sees
+# devices plugged in after it started (USB mouse or keyboard pulled out and plugged in again
+# stayed dead until a restart): see gobo-udev-dev.c. Started as root by LXDM, the preload
+# applies; for a user's own startx (setuid Xorg) the loader ignores it.
+LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD }/System/Index/lib/gobo-udev-dev.so"
+export LD_PRELOAD
+exec /System/Index/bin/Xorg "$@"

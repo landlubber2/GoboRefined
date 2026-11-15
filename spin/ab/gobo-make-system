@@ -146,6 +146,36 @@ then
 fi
 chroot "$T" visudo -c > /dev/null || die "the sudo configuration is not valid"
 
+# 0.8.1: password hashes for root and group shadow only (stock: 644). gobo-update's boot task
+# does the same on every start for systems installed earlier.
+for f in shadow gshadow
+do
+   if [ -f "$T/System/Settings/$f" ]
+   then
+      chroot "$T" chgrp shadow "/System/Settings/$f" 2>> "$LOG" || true
+      chmod 640 "$T/System/Settings/$f"
+   fi
+done
+
+# 0.8.1: the X server starts through gobo-xorg (preloads gobo-udev-dev.so) so it sees input
+# devices plugged in later (GoboSpin; without it a re-plugged USB mouse stayed dead).
+if [ -x "$T/Programs/GoboSpin/Current/bin/gobo-xorg" ] && [ -e "$T/Programs/GoboSpin/Current/lib/gobo-udev-dev.so" ]
+then
+   ln -sfn /Programs/GoboSpin/Current/bin/gobo-xorg "$T/System/Index/bin/X"
+   [ -e "$T/System/Index/lib/gobo-udev-dev.so" ] ||
+      ln -sfn /Programs/GoboSpin/Current/lib/gobo-udev-dev.so "$T/System/Index/lib/gobo-udev-dev.so"
+fi
+
+# 0.8.1: short press of the power button (acpid had no rule at all): power menu on the
+# desktop, clean shutdown at the login screen or a text console (GoboSpin's gobo-power-button).
+acpi_events="$T/Programs/Acpid/Settings/acpi/events"
+if [ -d "$T/Programs/Acpid/Settings/acpi" ]
+then
+   mkdir -p "$acpi_events"
+   printf '# GoboRefined 0.8.1: power button\nevent=button[ /]power\naction=/System/Index/bin/gobo-power-button\n' \
+      > "$acpi_events/gobo-power-button"
+fi
+
 # A/B layout: mount points used by the initramfs, a fixed name for GRUB to load.
 mkdir -p "$T/System/Slot" "$T/System/Data" "$T/System/Kernel/ESP"
 kernel_file=$(readlink "$T/System/Kernel/Boot/kernel")        # kernel-6.12.16-Gobo

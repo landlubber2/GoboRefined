@@ -44,6 +44,14 @@ done
 if [ ! -e "$home/.config/mimeapps.list" ]
 then cp "$here/xdg/mimeapps.list" "$home/.config/mimeapps.list"
 fi
+# 0.8.1: plain text opens in L3afpad, also in lists made before 0.8.1 (unless the user chose one)
+if ! grep -q '^text/plain=' "$home/.config/mimeapps.list"
+then
+   if grep -q '^\[Default Applications\]' "$home/.config/mimeapps.list"
+   then sed -i 's|^\[Default Applications\]$|&\ntext/plain=l3afpad.desktop|' "$home/.config/mimeapps.list"
+   else printf '[Default Applications]\ntext/plain=l3afpad.desktop\n' >> "$home/.config/mimeapps.list"
+   fi
+fi
 # File manager side pane: "USB drives" is a fixed entry of the spin's LibFM since 0.6 (last of
 # the places, drive icon, mounted sticks listed below it). 0.5 wrote it as a bookmark: remove
 # that line, keep the user's own bookmarks.
@@ -91,10 +99,19 @@ XDG_PUBLICSHARE_DIR="$HOME/"
 DIRS
 fi
 # Keep the keyboard layout the user already had unless one is given.
+# 0.8.1: layout "system" (the skeleton, i.e. users added after the install) = the layout chosen
+# at install time, read at login by system_layout in the xinitrc.
 if [ -z "$layout" ] && [ -e "$home/.xinitrc" ]
-then layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' "$home/.xinitrc" | head -n 1)
+then
+   if grep -q '^setxkbmap .*system_layout' "$home/.xinitrc"
+   then layout=system
+   else layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' "$home/.xinitrc" | head -n 1)
+   fi
 fi
-sed "s|^setxkbmap .*|setxkbmap -model pc104 -layout ${layout:-us}|" "$here/xinitrc" > "$home/.xinitrc"
+if [ "$layout" = system ]
+then sed 's|^setxkbmap .*|setxkbmap -model pc104 -layout "$(system_layout)"|' "$here/xinitrc" > "$home/.xinitrc"
+else sed "s|^setxkbmap .*|setxkbmap -model pc104 -layout ${layout:-us}|" "$here/xinitrc" > "$home/.xinitrc"
+fi
 
 touch "$home/.Xresources"
 # Replace an older copy of the gobo11 block (it runs from its first line to

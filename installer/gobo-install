@@ -772,6 +772,22 @@ fi
 # not on the image).
 inittab="$DEST/Programs/BootScripts/Settings/inittab"
 lxdm_conf="$DEST/Programs/LXDM/Settings/lxdm/lxdm.conf"
+
+# The keyboard layout for the X server: the login screen runs before the user's own setting
+# applies, and users added later read it at login (system_layout in the look's xinitrc, 0.8.1;
+# written for text login too since 0.8.1).
+if [ "$XKB_LAYOUT" != us ]
+then
+   mkdir -p "$DEST/System/Settings/X11/xorg.conf.d"
+   cat > "$DEST/System/Settings/X11/xorg.conf.d/00-keyboard.conf" <<EOF
+# Written by gobo-install: keyboard layout for the login screen and for users added later.
+Section "InputClass"
+   Identifier "keyboard"
+   MatchIsKeyboard "on"
+   Option "XkbLayout" "$XKB_LAYOUT"
+EndSection
+EOF
+fi
 [ -x "$DEST/System/Index/sbin/lxdm-binary" ] && [ -f "$lxdm_conf" ] || LOGIN_SCREEN=0
 
 if [ "$LOGIN_SCREEN" = 1 ]
@@ -782,19 +798,6 @@ then
 # Added by gobo-install: graphical login screen (LXDM) on tty7.
 x:2345:respawn:/System/Index/sbin/lxdm-binary
 EOF
-   # The login screen runs before the user's own keyboard setting applies.
-   if [ "$XKB_LAYOUT" != us ]
-   then
-      mkdir -p "$DEST/System/Settings/X11/xorg.conf.d"
-      cat > "$DEST/System/Settings/X11/xorg.conf.d/00-keyboard.conf" <<EOF
-# Written by gobo-install: keyboard layout for the login screen.
-Section "InputClass"
-   Identifier "keyboard"
-   MatchIsKeyboard "on"
-   Option "XkbLayout" "$XKB_LAYOUT"
-EndSection
-EOF
-   fi
    if [ "$AUTOLOGIN" = 1 ]
    then
       sed -i "s|^# *autologin=.*|autologin=$USER_NAME|" "$lxdm_conf"

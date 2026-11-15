@@ -157,7 +157,11 @@ local function row_widget(i, t)
    local icons = wibox.layout.fixed.horizontal()
    icons.spacing = 4
    local names = {}
-   local cls = t and t:clients() or {}
+   local cls = {}
+   -- 0.8.1: not the desktop window (PCManFM --desktop, listed as "Pcmanfm" on every desktop)
+   for _, c in ipairs(t and t:clients() or {}) do
+      if c.type ~= "desktop" then table.insert(cls, c) end
+   end
    for k, c in ipairs(cls) do
       if k <= 5 then
          icons:add(wibox.widget { image = client_icon(c), forced_width = 20, forced_height = 20,

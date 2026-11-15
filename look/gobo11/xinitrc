@@ -1,3 +1,9 @@
+# 0.8.1: the keyboard layout chosen at install time (gobo-install writes it for the X server);
+# used by users added later (their line below says "$(system_layout)").
+system_layout() {
+   sed -n 's/.*"XkbLayout" *"\([a-z,_]*\)".*/\1/p' /System/Settings/X11/xorg.conf.d/00-keyboard.conf 2>/dev/null |
+      head -n 1 | grep . || echo us
+}
 setxkbmap -model pc104 -layout us
 numlockx &
 xsetroot -solid '#0b1630' -cursor_name left_ptr

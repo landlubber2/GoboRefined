@@ -19,7 +19,7 @@ pause() { sleep "${1:-1}"; }
 
 # key chords as PS/2 set-1 scancodes: press all in order, release in reverse order
 declare -A SC=( [win]="e0 5b" [ctrl]="1d" [alt]="38" [shift]="2a" [esc]="01" [tab]="0f"
-                [enter]="1c" [del]="e0 53" [down]="e0 50" [r]="13" [s]="1f" [v]="2f" [p]="19" )
+                [enter]="1c" [del]="e0 53" [print]="e0 37" [down]="e0 50" [up]="e0 48" [r]="13" [s]="1f" [v]="2f" [p]="19" )
 rel() { local out=""; for b in $1; do if [ "$b" = e0 ]; then out="$out e0"; else out="$out $(printf '%02x' $((0x$b | 0x80)))"; fi; done; echo $out; }
 keys() {   # keys win shift tab
    local down="" up=""
@@ -84,6 +84,24 @@ steps() {
 }
 run() { local name=$1; shift; steps "$@"; check "$name"; }
 
+# screenshots saved by the look (0.8.1 scenarios): count before and after
+shots() { S "ls /Users/${LAB_LOGIN:-lab}/Pictures/Screenshots 2>/dev/null | wc -l" | tr -d ' '; }
+shots_before() { SHOTS0=$(shots); }
+shots_after() {   # shots_after NAME
+   sleep 2
+   if [ "$(shots)" -gt "${SHOTS0:-0}" ]
+   then echo "PASS $1"; pass=$((pass + 1))
+   else echo "FAIL $1"; fail=$((fail + 1)); failed="$failed $1"
+   fi
+}
+
+menu_open() {   # menu_open NAME true|false : is the dots menu (category menu) open?
+   if L 'return tostring(spin_debug.mainmenu ~= nil and spin_debug.mainmenu.wibox.visible)' | grep -q "$2"
+   then echo "PASS $1"; pass=$((pass + 1))
+   else echo "FAIL $1"; fail=$((fail + 1)); failed="$failed $1"
+   fi
+}
+
 scenario() {
    case $1 in
    plain)               run plain 'return 1' ;;
@@ -124,6 +142,30 @@ scenario() {
    two-popups)          run two-popups 'return T.click_pos("start")' 'return T.click_pos("net")' '@k ctrl alt del' 'T.click_desktop() return 1' ;;
    panic-in-menu)       # Win+Escape while the category menu holds the keyboard
                         run panic-in-menu 'return T.click_pos("start")' '@k win esc' ;;
+   shot-print-in-menu)  # 0.8.1: Print while the category menu holds the keyboard: menu closes, screenshot saved
+                        shots_before
+                        run shot-print-in-menu 'return T.click_pos("start")' '@k print'
+                        shots_after shot-print-in-menu-saved ;;
+   shot-card-in-menu)   # 0.8.1: Win+Shift+S while the category menu is open: the card opens ("s" = whole screen)
+                        shots_before
+                        run shot-card-in-menu 'return T.click_pos("start")' '@k win shift s' '@k s'
+                        shots_after shot-card-in-menu-saved ;;
+   win-tap)             # 0.8.1: Win tapped alone opens the dots menu; Escape closes it
+                        steps '@k win'
+                        menu_open win-tap-opens true
+                        run win-tap '@k esc' ;;
+   win-hold)            # 0.8.1: Win held for a shortcut (Win+Up on the terminal) does not open the menu,
+                        # and the window key still works while Win is bound
+                        L 'return T.click_client("inputtest")' > /dev/null; pause 1
+                        local g0 g1
+                        g0=$(L 'local g = client.focus:geometry() return g.width .. "x" .. g.height')
+                        steps '@k win up'
+                        g1=$(L 'local g = client.focus:geometry() return g.width .. "x" .. g.height')
+                        menu_open win-hold-no-menu false
+                        if [ "$g0" != "$g1" ]; then echo "PASS win-hold-window-key"; pass=$((pass + 1))
+                        else echo "FAIL win-hold-window-key ($g0)"; fail=$((fail + 1)); failed="$failed win-hold-window-key"; fi
+                        steps '@k win up'   # back
+                        check win-hold ;;
    *) echo "unknown scenario $1"; return 1 ;;
    esac
 }
@@ -132,7 +174,7 @@ ALL="plain menu-click-client menu-click-desktop menu-click-gtk menu-click-taskba
      menu-rightclick-desktop search-click-out search-click-client search-escape search-types search-from-menu
      search-twice search-power power-click-out power-escape tasklist-menu net-menu usb-menu window-menu
      hotkeys-click hotkeys-key alttab alttab-twice desktops desktops-escape shot-menu shot-escape clip-menu
-     two-popups panic-in-menu"
+     two-popups panic-in-menu shot-print-in-menu shot-card-in-menu win-tap win-hold"
 
 setup
 for s in ${*:-$ALL}; do scenario "$s"; done

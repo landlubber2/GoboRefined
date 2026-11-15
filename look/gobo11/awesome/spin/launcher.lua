@@ -31,6 +31,11 @@ local function load_apps()
             table.insert(list, { name = e.name, cmdline = e.cmdline, icon = e.icon })
          end
       end
+      -- 0.8.1: the display settings (LXRandR calls itself "Monitor Settings") under the name
+      -- the dots menu uses
+      if not seen["Displays"] then
+         table.insert(list, { name = "Displays", cmdline = "lxrandr", icon = nil })
+      end
       table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
       apps = list
    end)

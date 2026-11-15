@@ -996,3 +996,100 @@ Deleted to free disk space (107 GB → 240 GB free on C:): `dist/GoboRefined-0.5
 `iso-0.5-installed-efi`, `iso-0.6-installed-efi`, `iso-0.8-dev-installed-efi`. Mentions of these further up
 are history. Remaining snapshots: `not even installed`, `iso-build-env-2` … `-6b`, `iso-build-env-8a`,
 `iso-0.8-installed-efi` (current).
+
+## 0.8.1: first real update (bug fixes from the real-PC test) — built and update-tested (2026-11-15)
+
+Work notes, item by item (numbers = the task list; roadmap numbers in brackets).
+
+- **1 Wi-Fi menu [1] — done (desktop side), real PC to confirm.** The look now carries a patched copy of GoboNet's
+  menu widget, `look/gobo11/awesome/spin/gobonet_menu.lua` (rc.lua requires it instead of `gobo.awesome.gobonet`).
+  Interfaces are read from sysfs whenever needed instead of once at desktop start; `hotplug_check()` (called by
+  `spin/network.lua` every 4 s) notices a Wi-Fi interface appearing/disappearing, brings it up
+  (`gobonet_backend interface-up`, setuid) and starts a background full scan; an open menu closes on a change; Rescan
+  uses the current interface. With no adapter the menu says "No Wi-Fi adapter found". Test: `vm/net-test.sh`
+  (fake sysfs tree + stub backend; plug in wlan0, unplug, plug in as wlan1, Rescan, cable in/out): 18/18.
+- **2 Wired entry without a cable [7] — done.** `carrier` = 0 -> "Wired network (eth0): no cable", not clickable
+  (unknown carrier, i.e. interface down -> entry as before). Checked: VirtualBox `setlinkstate1 off` -> carrier 0.
+- **3 Screenshot while a menu is open [8] — done.** `popups.pass(mods, key, action)` in `spin/popups.lua`: registered
+  keys get through every keyboard grab; the filter closes all popups, releases the grabs, then runs the action. rc.lua
+  registers Print and Win+Shift+S. New input-test scenarios `shot-print-in-menu`, `shot-card-in-menu` (screenshot
+  file counted).
+- **4 Win tap opens the dots menu [6] — done.** rc.lua binds Super_L: press, then release under 0.6 s with no other
+  binding fired and no Win+click in between -> `mymainmenu:toggle()`. Finding: with Super_L bound, X delivers every
+  key to that root grab while Win is held, so the window keys with Win (Win+F, Win+arrows ...) stopped working
+  (measured: Win+Up did nothing). They are now mirrored as global keys acting on the focused window. Side effect: an
+  unbound Win+key combination no longer reaches the application. Scenarios `win-tap`, `win-hold` (Win+Up still
+  resizes, no menu). `vm/input-test.sh`: 41/41 (32 old + 9 new checks).
+- **6 Power button [5] — desktop part tested.** Stock acpid had no rule at all (`/System/Settings/acpi/events`
+  empty). New `spin/ab/gobo-power-button` (GoboSpin bin) + rule `events/gobo-power-button` written by
+  `gobo-make-system`. Desktop on the foreground VT -> `awesome-client` as that user opens the power menu (second
+  press closes it); otherwise `shutdown -h now`. acpid reports one press twice (netlink + input layer): the script
+  acts once per second (flock + time stamp in /var/run). VM: `VBoxManage controlvm ... acpipowerbutton` -> power
+  menu (screenshot checked).
+- **5 USB mouse dead after re-plug [4] — cause found and fixed (VM-simulated).** Xorg's udev backend never got
+  hot-plug events: Eudev's libudev subscribes a "udev" monitor only if `/dev` is a devtmpfs mount, checked with
+  `name_to_handle_at("/dev", flags 0)`, which does not follow GoboLinux's `/dev -> /System/Kernel/Devices` link
+  (strace: the monitor socket is bound with groups=0; udevd does broadcast, a raw netlink listener on group 2 got the
+  messages). Fix: `spin/ab/gobo-udev-dev.c` (preload, follows the link for exactly the path "/dev"), built by
+  build-iso into GoboSpin `lib/`; `spin/ab/gobo-xorg` wrapper; gobo-make-system points `/System/Index/bin/X` at it.
+  Test: a fake USB mouse made with uinput (`python3` script, created, moved, destroyed, created again): before,
+  Xorg.0.log showed nothing and the pointer did not move; after, "config/udev: Adding/removing input device" for
+  both plugs and the pointer moved 100 px each time. `udevadm monitor --udev` with the preload also gets events.
+  Not covered: text login (`startx` as the user runs the setuid Xorg, the loader drops LD_PRELOAD).
+- **9 `/System/Settings/shadow` world-readable [14] — done.** PAM checks for normal users go through
+  `unix_chkpwd`, which is setuid root on 017.01; LXDM, sudo, su are root. New mode 640 root:shadow for shadow and
+  gshadow: in the image (`gobo-make-system`) and on **every start** (`secure_accounts` in `gobo-update --boot-task`;
+  the account files live in the overlay, so this is what fixes existing installs; idempotent, logged once).
+  Tested on the 0.8 install by hand: lab cannot `cat` it; `sudo` (lab's password) ok; `su root` ok; lock screen:
+  wrong password stays locked, right one unlocks. Greeter login: see the update test.
+- **8 Second user gets the chosen layout [12] — done (not yet logged in as a second user).** The look's xinitrc has
+  `system_layout()` (reads `XkbLayout` from `/System/Settings/X11/xorg.conf.d/00-keyboard.conf`, else us); `apply.sh
+  HOME system` writes `setxkbmap ... -layout "$(system_layout)"` and keeps that form on re-runs; build-iso applies
+  the skeleton with `system`. gobo-install now writes 00-keyboard.conf for text login too (was LXDM only). Checked:
+  skeleton form -> `pl` on the pl install; explicit layouts unchanged. Users created on 0.8 already have
+  `-layout us` written into their own .xinitrc (cannot be told apart from a chosen us): edit by hand.
+- **10 Cosmetics [13] — done; [9] desktop icon redraw — not done** (inside PCManFM's desktop code; not cheap).
+  "Pcmanfm" no longer listed in the desktops list (desktop window skipped); light/dark switch comes back to the
+  same desktop (`~/.cache/awesome-restart-desktop`, checked: desktop 3 of 3 kept); search has a "Displays" entry
+  (LXRandR) — not clicked through.
+- Session lab login at the greeter after the shadow change: works. Power button on tty2 and at the greeter: clean
+  shutdown in ~3 s (next boot: "GOBO_DATA: clean", log lines "no desktop on the screen (terminal 2/7)").
+- **7 Plain text files [11] — done.** L3afpad 0.8.18.1.11 (GTK 3 Leafpad fork, autotools) built in the build VM
+  (`/Data/Build/src81`, `./autogen.sh && ./configure --prefix=/Programs/L3afpad/0.8.18.1.11 && make && make install`,
+  `SymlinkProgram L3afpad`, ~1 min, no errors) and added to `EXTRA` in build-iso. **The build VM snapshot
+  `iso-build-env-8a` does not contain it** (not re-snapshotted): a later build must repeat these steps first.
+  `apply.sh` adds `text/plain=l3afpad.desktop` to `~/.config/mimeapps.list` when the user has no text/plain choice
+  (new and existing users; the first-boot step runs apply.sh).
+- Build: VERSION=0.8.1 (spin/build-iso.sh default; vm/serve copies refreshed), one run from `iso-build-env-8a`
+  with the stock ISO hot-attached after boot (with the ISO attached at power-on the EFI firmware boots the ISO).
+
+### Result
+
+**`dist/GoboRefined-0.8.1.update`** (2,734,350,336 bytes, sha256 `f55a83076892183ffb289105e294647e9e1b5c63c5a4f9136fce2afee9ce75f1`)
+and **`dist/GoboRefined-0.8.1.iso`** (2,867,462,144 bytes, sha256 `05049abb143ee64ff3bdf7f418c4c6b3d6c5d2ba782563b199071e23f70335ea`),
+`.sha256` files next to them; checksums identical in the build VM and on the host. One build. 0.6 and 0.8 files kept.
+
+| Update test (snapshot `iso-0.8-installed-efi` -> 0.8.1) | Result |
+|---|---|
+| `gobo-update --yes` with the file (copied over SSH, root-owned) | pass, 51 s, into slot A (8.1 GB used, 6.8 GB free) |
+| restart -> version | slot A 0.8.1 running/default, spin-version 0.8.1, "slot a (0.8.1) started fine" |
+| first-boot step | shadow/gshadow -> 640 root:shadow (logged), apply.sh for lab and root, look-version 0.8.1, light mode kept (set before the update), `text/plain=l3afpad.desktop` added, "System updated" notification (`docs/screenshots/0.8.1-updated-notification.png`) |
+| greeter login as lab with shadow 640 | pass |
+| `vm/input-test.sh` | 41/41 |
+| `vm/net-test.sh` | 18/18 |
+| power button on the desktop | power menu |
+| fake USB mouse (uinput) plugged twice | Xorg adds it each time, pointer moves 100 px each time; X runs with gobo-udev-dev.so |
+| second user (`useradd -m`, skeleton of 0.8.1) | `.xinitrc` has `$(system_layout)`; logged in at the greeter: `setxkbmap -query` = pl |
+| `--rollback` -> 0.8 -> `--rollback` -> 0.8.1 | pass (both boots checked with `--status`) |
+| fresh UEFI install from the 0.8.1 ISO (`--answers --yes`, test64) | pass, greeter login as lab to the desktop |
+
+End state: snapshot **`iso-0.8.1-updated-efi`** (taken powered off: the 0.8 install after the update, slot A 0.8.1,
+slot B 0.8; test user `second` removed). The fresh install was made after that snapshot and discarded by restoring
+it. VM powered off, DVD empty. Snapshot `iso-build-env-8a` unchanged (L3afpad not in it, see item 7).
+
+Not verifiable in the VM (real PC): Wi-Fi with a real adapter (menu re-detection is proven only with a fake sysfs
+tree and stub backend), a real USB mouse/keyboard re-plug, the real power button's ACPI events, Win tap on a real
+keyboard. Text login (`startx`) still has no input hot-plug.
+
+Downloads: L3afpad 0.8.18.1.11, https://github.com/stevenhoneyman/l3afpad/archive/refs/tags/v0.8.18.1.11.tar.gz
+(sha256 `86f374b2f950b7c60dda50aa80a5034b8e3c80ded5cd3284c2d5921b31652793`), GPL-2.0-or-later (source headers).

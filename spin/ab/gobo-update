@@ -579,10 +579,29 @@ mark_good() {
    fi
 }
 
+# 0.8.1: password hashes readable by root and group shadow only (stock 017.01: mode 644, every
+# user could read them). Every start, idempotent: also fixes installs made before 0.8.1 (the
+# account files live in the overlay, an update does not replace them). PAM's checks for normal
+# users go through the setuid unix_chkpwd, so login, lock screen, sudo and su keep working.
+secure_accounts() {
+   local f
+   for f in /System/Settings/shadow /System/Settings/gshadow
+   do
+      f=$(readlink -f "$f"); [ -f "$f" ] || continue
+      if getent group shadow > /dev/null && [ "$(stat -c %G "$f")" != shadow ]
+      then chgrp shadow "$f" || log "accounts: could not set the group of $f"
+      fi
+      if [ "$(stat -c %a "$f")" != 640 ]
+      then chmod 640 "$f" && log "accounts: $f set to mode 640"
+      fi
+   done
+}
+
 cmd_boot_task() {
    [ "$(cmdline_arg root)" = gobo ] || return 0
    need_root; load_layout
    mkdir -p "$STATE"; chmod 755 "$STATE"
+   secure_accounts || true
    if [ "$MODE" = safe ]
    then log "started without the system changes: no first-start work, slot not marked"; return 0
    fi

@@ -36,7 +36,7 @@ set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=${VERSION:-0.8}
+VERSION=${VERSION:-0.8.1}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
 # stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
@@ -54,7 +54,7 @@ done
 bash -n gobo-install
 rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 rm -rf ab && tar xzf ab.tgz 2>/dev/null
-bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/dracut/90goboab/module-setup.sh
+bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
 # boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
 head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in ||
@@ -64,7 +64,7 @@ openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - ab/update-signing
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad"
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -84,6 +84,12 @@ install -m 755 gobo-command-not-found $P/1.0/bin/gobo-command-not-found
 # the GOBO_* partitions away from devmon/udevil.
 install -m 755 ab/gobo-update $P/1.0/bin/gobo-update
 install -m 755 ab/gobo-make-system $P/1.0/bin/gobo-make-system
+install -m 755 ab/gobo-power-button $P/1.0/bin/gobo-power-button   # 0.8.1 (acpid rule: gobo-make-system)
+# 0.8.1: Xorg input hot-plug (X -> gobo-xorg link: gobo-make-system)
+install -m 755 ab/gobo-xorg $P/1.0/bin/gobo-xorg
+mkdir -p $P/1.0/lib
+gcc -O2 -Wall -shared -fPIC -o $P/1.0/lib/gobo-udev-dev.so ab/gobo-udev-dev.c -ldl
+chmod 755 $P/1.0/lib/gobo-udev-dev.so
 mkdir -p $P/1.0/share/gobo-update/dracut $P/1.0/lib/udev/rules.d
 cp -r ab/dracut/90goboab $P/1.0/share/gobo-update/dracut/
 chmod 755 $P/1.0/share/gobo-update/dracut/90goboab/*.sh
@@ -169,7 +175,7 @@ umount $R/proc
 
 echo "== look for the live user and for new users (both are copied from the skeleton)"
 for skel in $R/Programs/EnhancedSkel/017.01/Resources/Defaults/Settings/skel $R/Programs/EnhancedSkel/Settings/skel
-do [ -d $skel ] && sh gobo11/apply.sh $skel us
+do [ -d $skel ] && sh gobo11/apply.sh $skel system
 done
 
 echo "== welcome text"

@@ -27,6 +27,10 @@ end
 function power.toggle_mode()
    local new = (beautiful.mode == "light") and "dark" or "light"
    awful.spawn.easy_async_with_shell("sh " .. config_dir .. "set-mode.sh " .. new, function()
+      -- 0.8.1: come back to the same desktop after the restart (rc.lua reads this file)
+      local t = awful.screen.focused().selected_tag
+      local f = t and io.open((os.getenv("HOME") or "") .. "/.cache/awesome-restart-desktop", "w")
+      if f then f:write(tostring(t.index)); f:close() end
       awesome.restart()
    end)
 end

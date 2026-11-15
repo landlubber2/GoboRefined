@@ -276,6 +276,9 @@ function network.new(args)
    widget:refresh()
    local fast   -- while connecting, animate faster
    gears.timer({ timeout = 4, autostart = true, callback = function()
+      -- 0.8.1: a Wi-Fi adapter plugged in (or out) later is picked up by the menu
+      local m = args.menu_widget
+      if m and m.hotplug_check then pcall(m.hotplug_check, m) end
       local st = widget:refresh()
       if st.kind == "connecting" and not fast then
          fast = gears.timer({ timeout = 0.5, autostart = true, callback = function()

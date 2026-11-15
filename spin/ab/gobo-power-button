@@ -1,0 +1,58 @@
+#!/bin/bash
+# gobo-power-button — acpid action for a short press of the power button (GoboRefined 0.8.1).
+#   Rule: /System/Settings/acpi/events/gobo-power-button (written by gobo-make-system).
+# A desktop session on the screen that is shown (foreground virtual terminal): its power menu
+# opens (a second press closes it). Login screen, text console, or a desktop on another
+# terminal: clean shutdown. Logged with logger (tag gobo-power-button).
+PATH=/System/Index/bin:/System/Index/sbin:/bin:/sbin:/usr/bin
+log() { logger -t gobo-power-button -- "$*" 2>/dev/null || true; }
+
+envof() {   # envof PID NAME : value of NAME in the environment of PID
+   tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n "s/^$2=//p" | head -n 1
+}
+
+# virtual terminal of the X server for display $1 (":0" -> "7"), from its arguments
+xvt() {
+   local pid a disp vt
+   for pid in $(pgrep -x X; pgrep -x Xorg); do
+      disp="" vt=""
+      while IFS= read -r -d '' a; do
+         case "$a" in
+            :[0-9]*) disp="$a" ;;
+            vt[0-9]*) vt="${a#vt}" ;;
+         esac
+      done < "/proc/$pid/cmdline"
+      if [ "$disp" = "$1" ] && [ -n "$vt" ]; then echo $((10#$vt)); return 0; fi
+   done
+   return 1
+}
+
+# acpid reports one press twice (ACPI netlink and the input layer): act once per second
+stamp=/var/run/gobo-power-button.last
+exec 9>> /var/run/gobo-power-button.lock && flock -n 9 || exit 0
+now=$(date +%s)
+[ "$(cat "$stamp" 2>/dev/null)" -ge $((now - 1)) ] 2>/dev/null && exit 0
+echo "$now" > "$stamp"
+
+fg=$(fgconsole 2>/dev/null)
+for pid in $(pgrep -x awesome); do
+   disp=$(envof "$pid" DISPLAY)
+   [ -n "$disp" ] || continue
+   [ -n "$fg" ] && [ "$(xvt "${disp%.*}")" = "$fg" ] || continue
+   user=$(stat -c %U "/proc/$pid") || continue
+   [ "$user" != root ] || continue
+   log "power button: power menu for $user on $disp"
+   if env -i PATH="$PATH" HOME="$(getent passwd "$user" | cut -d: -f6)" DISPLAY="$disp" \
+         XAUTHORITY="$(envof "$pid" XAUTHORITY)" DBUS_SESSION_BUS_ADDRESS="$(envof "$pid" DBUS_SESSION_BUS_ADDRESS)" \
+         su -p -s /bin/sh "$user" -c 'exec awesome-client "require(\"spin.power\").show()"' > /dev/null 2>&1
+   then
+      exit 0
+   fi
+   # the desktop did not answer: do nothing rather than switch off under a running session
+   log "power button: the desktop of $user did not answer; nothing done"
+   exit 0
+done
+
+log "power button: no desktop on the screen (terminal ${fg:-?}): shutting down"
+shutdown -h now "Power button pressed" > /dev/null 2>&1 &
+exit 0

@@ -150,19 +150,47 @@ end
 
 -- Win+Escape must work even while a popup holds the keyboard (root key bindings are not
 -- seen then): every keyboard grab, ours or awful's, runs through this filter first.
+-- 0.8.1: keys registered with popups.pass() (the screenshot keys) also get through: every
+-- popup closes, the grabs are released, then the key's action runs.
+local passes = {}
+function popups.pass(mods, key, action)
+   table.insert(passes, { mods = mods, key = key:lower(), action = action })
+end
 do
    local c_run = keygrabber.run
-   local function is_panic(mods, key, event)
-      if key ~= "Escape" or event ~= "press" then return false end
-      for _, m in ipairs(mods or {}) do
-         if m == "Mod4" then return true end
-      end
+   local function has(mods, wanted)
+      for _, m in ipairs(mods or {}) do if m == wanted then return true end end
       return false
+   end
+   local function same_mods(mods, wanted)
+      for _, w in ipairs(wanted) do if not has(mods, w) then return false end end
+      for _, m in ipairs(mods or {}) do   -- no extra modifier (Lock and NumLock do not count)
+         if m ~= "Lock" and m ~= "Mod2" and not gears.table.hasitem(wanted, m) then return false end
+      end
+      return true
+   end
+   local function is_panic(mods, key, event)
+      return key == "Escape" and event == "press" and has(mods, "Mod4")
+   end
+   local function pass_for(mods, key, event)
+      if event ~= "press" or not key then return nil end
+      for _, p in ipairs(passes) do
+         if key:lower() == p.key and same_mods(mods, p.mods) then return p end
+      end
    end
    rawset(keygrabber, "run", function(f)
       return c_run(function(mods, key, event)
          if is_panic(mods, key, event) then
             gears.timer.delayed_call(popups.panic)
+            return
+         end
+         local p = pass_for(mods, key, event)
+         if p then
+            gears.timer.delayed_call(function()
+               popups.close_all()
+               popups.release_grabs()
+               p.action()
+            end)
             return
          end
          return f(mods, key, event)

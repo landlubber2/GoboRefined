@@ -1,4 +1,59 @@
-# GoboRefined 0.8 — release candidate
+# GoboRefined 0.8.1 — first update (bug fixes)
+
+GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
+
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.1.update` | 2,734,350,336 bytes (2.7 GB) | `f55a83076892183ffb289105e294647e9e1b5c63c5a4f9136fce2afee9ce75f1` |
+| `GoboRefined-0.8.1.iso` | 2,867,462,144 bytes (2.9 GB) | `05049abb143ee64ff3bdf7f418c4c6b3d6c5d2ba782563b199071e23f70335ea` |
+
+Check them against the `.sha256` files before use (Windows: `certutil -hashfile GoboRefined-0.8.1.update SHA256`).
+The 0.8 and 0.6 files are kept next to them.
+
+## Already running 0.8? Update with the file (no reinstall)
+
+1. Copy `GoboRefined-0.8.1.update` onto the PC (or a USB stick; "Safely remove" before unplugging).
+2. In a terminal: `sudo gobo-update /path/to/GoboRefined-0.8.1.update` and answer "yes" to restart
+   (about one minute for checking and writing).
+3. After the restart the desktop says "System updated". Your files, accounts, light/dark choice and
+   settings stay. `sudo gobo-update --status` shows 0.8.1 running. Going back: `sudo gobo-update --rollback`.
+
+A new install from the 0.8.1 ISO works as described for 0.8 below (whole disk erased, at least 32 GB).
+
+## What is fixed in 0.8.1 (from your 0.6 test list)
+
+- **Wi-Fi menu** — the network menu now notices a Wi-Fi adapter plugged in after the desktop started, switches it
+  on and scans; "Rescan" scans the adapter that is there now. Without an adapter it says "No Wi-Fi adapter found".
+- **"Wired network" without a cable** — shown as "Wired network (eth0): no cable" and does nothing.
+- **USB mouse (or keyboard) dead after re-plugging** — the screen's input system never heard about devices
+  plugged in later (a GoboLinux quirk with `/dev`); fixed for the graphical login (not for "text login").
+- **Power button** — a short press opens the power menu on the desktop (press again to close it); at the login
+  screen or a text console it shuts the PC down cleanly.
+- **Win key** — tapping Win alone opens the dots menu; holding Win for shortcuts works as before.
+- **Screenshots** — Print and Win+Shift+S work while a menu is open (the menu closes first).
+- **Text files** — open in **L3afpad**, a small text editor (also in the app search).
+- **Second user** — users added after the install get the keyboard layout chosen at install time.
+  (A user you already added under 0.8 keeps "us": change the `setxkbmap` line in their `~/.xinitrc`.)
+- **Passwords file** — `/System/Settings/shadow` is no longer readable by every user.
+- Small things: "Pcmanfm" gone from the desktops list; the light/dark switch stays on your desktop; searching
+  "Displays" finds the display settings.
+
+Not fixed: the freeze when pulling out the Wi-Fi adapter (could not be reproduced), desktop icons not redrawing
+after moving, the taskbar icons of minimized windows (please describe what looks wrong).
+
+## Please confirm on the real PC
+
+1. **Wi-Fi menu after plugging the adapter in, with no network cable connected first**: start the PC without
+   cable and without the adapter, log in, plug the adapter in, wait ~10 s, click the network icon: networks
+   should be listed; connect to yours; then "Rescan". Also: unplug and plug the adapter in again, then connect.
+2. **Mouse re-plug**: unplug the USB mouse, wait 5 s, plug it in: the pointer must move without a restart.
+3. **Power button**: short press on the desktop -> power menu; at the login screen -> the PC switches off.
+4. **Win tap**: tap Win -> dots menu; Win+E, Win+Up and other shortcuts still work and do not open it.
+5. Network icon shows "no cable" in the menu when the cable is out.
+
+---
+
+# GoboRefined 0.8 (still valid for installing; 0.8.1 adds the fixes above)
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
 

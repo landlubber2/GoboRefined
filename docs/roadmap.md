@@ -144,6 +144,13 @@ everything else in 0.6 not listed here.
 12. A second user gets the US keyboard layout on the desktop.
 13. Cosmetic: "Pcmanfm" in the desktops list; light/dark switch jumps to desktop 1; app search misses "Displays".
 
+**Status in 0.8.1 (first update, 2026-11-15; details in HANDOFF.md "0.8.1"):** done — 1 (Wi-Fi menu re-detects
+the adapter; real PC to confirm), 4 (Xorg input hot-plug fixed; simulated in the VM, real PC to confirm),
+5 (power button), 6 (Win tap), 7 (wired "no cable"), 8 (screenshots in menus), 11 (L3afpad for plain text),
+12 (users added later get the install-time layout), 13 (three cosmetics), 14 (shadow 640). Partly — 2 (same fix
+as 1, untested without the adapter). Not done — 3 (freeze on unplugging; skipped), 9 (desktop icon redraw),
+10 (unclear report; skipped).
+
 Not a bug: `sudo` asks for the user's own password, not root's. Becomes a design point when non-admin users
 are added.
 
@@ -186,7 +193,8 @@ Waydroid would need Wayland; the desktop is X11.
 ### Added to the 0.6.2 list after the 0.8 work (2026-11-15)
 
 14. `/System/Settings/shadow` is world-readable (mode 644) in stock 017.01: every user can read the password
-    hashes. Find out what depends on it (lock screen, LXDM) and tighten it.
+    hashes. Find out what depends on it (lock screen, LXDM) and tighten it. **Done in 0.8.1** (640 root:shadow;
+    nothing needed the read access: PAM uses the setuid `unix_chkpwd`).
 
 ### Prep for the first update (0.8.1 = the 0.6.2 list) — diagnosis notes, 2026-11-15
 
