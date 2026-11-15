@@ -17,6 +17,8 @@ S 'set -e; d=$(mktemp -d /tmp/nettest.XXXXXX); chmod 755 $d; mkdir -p $d/net/eth
    cat > $d/bin/gobonet_backend <<EOF
 #!/bin/sh
 echo "\$*" >> $d/log
+[ "\$1" = full-scan ] && sleep \$(cat $d/scan-seconds 2>/dev/null || echo 0)
+[ "\$1" = quick-scan ] && [ -e $d/noscan ] && exit 0
 case "\$1" in quick-scan|full-scan) [ -d $d/net/"\$2" ] && printf "Cell 01 - Address: AA:BB:CC:DD:EE:01\n ESSID:\"LabNet\"\n Quality=60/70\nCell 02 - Address: AA:BB:CC:DD:EE:02\n ESSID:\"Neighbour\"\n Quality=20/70\n" ;; esac
 exit 0
 EOF
@@ -62,6 +64,54 @@ e=$(L "$names"); ok "cable in: wired entry clickable" "$e" "Wired network (eth0)
 # the real menu, opened through the taskbar icon's fake click, shows and closes
 ok "menu opens" "$(L 'W:emit_signal("button::press", 0, 0, 1, {}, {}) return tostring(W:menu() and W:menu().wibox.visible)')" "true"
 L 'require("spin.popups").panic() return 1' > /dev/null
+
+# 0.8.2: no menu opens by itself; a click sheet never outlives its menu (real-PC click loss)
+P='local p = require("spin.popups")'
+vis='return tostring(W:menu() ~= nil and W:menu().wibox.visible)'
+S 'cat > /tmp/input-test.lua; chmod 644 /tmp/input-test.lua' < "$here/input-test.lua"
+L 'dofile("/tmp/input-test.lua") if not T.find("nettestwin") then require("awful").spawn("urxvt -name nettestwin -geometry 60x10+300+200") end return 1' > /dev/null
+S "echo 2 > $D/scan-seconds"
+sleep 3
+S "rm -rf $D/net/wlan1"; L 'return tostring(W:hotplug_check())' > /dev/null
+S "mkdir $D/net/wlan2 && echo 'DEVTYPE=wlan' > $D/net/wlan2/uevent && echo 1 > $D/net/wlan2/type"
+ok "adapter appears: change detected" "$(L 'return tostring(W:hotplug_check())')" "true"
+sleep 4
+ok "adapter appears: background scan ran" "$(S "cat $D/log")" "full-scan wlan2"
+ok "adapter appears: no menu opened by itself" "$(L "$vis")" "false"
+ok "adapter appears: no click sheet left" "$(L "$P return tostring(p.visible_backdrops())")" "^\"0\"$"
+L 'client.focus = nil return 1' > /dev/null
+L 'return T.click_client("nettestwin")' > /dev/null; sleep 1
+ok "adapter appears: a click on a window reaches it" "$(L 'return tostring(client.focus and client.focus.instance)')" "nettestwin"
+
+S "touch $D/noscan"
+L 'W:emit_signal("button::press", 0, 0, 1, {}, {}) return 1' > /dev/null
+ok "Scanning...: menu open" "$(L "$vis")" "true"
+L "$P p.panic() return 1" > /dev/null
+sleep 4
+ok "Scanning..., menu closed before the scan ended: stays closed" "$(L "$vis")" "false"
+L 'W:emit_signal("button::press", 0, 0, 1, {}, {}) return 1' > /dev/null
+before=$(L 'return tostring(M.auto_popups)' | tr -d '"')
+sleep 4
+ok "Scanning..., menu kept open: refreshed" "$(L 'return tostring(M.auto_popups)')" "^\"$((before + 1))\"$"
+ok "Scanning..., menu kept open: still open" "$(L "$vis")" "true"
+L "$P p.panic() return 1" > /dev/null
+S "rm -f $D/noscan"
+L 'for _, e in ipairs(W:entries(true)) do if e[1]:match("Rescan") then e[2]() end end return 1' > /dev/null
+sleep 4
+ok "Rescan clicked: menu back with the results" "$(L "$vis")" "true"
+L "$P p.panic() return 1" > /dev/null
+L 'for _, e in ipairs(W:entries(true)) do if e[1]:match("Rescan") then e[2]() end end return 1' > /dev/null
+S "rm -rf $D/net/wlan2"; L 'return tostring(W:hotplug_check())' > /dev/null
+sleep 4
+ok "Rescan, adapter unplugged during the scan: no menu" "$(L "$vis")" "false"
+L "$P p.menu_backdrop.show_on() return 1" > /dev/null
+sleep 2
+ok "watchdog: a sheet without a menu is hidden" "$(L "$P return tostring(p.visible_backdrops())")" "^\"0\"$"
+L "$P p.menu_backdrop.show_on() client.focus = nil return 1" > /dev/null
+L 'return T.click_client("nettestwin")' > /dev/null; sleep 1
+ok "stale sheet: the click focuses the window under it" "$(L 'return tostring(client.focus and client.focus.instance)')" "nettestwin"
+ok "stale sheet: gone after that click" "$(L "$P return tostring(p.visible_backdrops())")" "^\"0\"$"
+L 'local c = T.find("nettestwin") if c then c:kill() end return 1' > /dev/null
 
 L 'M.sysnet = "/sys/class/net" M.backend = "gobonet_backend" W = nil return 1' > /dev/null
 S "rm -rf $D /tmp/nettest.dir"

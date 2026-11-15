@@ -260,7 +260,7 @@ local function build()
       },
       margins = 14, widget = wibox.container.margin,
    }
-   backdrop = popups.backdrop(function() desktops.hide() end)
+   backdrop = popups.backdrop(function() desktops.hide() end, nil, function() return popup ~= nil and popup.visible end)
 end
 
 function desktops.hide()

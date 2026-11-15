@@ -1,0 +1,52 @@
+#!/bin/sh
+# gobo-system-disk — is a block device on the disk the running GoboRefined system lives on?
+#
+#   gobo-system-disk NAME           exit 0 if NAME (kernel name: sda, sda1, nvme0n1p3) is that
+#                                   disk or one of its partitions, 1 if not, 2 on bad input
+#   gobo-system-disk --list         print /dev/<name> for the disk and each of its partitions
+#   gobo-system-disk --devmon-args  print "--ignore-device /dev/<partition>" for each partition
+#
+# "The system disk" = the disk holding the partition mounted at /System/Data (the data
+# partition, A/B layout, 0.8), also when that disk is attached over USB. Used by the udev rule
+# 80-gobo-internal.rules (0.8.2; marks those devices as system-internal so devmon/udevil never
+# mount them) and by the look's xinitrc (devmon options). Reads /proc and /sys only.
+# Installed as /Programs/GoboSpin/Current/bin/gobo-system-disk.
+
+disk_of() {   # disk_of SYSFS_DIR -> kernel name of the whole disk
+   if [ -e "$1/partition" ]
+   then basename "$(dirname "$1")"
+   else basename "$1"
+   fi
+}
+
+data_disk() {
+   majmin=$(awk '$5 == "/System/Data" { print $3; exit }' /proc/self/mountinfo 2>/dev/null)
+   [ -n "$majmin" ] || return 1
+   dir=$(readlink -f "/sys/dev/block/$majmin") || return 1
+   [ -d "$dir" ] || return 1
+   disk_of "$dir"
+}
+
+case "$1" in
+   --list|--devmon-args)
+      d=$(data_disk) || exit 1
+      [ "$1" = --list ] && echo "/dev/$d"
+      for p in /sys/class/block/"$d"/"$d"*
+      do
+         [ -e "$p/partition" ] || continue
+         if [ "$1" = --list ]
+         then echo "/dev/$(basename "$p")"
+         else printf -- '--ignore-device /dev/%s ' "$(basename "$p")"
+         fi
+      done
+      exit 0 ;;
+   ''|-*) echo "usage: gobo-system-disk NAME | --list | --devmon-args" >&2; exit 2 ;;
+esac
+
+# a kernel block device name only (no paths, no globbing characters)
+case "$1" in
+   *[!A-Za-z0-9_.-]*) exit 2 ;;
+esac
+[ -e "/sys/class/block/$1" ] || exit 1
+d=$(data_disk) || exit 1
+[ "$(disk_of "$(readlink -f "/sys/class/block/$1")")" = "$d" ]

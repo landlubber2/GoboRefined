@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=Control panel
+Comment=Appearance, accounts, updates, remote access, network, sound, displays and more
+Icon=preferences-system
+Exec=gobo-settings
+Terminal=false
+Categories=Settings;System;
+Keywords=control panel;preferences;wallpaper;users;password;update;ssh;

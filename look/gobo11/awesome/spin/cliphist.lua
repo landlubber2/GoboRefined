@@ -177,7 +177,7 @@ local function build()
       },
       margins = 14, widget = wibox.container.margin,
    }
-   backdrop = popups.backdrop(function() cliphist.hide() end)
+   backdrop = popups.backdrop(function() cliphist.hide() end, nil, function() return popup ~= nil and popup.visible end)
 end
 
 function cliphist.hide()

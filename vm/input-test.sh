@@ -19,7 +19,8 @@ pause() { sleep "${1:-1}"; }
 
 # key chords as PS/2 set-1 scancodes: press all in order, release in reverse order
 declare -A SC=( [win]="e0 5b" [ctrl]="1d" [alt]="38" [shift]="2a" [esc]="01" [tab]="0f"
-                [enter]="1c" [del]="e0 53" [print]="e0 37" [down]="e0 50" [up]="e0 48" [r]="13" [s]="1f" [v]="2f" [p]="19" )
+                [enter]="1c" [del]="e0 53" [print]="e0 37" [down]="e0 50" [up]="e0 48" [r]="13" [s]="1f" [v]="2f" [p]="19"
+                [right]="e0 4d" [left]="e0 4b" [end]="e0 4f" )
 rel() { local out=""; for b in $1; do if [ "$b" = e0 ]; then out="$out e0"; else out="$out $(printf '%02x' $((0x$b | 0x80)))"; fi; done; echo $out; }
 keys() {   # keys win shift tab
    local down="" up=""
@@ -95,6 +96,13 @@ shots_after() {   # shots_after NAME
    fi
 }
 
+is() {   # is NAME LUA PATTERN : the Lua result matches
+   if L "$2" | grep -q -- "$3"
+   then echo "PASS $1"; pass=$((pass + 1))
+   else echo "FAIL $1 ($(L "$2"))"; fail=$((fail + 1)); failed="$failed $1"
+   fi
+}
+
 menu_open() {   # menu_open NAME true|false : is the dots menu (category menu) open?
    if L 'return tostring(spin_debug.mainmenu ~= nil and spin_debug.mainmenu.wibox.visible)' | grep -q "$2"
    then echo "PASS $1"; pass=$((pass + 1))
@@ -166,6 +174,23 @@ scenario() {
                         else echo "FAIL win-hold-window-key ($g0)"; fail=$((fail + 1)); failed="$failed win-hold-window-key"; fi
                         steps '@k win up'   # back
                         check win-hold ;;
+   power-keys)          # 0.8.2: arrows move the selection in the power menu, Escape closes it
+                        steps '@k ctrl alt del' '@k right' '@k right' '@k right' '@k left'
+                        is power-keys-selection 'return tostring(require("spin.power").selected())' '"2"'
+                        steps '@k esc'
+                        is power-keys-closed 'return tostring(require("spin.power").is_open())' 'false'
+                        check power-keys ;;
+   power-enter)         # 0.8.2: End + Enter runs the last entry (Settings) from the keyboard
+                        steps '@k ctrl alt del' '@k end' '@k enter'; pause 3
+                        is power-enter-settings 'return tostring(T.find("gobo-settings") ~= nil)' 'true'
+                        L 'local c = T.find("gobo-settings") if c then c:kill() end return 1' > /dev/null; pause 1
+                        check power-enter ;;
+   show-desktop)        # 0.8.2: the strip at the right end hides the windows, a second click brings them back
+                        steps 'return T.click_pos("showdesk")'
+                        is show-desktop-hidden 'return tostring(T.find("inputtest").minimized and T.find("zenity").minimized)' 'true'
+                        steps 'return T.click_pos("showdesk")'
+                        is show-desktop-back 'return tostring(T.find("inputtest").minimized or T.find("zenity").minimized)' 'false'
+                        check show-desktop ;;
    *) echo "unknown scenario $1"; return 1 ;;
    esac
 }
@@ -174,7 +199,8 @@ ALL="plain menu-click-client menu-click-desktop menu-click-gtk menu-click-taskba
      menu-rightclick-desktop search-click-out search-click-client search-escape search-types search-from-menu
      search-twice search-power power-click-out power-escape tasklist-menu net-menu usb-menu window-menu
      hotkeys-click hotkeys-key alttab alttab-twice desktops desktops-escape shot-menu shot-escape clip-menu
-     two-popups panic-in-menu shot-print-in-menu shot-card-in-menu win-tap win-hold"
+     two-popups panic-in-menu shot-print-in-menu shot-card-in-menu win-tap win-hold
+     power-keys show-desktop power-enter"
 
 setup
 for s in ${*:-$ALL}; do scenario "$s"; done

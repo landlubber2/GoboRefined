@@ -13,7 +13,8 @@
 --     scan is started so the first menu already has networks; an open menu is closed when
 --     the interfaces change;
 --   * the wired entry says "no cable" (and does nothing) when the carrier is 0 (item 7);
---   * the trailing newline of `gobonet interface` is gone (it ended up in commands).
+--   * the trailing newline of `gobonet interface` is gone (it ended up in commands);
+--   * 0.8.2: no menu opens by itself (see popup_after_scan below).
 -- Test hooks: gobonet_menu.sysnet (default /sys/class/net) and gobonet_menu.backend
 -- (default gobonet_backend) can point at a fake tree / stub script (vm/serve/net-test.sh).
 local gobonet = {}
@@ -25,6 +26,7 @@ local wibox = require("wibox")
 local beautiful = require("beautiful")
 local spawn = require("awful.spawn")
 local core_ok, core = pcall(require, "gobo.awesome.gobonet.core")
+local popups_ok, popups = pcall(require, "spin.popups")
 
 gobonet.sysnet = "/sys/class/net"
 gobonet.backend = "gobonet_backend"
@@ -155,7 +157,7 @@ function gobonet.new()
 
    local function animated_operation(args)
       local cmd = args.command
-      local popup_menu = args.popup_menu_when_done or false
+      local on_done = args.on_done
       if not cmd then return end
       local waiting
       local is_waiting = function()
@@ -194,13 +196,7 @@ function gobonet.new()
                if step == #frames + 1 then step = 1 end
             else
                animation_timer:stop()
-               if popup_menu then
-                  if menu then
-                     menu:hide()
-                     menu = nil
-                  end
-                  wifi_menu_fn(true)
-               end
+               if on_done then on_done() end
             end
          end
          animation_timer:connect_signal("timeout", animate)
@@ -230,14 +226,41 @@ function gobonet.new()
       return true
    end
 
+   -- 0.8.2: when a scan ends, the menu is shown again ONLY for a scan the user asked for:
+   --   * "Rescan" clicked (the menu closes on the click): shown again if, at the end of the
+   --     scan, no other popup is open, no adapter came or went, and it took under 30 s;
+   --   * "Scanning..." (the user opened the menu while nothing was known yet): the open menu is
+   --     refreshed, and only if it is still open.
+   -- An adapter event or a background scan never opens a menu (0.8.1 did: upstream's
+   -- popup_menu_when_done re-opened it from a timer, also long after the user had gone, and
+   -- the real PC lost its clicks around such an event).
+   local hotplug_gen = 0
+   local want_popup   -- { gen = hotplug_gen, deadline = os.time() + 30, need_visible = bool }
+   gobonet.auto_popups = 0   -- lab test counter
+   local function popup_after_scan()
+      local w = want_popup
+      want_popup = nil
+      if not w or w.gen ~= hotplug_gen or os.time() > w.deadline then return end
+      local visible = menu and menu.wibox.visible
+      if w.need_visible and not visible then return end
+      if not visible and popups_ok and popups.visible_backdrops() > 0 then return end
+      if menu then
+         menu:hide()
+         menu = nil
+      end
+      gobonet.auto_popups = gobonet.auto_popups + 1
+      wifi_menu_fn(true)
+   end
+
    -- Rescan for the current Wi-Fi interface (rebuilt when the interface changes)
    local rescan, rescan_for
-   local function do_rescan()
+   local function do_rescan(need_visible)
       if not wlan_interface then return function() return false end end
       if rescan_for ~= wlan_interface then
-         rescan = animated_operation { command = gobonet.backend .. " full-scan " .. q(wlan_interface), popup_menu_when_done = true }
+         rescan = animated_operation { command = gobonet.backend .. " full-scan " .. q(wlan_interface), on_done = popup_after_scan }
          rescan_for = wlan_interface
       end
+      want_popup = { gen = hotplug_gen, deadline = os.time() + 30, need_visible = need_visible }
       return rescan()
    end
 
@@ -265,6 +288,8 @@ function gobonet.new()
       if wlan == wlan_interface and wired == wired_interface then return false end
       local new_wlan = wlan and wlan ~= wlan_interface
       wlan_interface, wired_interface = wlan, wired
+      hotplug_gen = hotplug_gen + 1   -- a scan running now must not bring a menu back
+      want_popup = nil
       if menu then
          menu:hide()
          menu = nil
@@ -356,9 +381,9 @@ function gobonet.new()
          table.insert(entries, { " Scanning..." })
       elseif #entries == 0 and not auto_popped then
          table.insert(entries, { " Scanning..." })
-         is_scanning = do_rescan()
+         is_scanning = do_rescan(true)
       else
-         table.insert(entries, { " Rescan", function() is_scanning = do_rescan() end } )
+         table.insert(entries, { " Rescan", function() is_scanning = do_rescan(false) end } )
       end
       if wired_interface then
          if gobonet.carrier(wired_interface) == "0" then

@@ -1093,3 +1093,165 @@ keyboard. Text login (`startx`) still has no input hot-plug.
 
 Downloads: L3afpad 0.8.18.1.11, https://github.com/stevenhoneyman/l3afpad/archive/refs/tags/v0.8.18.1.11.tar.gz
 (sha256 `86f374b2f950b7c60dda50aa80a5034b8e3c80ded5cd3284c2d5921b31652793`), GPL-2.0-or-later (source headers).
+
+## 0.8.2 part 1: desktop fixes + Settings app (2026-11-15, work notes)
+
+Developed on the installed system (snapshot `iso-0.8.1-updated-efi`). Not built; VERSION unchanged.
+
+- **1 Click loss — done (VM), real PC to confirm.** `spin/gobonet_menu.lua`: upstream's
+  `popup_menu_when_done` is gone; a scan re-shows the menu only when the user asked for it ("Rescan" clicked:
+  shown again if no other popup is open, no adapter came/went and under 30 s; "Scanning..." with the menu open:
+  refreshed only while it is still open). Adapter events and background scans never open a menu.
+  `spin/popups.lua`: every click sheet (backdrop) knows its popup (`is_open`); a watchdog (0.5 s, two strikes)
+  hides a sheet whose popup is gone; a click on a stale sheet hides it and focuses the window under it; menu
+  show/hide errors are caught (a failing `show` used to leave the sheet up); Win+Escape hides every sheet.
+  Wi-Fi notifications (`wifi_switch.lua`) are plain naughty popups: no pointer or keyboard grab found.
+  `vm/net-test.sh`: 32/32 (14 new checks: adapter appears -> no menu, no sheet, a click reaches a urxvt; menu
+  closed during "Scanning..." stays closed; Rescan brings it back; unplug during Rescan -> no menu; watchdog;
+  click through a stale sheet).
+- **2 Show-desktop strip — done (VM).** rc.lua `show_desktop_strip(s)`: 6 px wide, 1 px separator at half height
+  (theme text colour at 25 %), hover = theme hover colour, tooltip "Show desktop", after the clock on every
+  screen. Click: minimizes the visible windows of that screen's desktop; next click restores exactly those (and
+  the focus) if nothing is showing; if a window is showing again (opened/restored since), a click hides again.
+  input-test scenario `show-desktop`. Screenshot `0.8.2-show-desktop-strip.png` (light; dark not looked at).
+- **3 Power menu by keyboard — done (VM).** `spin/power.lua`: arrows/Tab move a highlighted selection (hover
+  colour + accent border); no selection when it opens (so Enter alone does nothing — design choice), Enter/Space
+  runs, Escape/q closes; hovering = selecting. A sixth entry "Settings" appears when `gobo-settings` exists.
+  input-test scenarios `power-keys`, `power-enter` (End + Enter starts Settings). Screenshot
+  `0.8.2-power-menu-keyboard.png`.
+- Lab lesson: after the tty2 root login, switch back to tty7 (`vm/vbox-keys.sh tty 7`) before any keyboard
+  test — Ctrl+Alt+Del on the text console is init's `ctrlaltdel` and reboots the VM (happened once).
+- **4 System partitions hidden from the automounter — done (rule matching in the VM).** New
+  `spin/ab/gobo-system-disk` (GoboSpin bin; sh; reads /proc/self/mountinfo + /sys only): exit 0 when a kernel name
+  is the disk holding `/System/Data` or one of its partitions; `--devmon-args` prints `--ignore-device` options.
+  `80-gobo-internal.rules`: + GPT name `BIOSBOOT`, + GPT type `21686148-6449-6e6f-744e-656564454649` (BIOS boot),
+  + `PROGRAM=="gobo-system-disk %k"` for sd*/nvme*/mmcblk*/vd*/hd*. xinitrc: devmon gets the ignore options too.
+  VM: `udevadm test` + trigger: sda1 (BIOSBOOT) and every sda partition `UDISKS_SYSTEM_INTERNAL=1`, `udevil info`
+  "system internal: 1"; the USB stick sdb1 not marked and still automounted. The "USB drives" place lists only
+  what is mounted under /Mount/Media, so nothing more was needed there. Not tested: the system disk really
+  attached over USB (VirtualBox USB disk not tried; the PROGRAM path is what covers it) — real PC to confirm
+  the FAT-fs message is gone.
+- **5 Wi-Fi regulatory database — done (VM).** wireless-regdb 2026.09.03 (`spin/firmware/wireless-regdb/`:
+  regulatory.db, .p7s, LICENSE, SOURCE with URL + sha256). build-iso installs them into GoboSpin `lib/firmware`
+  (SymlinkProgram links them into `/System/Index/lib/firmware` = `/lib/firmware`; build checks the link) — they
+  come with the new tarball `vm/serve/spin-extra.tgz` (`cd spin && tar czf ../vm/serve/spin-extra.tgz firmware
+  settings`), fetched by build-iso. The kernel has both signing keys built in (sforshee, wens; the db is signed
+  by wens). VM: before "failed to load regulatory.db"; after `rmmod/modprobe cfg80211` and after a reboot no
+  error (success is silent in 6.12).
+- **6 Settings app — done (core pages a-f), see below.**
+
+### Settings app (`gobo-settings`) — design
+
+- **Implementation: Lua + lgi + GTK 3** (Gtk-3.0 typelib and lgi are on the image: lgi lives in
+  `/System/Aliens/LuaRocks`, so `main.lua` sets `package.path` itself). Nothing to compile; the build VM needs
+  nothing new (`luac -p` is the syntax check in build-iso). Files: `spin/settings/` → GoboSpin `bin/gobo-settings`
+  (sh launcher, `NO_AT_BRIDGE=1`), `share/gobo-settings/{main,common}.lua` + `pages/*.lua`,
+  `share/applications/gobo-settings.desktop` (app search, category Settings). Also opened from the dots menu
+  ("Settings", gear icon, after Terminal) and the power menu (sixth button). `gobo-settings PAGE` opens a page.
+- One window: sidebar (GtkListBox) left, GtkStack right; a page is built the first time it is shown. Colours and
+  font come from the GTK theme (the light/dark switch also changes the open window).
+- **How to add a page:** write `pages/<id>.lua` returning `{ id, title, icon, build = function(C) return widget
+  end }` and add the id to `PAGES` in `main.lua`. `C` (`common.lua`) has `page/heading/text/button/row/output_view`,
+  `message/error/confirm/form/choose_file`, `run(argv, stdin, on_done, on_line)` (async, Gio.Subprocess),
+  `helper({...}, stdin, on_done, on_line)`, `people()`, `is_admin()`, `addresses()`, `desktop(lua)` (awesome-client).
+  Root work = a new, strictly checked sub-command of the helper. **Placeholders** for part 2:
+  `pages/bluetooth.lua`, `pages/hotspot.lua` (skeletons, not in PAGES; a comment in PAGES says where they go).
+- **Root helper `gobo-settings-helper`** (GoboSpin bin, bash): run only through `sudo -A` with
+  `SUDO_ASKPASS=gobo-askpass` (zenity password box "Confirm with your password (login)"). Fixed sub-commands:
+  own-password, set-password, add-user, remove-user, set-admin, autologin(-status), ssh(-status), boot-ssh,
+  update-status, update-install, update-rollback, report. Sets its own PATH and unsets BASH_ENV etc. (the stock
+  sudoers has `!env_reset`); validates logins (`^[a-z_][a-z0-9_-]{0,30}$`, uid 1000-59999 for every change, so
+  root and system accounts are refused), full names (no colon, comma, equals sign, backslash; at most 64),
+  passwords (1-128 characters, no control characters, **stdin only**, hashed with `openssl passwd -6 -stdin`,
+  written into shadow by awk from its environment, copy + rename: the installer's way), update files (absolute,
+  `.update`, regular file; gobo-update checks owner/permissions/signature). Never: remove yourself, remove or
+  demote the last administrator, demote yourself, remove a logged-in user. Log
+  `/Data/Variable/log/gobo-settings.log` (what and by whom; checked that no password lands there).
+- **Administrators** = group `sys` (stock sudoers `%sys ALL=(ALL) ALL`; the installer puts the first user into sys
+  and lpadmin). Standard = not in sys. New sudoers lines (gobo-make-system): `%users` may run exactly
+  `gobo-settings-helper own-password` and `gobo-settings-helper report` **with their own password** (sudo asking
+  the current password is the old-password check), and `shutdown -r now` / `shutdown -h now` without one (the
+  power menu for standard users; before, only sys could restart from it).
+- **Pages:** Appearance (light/dark through the power menu's switch; wallpaper = a copy at
+  `~/.config/goborefined/wallpaper`, outside what apply.sh rewrites; rc.lua `set_wallpaper` scales it to cover
+  the screen, `spin_reload_wallpaper()` + `desktop_icons.refresh(force)` hand it to PCManFM). Accounts (own
+  password; list; add with full name/login/password/administrator; remove with or without home, the confirmation
+  names the person; administrator/standard; automatic login = LXDM `autologin=`). Updates (version; "Show both
+  system slots" = `gobo-update --status`; install from file with streamed output; rollback with confirmation;
+  restart). Remote access (switch; flag `/Data/Variable/lib/gobo-settings/ssh-enabled` on the data partition;
+  sshd started by the helper with `-o PermitRootLogin=no -o PidFile=/Data/Variable/run/gobo-sshd.pid`, host keys
+  by `ssh-keygen -A`; at boot the new BootUp line `gobo-settings-helper boot-ssh`; the page shows
+  `ssh login@address` per interface). Network (adapters, addresses, gateway; opens the taskbar network menu via
+  `spin_open_network_menu()`). Sound (pavucontrol), Displays (lxrandr / displays.sh --auto), Trash (1/3/6 months
+  via gobo-trash-purge). About (version, kernel, CPU, memory, data partition use, graphics from lspci + Xorg
+  log; "Save system report").
+- **`gobo-report`** (GoboSpin bin): `~/system-report-<date>.txt` (mode 600): versions, df, lsusb, lspci -k, ip
+  addr/route, iwconfig, rfkill, xinput, Xorg log tail, /proc/bus/input/devices, desktop processes, and through
+  the helper (`report`; askpass on the desktop, terminal prompt on a console) the last 400 kernel messages,
+  `gobo-update --status` and the gobo-update / gobo-wifi-switch / gobo-settings logs. `--no-root` skips that.
+- Not done (6g, skipped as allowed): keyboard layout, timezone/date, mouse speed, startup programs, default
+  programs. A second start opens a second window (no single-instance check).
+
+### Settings app — tests (VM: installed 0.8.1 + `vm/serve/settings-dev-install.sh`)
+
+- `vm/settings-test.sh` (the helper called as lab through sudo -A with an askpass file; the lab password is
+  piped into the VM, never printed): 24/24, then `vm/settings-test.sh remove`. Refusals (bad login, remove
+  self/root/bin, demote self, unknown sub-command, non-.update file); add standard user `tester` (uid 1001, only
+  group users + the default groups, home on the data partition with the look, keyboard line `$(system_layout)`,
+  hash in shadow, password not in the log); `sudo` refused for tester; tester changes own password through the
+  helper; tester may not add users; administrator yes/no; autologin tester/off; ssh-status; report;
+  update-status. **Greeter login as tester**: desktop, layout pl. Removal with home: account and folder gone.
+- GUI (simulated mouse): every page opens; wallpaper chosen through the file chooser → desktop and PCManFM show
+  it, kept after switching to dark (Awesome restart) and after a reboot; dark mode from the page; "Show both
+  system slots" → askpass → streamed output; "Save system report" → askpass → file written (the first try showed
+  that lgi's `communicate_utf8_finish` returns only the out-parameters: fixed in common.lua).
+- Update through the helper as lab: `update-install ~/Downloads/GoboRefined-0.8.1.update` (lab-owned, 644) →
+  slot B written in 48 s, "ready in slot B".
+- Remote access: `ssh on` → `on running`, root login from the host **refused**; reboot → sshd started by BootUp
+  (root still refused, i.e. it persisted); `ssh off` from the root console → `off stopped`. Not tested: a
+  password login as lab from another machine (no non-interactive password tool on the host; sshd's
+  PasswordAuthentication is the stock default).
+- Screenshots: `0.8.2-settings-appearance-light.png`, `-accounts-dark`, `-add-person-dark`, `-updates-dark`,
+  `-remote-dark`, `-about-dark`.
+
+### Findings, not fixed
+
+- A new user's first login shows "System updated: 0.8.1 is running (was 0.8)" (the notice is per user and the
+  new user has never seen it). Cosmetic; `spin/updates.lua` could skip homes created after the update.
+- GTK's file chooser sidebar lists ESP, config, efivars, proc, pts, shm, sys (GTK's own mount list; older than
+  this work; every GTK Open dialog shows them).
+- Lab: `pkill -f PATTERN` inside `vm/ssh.sh '...'` kills its own shell (the pattern is in its command line): use
+  `pkill -f "[g]obo-..."`. The lock screen (xsecurelock after 10 min) blanks screenshots: `xset s off -dpms`.
+  The Bash tool fails on here-documents containing a backslash before a backtick: use the Edit tool.
+
+### Regression tests at the end (installed 0.8.1 + this work)
+
+- `vm/input-test.sh`: 48/49 in the full run (old 41 + `power-keys`, `show-desktop`, `power-enter`); the one
+  failure, `power-enter`, was a Settings window left open by an earlier manual check (focus stayed on it);
+  re-run alone after closing it: pass. `vm/net-test.sh` 32/32. `vm/settings-test.sh` 24/24 (+ removal).
+
+### For the image build (part 2 / next builder)
+
+- New host archive **`vm/serve/spin-extra.tgz`** (`cd spin && tar czf ../vm/serve/spin-extra.tgz firmware
+  settings`), fetched by build-iso; `ab.tgz` refreshed (gobo-system-disk, rules, gobo-make-system). `vm/serve`
+  copies (build-iso.sh, ab.tgz, spin-extra.tgz, gobo11.tgz) are identical to the repo now.
+- Build VM: snapshot **`iso-build-env-8b`** = 8a + L3afpad 0.8.18.1.11 (built in `/Data/Build/src81`, same
+  steps as 0.8.1). Its DVD drive is EMPTY so it boots from its disk; hot-attach the stock ISO after boot (8a had
+  the ISO attached and booted the live ISO first). Nothing else was needed: the Settings app is Lua (luac is
+  there), regulatory.db comes from the repo. `/Data/Build/GoboLinux-017.01-spin.iso` is still there (delete it
+  in the VM before building, for space).
+- `vm/serve/settings-dev-install.sh` installs this work into an installed system for testing (same places).
+- Not built, VERSION not changed. Expect to check after the build: the dots-menu "Settings" entry and the
+  power menu's sixth button (both appear only when `/System/Index/bin/gobo-settings` exists), the new BootUp
+  line, the sudoers lines, `/System/Index/lib/firmware/regulatory.db`.
+
+### Downloads (0.8.2 part 1)
+
+- wireless-regdb 2026.09.03, https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-2026.09.03.tar.xz
+  (sha256 `b22e0901227b820cd1c280abe681a15b773a5103a5e10dc442e94ebb34cbf58d`, matches kernel.org's sha256sums.asc), ISC.
+- L3afpad 0.8.18.1.11 again for the build VM (same URL and sha256 as 0.8.1), GPL-2.0-or-later.
+
+### VM state
+
+Snapshots added: `iso-build-env-8b` (powered off). The VM is restored to `iso-0.8.1-updated-efi` and powered
+off (all dev work on the installed system was discarded; everything is in the repo). Nothing deleted.

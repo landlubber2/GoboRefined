@@ -1,0 +1,6 @@
+#!/bin/sh
+# gobo-settings — the GoboRefined Settings app (Lua + lgi + GTK 3; files in
+# /Programs/GoboSpin/Current/share/gobo-settings). "gobo-settings PAGE" opens a page directly
+# (appearance, accounts, updates, remote, network, sound, displays, trash, about).
+export NO_AT_BRIDGE=1   # no accessibility bus here: GTK would warn and wait
+exec lua /Programs/GoboSpin/Current/share/gobo-settings/main.lua "$@"

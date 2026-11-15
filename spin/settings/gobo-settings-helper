@@ -1,0 +1,268 @@
+#!/bin/bash
+# gobo-settings-helper — the ONE program the Settings app (gobo-settings) runs as root.
+#
+# Run through sudo, never directly:  sudo -A /System/Index/bin/gobo-settings-helper SUB-COMMAND ...
+# sudo asks the caller's own password (graphical askpass: gobo-askpass). Administrators (group
+# "sys", sudoers "%sys ALL=(ALL) ALL") may run every sub-command; standard users only the two that
+# sudoers lists for "%users" (own-password, report) — with their password, never without.
+#
+# Sub-commands (every argument is checked; anything else is refused):
+#   own-password                     new password of the calling user ($SUDO_USER) on stdin
+#   set-password LOGIN               new password of LOGIN on stdin
+#   add-user LOGIN admin|standard    full name on stdin line 1, password on stdin line 2
+#   remove-user LOGIN keep-home|delete-home
+#   set-admin LOGIN yes|no
+#   autologin-status                 prints the login name or "off"
+#   autologin off|LOGIN
+#   ssh-status                       prints "on running", "on stopped", "off running" or "off stopped"
+#   ssh on|off                       remote access (sshd) now and at every start
+#   boot-ssh                         (boot scripts) start sshd if remote access is on
+#   update-status                    gobo-update --status
+#   update-install FILE              gobo-update --yes FILE (output streamed)
+#   update-rollback                  gobo-update --rollback
+#   report                           root-only parts of the system report: last 400 kernel
+#                                    messages, gobo-update --status, the system logs of the spin
+#
+# Passwords only ever travel on stdin and in the environment of one awk run (readable by root
+# only); they are never put on a command line or written to the log
+# (/Data/Variable/log/gobo-settings.log: what was done, by whom).
+set -u
+export PATH=/System/Index/bin:/System/Index/sbin
+export LC_ALL=C
+unset BASH_ENV ENV CDPATH GLOBIGNORE IFS
+IFS=$' \t\n'
+umask 022
+
+PASSWD=/System/Settings/passwd
+GROUP=/System/Settings/group
+LXDM_CONF=/System/Settings/lxdm/lxdm.conf
+STATE=/Data/Variable/lib/gobo-settings
+SSH_FLAG=$STATE/ssh-enabled
+SSHD_PID=/Data/Variable/run/gobo-sshd.pid
+LOG=/Data/Variable/log/gobo-settings.log
+LOOK_APPLY=/Programs/GoboSpin/Current/share/gobo11/apply.sh
+ADMIN_GROUP=sys
+
+die() { echo "gobo-settings-helper: $*" >&2; exit 1; }
+log() { printf '%s %s (by %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "${SUDO_USER:-root}" >> "$LOG" 2>/dev/null; }
+
+[ "$(id -u)" = 0 ] || die "must be run through sudo"
+caller="${SUDO_USER:-root}"
+
+### checks #####################################################################
+
+valid_login_syntax() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]]; }
+uid_of() { awk -F: -v u="$1" '$1 == u { print $3; exit }' "$PASSWD"; }
+# a person's account: exists, uid 1000..59999 (not root, not a system account)
+check_person() {
+   local uid
+   valid_login_syntax "$1" || die "not a valid login name: $1"
+   uid=$(uid_of "$1")
+   [ -n "$uid" ] || die "no such user: $1"
+   [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || die "$1 is a system account"
+}
+is_admin() { awk -F: -v g="$ADMIN_GROUP" -v u="$1" '$1 == g { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) f = 1 } END { exit !f }' "$GROUP"; }
+admins() {   # administrators that are people (uid >= 1000)
+   local u
+   for u in $(awk -F: -v g="$ADMIN_GROUP" '$1 == g { gsub(",", " ", $4); print $4 }' "$GROUP")
+   do
+      local uid; uid=$(uid_of "$u")
+      [ -n "$uid" ] && [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] && echo "$u"
+   done
+}
+need_admin_caller() { [ "$caller" = root ] || is_admin "$caller" || die "only an administrator can do this"; }
+
+read_password() {   # one line from stdin into $PW: 1..128 characters, no control characters
+   IFS= read -r PW || [ -n "${PW:-}" ] || die "no password given"
+   [ -n "$PW" ] || die "the password is empty"
+   [ "${#PW}" -le 128 ] || die "the password is too long"
+   [[ "$PW" != *[[:cntrl:]]* ]] || die "the password contains control characters"
+}
+
+# Same way as gobo-install: chpasswd on 017.01 exits 0 and changes nothing; usermod -p would
+# put the hash on a command line. openssl reads the password on stdin (printf is a builtin).
+set_password() {   # set_password LOGIN (password in $PW)
+   local hash shadow new
+   hash=$(printf '%s' "$PW" | openssl passwd -6 -stdin) || die "could not hash the password"
+   PW=""
+   shadow=$(readlink -f /System/Settings/shadow)
+   new=$(mktemp "$shadow.XXXXXX") || die "could not write the password"
+   GOBO_HASH="$hash" awk -F: -v OFS=: -v u="$1" -v today="$(( $(date +%s) / 86400 ))" \
+      '$1 == u { $2 = ENVIRON["GOBO_HASH"]; $3 = today; found = 1 } { print } END { exit !found }' \
+      "$shadow" > "$new" || { rm -f "$new"; die "could not set the password (no such user)"; }
+   chmod --reference="$shadow" "$new"; chown --reference="$shadow" "$new"
+   mv -f "$new" "$shadow"
+   hash=""
+   grep -q "^$1:\\\$6\\\$" "$shadow" || die "the password was not stored"
+}
+
+### remote access ##############################################################
+
+sshd_running() { [ -s "$SSHD_PID" ] && kill -0 "$(cat "$SSHD_PID")" 2>/dev/null; }
+start_sshd() {
+   sshd_running && return 0
+   mkdir -p "$(dirname "$SSHD_PID")"
+   ssh-keygen -A > /dev/null 2>&1   # host keys, once (kept in /System/Settings/ssh)
+   # root never logs in over SSH (whatever sshd_config says); people log in with their password
+   "$(command -v sshd)" -o PermitRootLogin=no -o PidFile="$SSHD_PID" || return 1
+}
+stop_sshd() {
+   if sshd_running; then kill "$(cat "$SSHD_PID")"; fi
+   rm -f "$SSHD_PID"
+}
+
+### sub-commands ###############################################################
+
+[ $# -ge 1 ] || die "no sub-command"
+cmd="$1"; shift
+nargs() { local want="$1"; shift; [ $# -eq "$want" ] || die "$cmd: wrong number of arguments"; }
+
+case "$cmd" in
+   own-password)
+      [ $# -eq 0 ] || die "$cmd: no arguments"
+      [ "$caller" != root ] || die "own-password needs a calling user"
+      check_person "$caller"
+      read_password; set_password "$caller"
+      log "password changed: $caller" ;;
+
+   set-password)
+      [ $# -eq 1 ] || die "$cmd: give one login"
+      need_admin_caller; check_person "$1"
+      read_password; set_password "$1"
+      log "password set: $1" ;;
+
+   add-user)
+      [ $# -eq 2 ] || die "$cmd: give login and admin|standard"
+      need_admin_caller
+      login="$1"; kind="$2"
+      valid_login_syntax "$login" || die "not a valid login name: $login (small letters, digits, _ and -, starting with a letter)"
+      [ "$kind" = admin ] || [ "$kind" = standard ] || die "kind must be admin or standard"
+      ! grep -q "^$login:" "$PASSWD" || die "the login $login is already used"
+      ! grep -q "^$login:" "$GROUP" || die "the name $login is already used by a group"
+      [ ! -e "/Users/$login" ] || die "/Users/$login already exists"
+      IFS= read -r full || die "no full name given"
+      [ "${#full}" -le 64 ] || die "the full name is too long"
+      [[ "$full" != *[[:cntrl:]:,=\\]* ]] || die "the full name may not contain : , = \\ or control characters"
+      read_password
+      AddUser -f "${full:-$login}" -p '!' --skel "$login" > /dev/null 2>&1 || die "AddUser failed"
+      grep -q "^$login:" "$PASSWD" || die "the account was not created"
+      [ "$kind" = admin ] && usermod -aG "$ADMIN_GROUP",lpadmin "$login"
+      set_password "$login"
+      # the look (the skeleton already has it; run apply.sh as the installer does, as the user,
+      # keeping the skeleton's "keyboard layout chosen at install time" line)
+      if [ -f "$LOOK_APPLY" ]
+      then su "$login" -s /bin/sh -c "sh '$LOOK_APPLY' '/Users/$login'" > /dev/null 2>&1 || log "apply.sh failed for $login"
+      fi
+      log "user added: $login ($kind)"
+      echo "added $login" ;;
+
+   remove-user)
+      [ $# -eq 2 ] || die "$cmd: give login and keep-home|delete-home"
+      need_admin_caller; check_person "$1"
+      [ "$1" != "$caller" ] || die "you cannot remove your own account"
+      [ "$2" = keep-home ] || [ "$2" = delete-home ] || die "say keep-home or delete-home"
+      if is_admin "$1" && [ "$(admins | grep -vx "$1" | wc -l)" -eq 0 ]
+      then die "$1 is the last administrator"
+      fi
+      ! pgrep -u "$1" > /dev/null 2>&1 || die "$1 is logged in (log them out first)"
+      if [ "$(awk -F= '$1 == "autologin" { print $2 }' "$LXDM_CONF" 2>/dev/null)" = "$1" ]
+      then sed -i 's|^autologin=.*|# autologin=|' "$LXDM_CONF"
+      fi
+      if [ "$2" = delete-home ]
+      then userdel -r "$1" 2>/dev/null; [ ! -e "/Users/$1" ] || rm -rf --one-file-system "/Users/$1"
+      else userdel "$1"
+      fi
+      ! grep -q "^$1:" "$PASSWD" || die "the account was not removed"
+      log "user removed: $1 ($2)" ;;
+
+   set-admin)
+      [ $# -eq 2 ] || die "$cmd: give login and yes|no"
+      need_admin_caller; check_person "$1"
+      case "$2" in
+         yes) usermod -aG "$ADMIN_GROUP",lpadmin "$1" ;;
+         no)  [ "$1" != "$caller" ] || die "you cannot take away your own administrator rights"
+              [ "$(admins | grep -vx "$1" | wc -l)" -gt 0 ] || die "$1 is the last administrator"
+              gpasswd -d "$1" "$ADMIN_GROUP" > /dev/null
+              gpasswd -d "$1" lpadmin > /dev/null 2>&1 || true ;;
+         *) die "say yes or no" ;;
+      esac
+      log "administrator $2: $1" ;;
+
+   autologin-status)
+      nargs 0 "$@"; need_admin_caller
+      a=$(awk -F= '$1 == "autologin" && $2 != "" { print $2; exit }' "$LXDM_CONF" 2>/dev/null)
+      echo "${a:-off}" ;;
+
+   autologin)
+      nargs 1 "$@"; need_admin_caller
+      [ -f "$LXDM_CONF" ] || die "no login screen settings ($LXDM_CONF)"
+      if [ "$1" = off ]
+      then sed -i 's|^#* *autologin=.*|# autologin=|' "$LXDM_CONF"
+      else
+         check_person "$1"
+         if grep -q '^#* *autologin=' "$LXDM_CONF"
+         then sed -i "s|^#* *autologin=.*|autologin=$1|" "$LXDM_CONF"
+         else sed -i "s|^\[base\]\$|&\nautologin=$1|" "$LXDM_CONF"
+         fi
+         grep -qx "autologin=$1" "$LXDM_CONF" || die "could not set automatic login"
+      fi
+      log "automatic login: $1" ;;
+
+   ssh-status)
+      nargs 0 "$@"
+      s=off; [ -e "$SSH_FLAG" ] && s=on
+      r=stopped; sshd_running && r=running
+      echo "$s $r" ;;
+
+   ssh)
+      nargs 1 "$@"; need_admin_caller
+      mkdir -p "$STATE"; chmod 755 "$STATE"
+      case "$1" in
+         on)  touch "$SSH_FLAG"; start_sshd || die "the SSH server did not start" ;;
+         off) rm -f "$SSH_FLAG"; stop_sshd ;;
+         *) die "say on or off" ;;
+      esac
+      log "remote access: $1" ;;
+
+   boot-ssh)
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "boot-ssh is for the boot scripts"
+      if [ -e "$SSH_FLAG" ]; then start_sshd; fi ;;
+
+   update-status)
+      nargs 0 "$@"; need_admin_caller
+      gobo-update --status ;;
+
+   update-install)
+      nargs 1 "$@"; need_admin_caller
+      f="$1"
+      [[ "$f" == /* ]] || die "give the update file with its full path"
+      [[ "$f" != *[[:cntrl:]]* ]] || die "bad file name"
+      [[ "$f" == *.update ]] || die "an update file ends in .update"
+      [ -f "$f" ] || die "no such file: $f"
+      log "update started: $f"
+      # gobo-update checks owner, permissions, signature and size itself
+      gobo-update --yes "$f" 2>&1; rc=$?
+      log "update finished: exit $rc"
+      exit $rc ;;
+
+   update-rollback)
+      nargs 0 "$@"; need_admin_caller
+      gobo-update --yes --rollback 2>&1; rc=$?
+      log "rollback chosen: exit $rc"
+      exit $rc ;;
+
+   report)
+      nargs 0 "$@"
+      echo "=== Last kernel messages (dmesg | tail -n 400)"
+      dmesg | tail -n 400
+      echo; echo "=== gobo-update --status"
+      gobo-update --status 2>&1
+      for f in /Data/Variable/log/gobo-update.log /Data/Variable/log/gobo-wifi-switch.log "$LOG"
+      do
+         echo; echo "=== $f (last 100 lines)"
+         if [ -f "$f" ]; then tail -n 100 "$f"; else echo "(none)"; fi
+      done ;;
+
+   *) die "unknown sub-command: $cmd" ;;
+esac

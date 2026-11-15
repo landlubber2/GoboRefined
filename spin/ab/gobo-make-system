@@ -134,6 +134,12 @@ Exec "Starting wired network..."               dhcpcd -b -q -h "$HostName" eth0
 # and mark this system slot as good now that the boot has come this far (see gobo-update).
 Exec "Checking the system version..."          /System/Index/bin/gobo-update --boot-task
 BOOTUP
+grep -q 'gobo-settings-helper boot-ssh' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.8.2): remote access (SSH server), only if it was switched on in
+# Settings > Remote access (flag on the data partition; off by default).
+Exec "Starting remote access (if switched on)..." /System/Index/bin/gobo-settings-helper boot-ssh
+BOOTUP
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 
@@ -143,6 +149,17 @@ sudoers="$T/Programs/Sudo/Settings/sudoers"
 if [ -f "$sudoers" ] && ! grep -q 'NOPASSWD: /System/Index/bin/shutdown' "$sudoers"
 then
    echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown, /System/Index/bin/reboot, /System/Index/bin/poweroff, /System/Index/bin/halt' >> "$sudoers"
+fi
+# 0.8.2: Settings app. Administrators (group sys) may run everything through sudo anyway;
+# standard users may change their own password and read the root part of the system report
+# through the Settings helper (WITH their password), and restart/shut down from the power
+# menu without one, like administrators.
+if [ -f "$sudoers" ] && ! grep -q 'gobo-settings-helper own-password' "$sudoers"
+then
+   cat >> "$sudoers" <<'SUDOERS'
+%users ALL=(root) /System/Index/bin/gobo-settings-helper own-password, /System/Index/bin/gobo-settings-helper report
+%users ALL=(root) NOPASSWD: /System/Index/bin/shutdown -r now, /System/Index/bin/shutdown -h now
+SUDOERS
 fi
 chroot "$T" visudo -c > /dev/null || die "the sudo configuration is not valid"
 

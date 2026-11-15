@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
-# Runs INSIDE the build VM (snapshot "iso-build-env-8a"), as root:
+# Runs INSIDE the build VM (snapshot "iso-build-env-8b": 8a + L3afpad; hot-attach the stock ISO after boot), as root:
 #
 #   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
 #
@@ -48,13 +48,17 @@ cd $B
 trap 'rm -f "$SIGNING_KEY"' EXIT
 
 echo "== fetching installer and look from the host"
-for f in gobo-install gobo11.tgz welcome.src gobo-command-not-found software-install.txt ab.tgz
+for f in gobo-install gobo11.tgz welcome.src gobo-command-not-found software-install.txt ab.tgz spin-extra.tgz
 do wget -qO $f $HOST/$f
 done
 bash -n gobo-install
 rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 rm -rf ab && tar xzf ab.tgz 2>/dev/null
-bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
+# 0.8.2: firmware/ (regulatory.db) and settings/ (Settings app); cd spin && tar czf ../vm/serve/spin-extra.tgz firmware settings
+rm -rf firmware settings && tar xzf spin-extra.tgz 2>/dev/null
+bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass
+for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
+sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
 # boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
 head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in ||
@@ -87,6 +91,8 @@ install -m 755 ab/gobo-make-system $P/1.0/bin/gobo-make-system
 install -m 755 ab/gobo-power-button $P/1.0/bin/gobo-power-button   # 0.8.1 (acpid rule: gobo-make-system)
 # 0.8.1: Xorg input hot-plug (X -> gobo-xorg link: gobo-make-system)
 install -m 755 ab/gobo-xorg $P/1.0/bin/gobo-xorg
+# 0.8.2: "is this device on the system disk?" for the udev rule below and devmon (xinitrc)
+install -m 755 ab/gobo-system-disk $P/1.0/bin/gobo-system-disk
 mkdir -p $P/1.0/lib
 gcc -O2 -Wall -shared -fPIC -o $P/1.0/lib/gobo-udev-dev.so ab/gobo-udev-dev.c -ldl
 chmod 755 $P/1.0/lib/gobo-udev-dev.so
@@ -95,7 +101,18 @@ cp -r ab/dracut/90goboab $P/1.0/share/gobo-update/dracut/
 chmod 755 $P/1.0/share/gobo-update/dracut/90goboab/*.sh
 install -m 644 ab/update-signing.pub.pem ab/generated-caches ab/grub.cfg.in $P/1.0/share/gobo-update/
 install -m 644 ab/80-gobo-internal.rules $P/1.0/lib/udev/rules.d/
+# 0.8.2: Wi-Fi regulatory database (wireless-regdb, ISC; spin/firmware/wireless-regdb/SOURCE):
+# cfg80211 loads regulatory.db(.p7s) from /lib/firmware (= /System/Index/lib/firmware)
+mkdir -p $P/1.0/lib/firmware
+install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
+# 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report $P/1.0/bin/
+mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
+install -m 644 settings/main.lua settings/common.lua $P/1.0/share/gobo-settings/
+install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/
+install -m 644 settings/gobo-settings.desktop $P/1.0/share/applications/
 mkdir -p $P/1.0/share/doc
+install -m 644 firmware/wireless-regdb/LICENSE $P/1.0/share/doc/wireless-regdb-LICENSE
 install -m 644 software-install.txt $P/1.0/share/doc/software-install.txt
 cp -r gobo11 $P/1.0/share/gobo11
 echo "GoboRefined (unofficial spin of GoboLinux 017.01): thin installer and desktop look." > $P/1.0/Resources/Description
@@ -106,6 +123,7 @@ for prog in $EXTRA
 do chroot $R SymlinkProgram $prog | tail -n 1
 done
 chroot $R SymlinkProgram GoboSpin | tail -n 1
+[ -e $R/System/Index/lib/firmware/regulatory.db.p7s ] || { echo "regulatory.db not linked into lib/firmware"; exit 1; }
 echo "== Wi-Fi driver (RTL8852AU) into the kernel's updates directory, module index"
 for prog in $MODULES
 do

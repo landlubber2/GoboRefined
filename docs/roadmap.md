@@ -244,18 +244,20 @@ Real PC confirmed: update 0.8 → 0.8.1 with the file works. The report (kernel 
 never lost by kernel or Xorg when clicks stopped: the desktop swallowed them (stuck popup sheet suspected).
 
 Part 1 (desktop + Settings app core):
-1. Thin "show desktop" strip at the right end of the taskbar.
-2. Click loss: no menu opens by itself on adapter events; the click-catching sheet cannot outlive its menu.
-3. Power menu: choose with arrow keys, Enter, Escape.
+1. Thin "show desktop" strip at the right end of the taskbar. **Done (VM).**
+2. Click loss: no menu opens by itself on adapter events; the click-catching sheet cannot outlive its menu. **Done (VM; real PC to confirm).**
+3. Power menu: choose with arrow keys, Enter, Escape. **Done (VM).**
 4. Hide the BIOS boot partition (and every partition of the disk the system runs from, also when that disk
-   is attached over USB) from the automounter and the "USB drives" place.
-5. Wi-Fi regulatory database (`regulatory.db` missing in the kernel log).
+   is attached over USB) from the automounter and the "USB drives" place. **Done (rule matching in the VM; USB-attached system disk: real PC).**
+5. Wi-Fi regulatory database (`regulatory.db` missing in the kernel log). **Done (wireless-regdb 2026.09.03; VM).**
 6. **Settings app** ("control panel"): one window gathering what exists (appearance light/dark, displays,
    sound, network, trash retention, updates with slot status / apply file / rollback, about + "save system
    report") plus new: accounts (password, add/remove user, administrator or standard, automatic login),
    wallpaper, remote access (SSH on/off, off by default, shows the address). Other items from the
    "Control Panel but not here" list only where quick (keyboard layout, timezone/date, mouse speed, startup
-   programs, default programs).
+   programs, default programs). **Done: pages Appearance (incl. wallpaper), Accounts, Updates, Remote access,
+   Network, Sound, Displays, Trash, About + `gobo-report`; the quick extras were skipped. Placeholders for
+   Bluetooth/Hotspot (HANDOFF, 0.8.2 part 1).**
 
 Part 2 (needs hardware the VM lacks — shipped as experimental until the owner confirms):
 7. Bluetooth (on/off, pair, connect) in the Settings app.

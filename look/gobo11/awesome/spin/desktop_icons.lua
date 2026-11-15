@@ -133,7 +133,7 @@ end
 
 local tidy
 
-local function refresh()
+local function refresh(force)
    publish_workarea()
    local wp = save_wallpaper()
    if not wp then return end
@@ -145,7 +145,7 @@ local function refresh()
          changed = true
       end
    end
-   start_or_reload(changed)
+   start_or_reload(changed or force)
 end
 
 -- pictures of an older mode or screen size are not needed any more
@@ -159,6 +159,8 @@ tidy = function(keep)
       end
    end
 end
+
+M.refresh = function() refresh(true) end   -- 0.8.2: new wallpaper chosen in Settings (rc.lua)
 
 -- args.menu: function opening the desktop menu (called for a right click on an empty spot)
 function M.start(args)

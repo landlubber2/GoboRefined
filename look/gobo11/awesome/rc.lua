@@ -121,7 +121,18 @@ local layouts = {
 }
 
 -- Wallpaper (drawn by the theme at each screen's size)
+-- 0.8.2: a picture chosen in Settings > Appearance (a copy at ~/.config/goborefined/wallpaper,
+-- outside ~/.config/awesome, which apply.sh rewrites after every system update), scaled to
+-- cover the screen; else the theme's drawn wallpaper.
+local user_wallpaper = (os.getenv("HOME") or "") .. "/.config/goborefined/wallpaper"
 local function set_wallpaper(s)
+   if gears.filesystem.file_readable(user_wallpaper) then
+      local surf = gears.surface.load_uncached_silently(user_wallpaper, false)
+      if surf then
+         gears.wallpaper.maximized(surf, s, false)
+         return
+      end
+   end
    gears.wallpaper.maximized(beautiful.wallpaper(s), s, true)
 end
 awful.screen.connect_for_each_screen(set_wallpaper)
@@ -153,7 +164,7 @@ end
 popups.register("hotkeys", hide_help)
 local function show_help()
    popups.close_all("hotkeys")
-   hotkeys_backdrop = hotkeys_backdrop or popups.backdrop(hide_help)
+   hotkeys_backdrop = hotkeys_backdrop or popups.backdrop(hide_help, nil, function() return #hotkeys_visible() > 0 end)
    hotkeys_backdrop.show_on(awful.screen.focused())
    hotkeys_popup.show_help()
    for _, hw in ipairs(hotkeys_visible()) do
@@ -262,7 +273,8 @@ local mymainmenu = awful.menu({
    items = awful.util.table.join({
       { "Search applications...", function() launcher.show() end, beautiful.search_icon },
       { "Terminal", terminal, menubar.utils.lookup_icon("utilities-terminal") or beautiful.default_app_icon },
-   }),
+   }, gears.filesystem.file_readable("/System/Index/bin/gobo-settings")   -- 0.8.2: Settings app (gear)
+      and { { "Settings", "gobo-settings", menubar.utils.lookup_icon("preferences-system") or beautiful.default_app_icon } } or {}),
    theme = { width = beautiful.menu_width, height = beautiful.menu_height },
 })
 
@@ -337,6 +349,48 @@ mytextclock.font = beautiful.font_small
 
 local function status_icon(widget)
    return wibox.container.margin(widget, 4, 4, 14, 14)
+end
+
+-- 0.8.2: "show desktop" strip at the far right of the taskbar (as on Windows 11): a click
+-- minimizes every window of the screen's current desktop; the next click brings exactly those
+-- back. If a window is showing again (opened or restored since), a click hides again.
+local desktop_shown = {}   -- screen -> { tag = t, clients = {...}, focus = c }
+local function toggle_show_desktop(s)
+   local visible = {}
+   for _, c in ipairs(s.clients) do   -- the clients visible on this screen now
+      if not c.minimized and c.type ~= "desktop" and c.type ~= "dock" then table.insert(visible, c) end
+   end
+   local saved = desktop_shown[s]
+   if #visible == 0 and saved and saved.tag == s.selected_tag then
+      for _, c in ipairs(saved.clients) do
+         if c.valid then c.minimized = false end
+      end
+      if saved.focus and saved.focus.valid then client.focus = saved.focus; saved.focus:raise() end
+      desktop_shown[s] = nil
+   elseif #visible > 0 then
+      desktop_shown[s] = { tag = s.selected_tag, clients = visible, focus = client.focus }
+      for _, c in ipairs(visible) do c.minimized = true end
+   end
+end
+spin_show_desktop = toggle_show_desktop   -- lab tests
+
+local function show_desktop_strip(s)
+   local line = wibox.widget {
+      orientation = "vertical", thickness = 1, span_ratio = 0.5,
+      color = beautiful.fg_normal .. "40", forced_width = 1,
+      widget = wibox.widget.separator,
+   }
+   local strip = wibox.widget {
+      { line, nil, nil, layout = wibox.layout.align.horizontal },
+      forced_width = 6,
+      widget = wibox.container.background,
+   }
+   strip:connect_signal("mouse::enter", function() strip.bg = beautiful.hover_bg end)
+   strip:connect_signal("mouse::leave", function() strip.bg = nil end)
+   strip:buttons(awful.button({}, 1, function() toggle_show_desktop(s) end))
+   awful.tooltip({ objects = { strip }, text = "Show desktop" })
+   if s == screen.primary then spin_debug.showdesk = strip end   -- lab tests (T.pos)
+   return strip
 end
 
 local mywibox = {}
@@ -468,7 +522,8 @@ awful.screen.connect_for_each_screen(function(s)
       right_layout:add(status_icon(light_widget))
       right_layout:add(status_icon(sound_widget))
    end
-   right_layout:add(wibox.container.margin(mytextclock, 8, 12, 0, 0))
+   right_layout:add(wibox.container.margin(mytextclock, 8, 8, 0, 0))
+   right_layout:add(show_desktop_strip(s))
 
    local layout = wibox.layout.align.horizontal()
    layout.expand = "none"
@@ -494,6 +549,18 @@ wifi_switch.start({ icon = find_icon("network-wireless", "network-wireless-symbo
 
 -- Files in ~/Desktop on the desktop (PCManFM --desktop, spin/desktop_icons.lua); Trash clean-up
 desktop_icons.start({ menu = function() mymainmenu:toggle() end })   -- same as a root right click
+
+-- 0.8.2: called by the Settings app through awesome-client
+function spin_reload_wallpaper()
+   for s in screen do set_wallpaper(s) end
+   gears.timer.start_new(1, function() desktop_icons.refresh() return false end)   -- PCManFM's copy
+end
+function spin_open_network_menu()
+   if spin_debug.net then
+      spin_debug.net:emit_signal("button::press", 0, 0, 1, {}, {})
+      spin_debug.net:emit_signal("button::release", 0, 0, 1, {}, {})
+   end
+end
 
 -- 0.8: "System updated" / "System update undone" notice after a system update (spin/updates.lua)
 require("spin.updates").start()

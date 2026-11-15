@@ -1,0 +1,51 @@
+#!/bin/bash
+# gobo-report — write a system report to ~/system-report-<date>.txt (GoboRefined 0.8.2).
+# For when something does not work (also without a mouse: type "gobo-report" in a terminal or
+# on a text console). The Settings app's About page runs the same command.
+#
+# Contents: versions, USB devices, network interfaces and routes, Wi-Fi state, Xorg log and input
+# devices, and — through the root helper (sudo asks your password; graphical prompt on the
+# desktop) — the last kernel messages, gobo-update --status and the spin's logs.
+#   gobo-report [--no-root]     --no-root: skip the part that needs your password
+set -u
+export PATH=/System/Index/bin:/System/Index/sbin:$PATH
+HELPER=/System/Index/bin/gobo-settings-helper
+out="$HOME/system-report-$(date +%Y-%m-%d-%H%M).txt"
+noroot=0; [ "${1:-}" = --no-root ] && noroot=1
+
+section() { echo; echo "=== $*"; }
+run() { section "$*"; "$@" 2>&1; }
+
+umask 077
+{
+   echo "GoboRefined system report, $(date)"
+   echo "user: $(id -un) ($(id -Gn))"
+   echo "GoboRefined $(head -n 1 /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo '?'), based on GoboLinux 017.01"
+   run uname -a
+   run uptime
+   section "CPU and memory"
+   grep -m1 'model name' /proc/cpuinfo; grep -E 'MemTotal|MemAvailable|SwapTotal' /proc/meminfo
+   run df -h / /System/Data /Users
+   run lsusb
+   command -v lspci > /dev/null && { section "lspci -k"; lspci -k 2>&1; }
+   run ip addr
+   run ip route
+   command -v iwconfig > /dev/null && run iwconfig
+   section "rfkill"; cat /sys/class/rfkill/*/name /sys/class/rfkill/*/soft 2>/dev/null | paste - - 2>/dev/null
+   command -v xinput > /dev/null && [ -n "${DISPLAY:-}" ] && run xinput list
+   for x in "$HOME/.local/share/xorg/Xorg.0.log" /Data/Variable/log/Xorg.0.log
+   do
+      if [ -r "$x" ]; then section "$x (last 300 lines)"; tail -n 300 "$x"; break; fi
+   done
+   section "input devices (/proc/bus/input/devices)"; cat /proc/bus/input/devices
+   section "processes of the desktop"; ps -o pid,etime,cmd -u "$(id -u)" 2>/dev/null | head -n 60
+   if [ "$noroot" = 0 ] && [ -x "$HELPER" ]
+   then
+      section "Root part (gobo-settings-helper report)"
+      if [ -n "${DISPLAY:-}" ] && [ ! -t 0 ]
+      then SUDO_ASKPASS=/System/Index/bin/gobo-askpass sudo -A "$HELPER" report 2>&1 || echo "(not available: password refused or cancelled)"
+      else sudo "$HELPER" report 2>&1 || echo "(not available: password refused or cancelled)"
+      fi
+   fi
+} > "$out"
+echo "System report written to $out"

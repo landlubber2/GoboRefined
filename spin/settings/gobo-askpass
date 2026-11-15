@@ -1,0 +1,5 @@
+#!/bin/sh
+# gobo-askpass — graphical password prompt for "sudo -A" (SUDO_ASKPASS), used by the Settings
+# app and gobo-report. sudo runs it as the calling user; it prints the typed password on stdout
+# (to sudo, through a pipe), never anywhere else.
+exec zenity --password --title="Confirm with your password ($(id -un))" 2>/dev/null

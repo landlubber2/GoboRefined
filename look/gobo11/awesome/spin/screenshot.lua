@@ -214,7 +214,7 @@ local function build()
         spacing = 6, layout = wibox.layout.fixed.vertical },
       margins = 14, widget = wibox.container.margin,
    }
-   backdrop = popups.backdrop(function() screenshot.hide() end)
+   backdrop = popups.backdrop(function() screenshot.hide() end, nil, function() return popup ~= nil and popup.visible end)
 end
 
 function screenshot.hide()

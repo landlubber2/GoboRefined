@@ -185,7 +185,7 @@ local function build()
 
    -- A transparent sheet behind the popup: a click anywhere outside closes it (and a click
    -- on a window focuses that window).
-   backdrop = popups.backdrop(function() launcher.hide() end)
+   backdrop = popups.backdrop(function() launcher.hide() end, nil, function() return popup ~= nil and popup.visible end)
 end
 
 local prompt_grabber   -- the search prompt's awful.keygrabber function while it runs

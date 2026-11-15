@@ -1,0 +1,5 @@
+wireless-regdb 2026.09.03 (Wi-Fi regulatory database for the kernel's cfg80211; signed regulatory.db + .p7s)
+https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-2026.09.03.tar.xz
+sha256 b22e0901227b820cd1c280abe681a15b773a5103a5e10dc442e94ebb34cbf58d (matches sha256sums.asc on kernel.org)
+Licence: ISC (LICENSE). Files copied unchanged from the tarball.
+Installed by spin/build-iso.sh into GoboSpin lib/firmware (linked to /System/Index/lib/firmware).

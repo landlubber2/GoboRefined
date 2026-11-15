@@ -74,24 +74,49 @@ end
 
 -- A transparent sheet over a whole screen, below the popup: a click on it calls on_click.
 -- Shown before the popup, so the popup is stacked above it.
-function popups.backdrop(on_click, bg)
+-- 0.8.2: is_open() says whether the popup the sheet belongs to is still on screen. A sheet
+-- whose popup is gone swallows every click on the desktop while the pointer still moves (the
+-- real-PC "clicks stopped working" report): the watchdog below hides such a sheet, and a click
+-- on it hides it at once even when on_click fails.
+local backdrops = {}
+popups.backdrops = backdrops   -- lab tests
+function popups.backdrop(on_click, bg, is_open)
    local b = wibox({ ontop = true, visible = false, bg = bg or "#00000000", type = "utility" })
+   b.is_open = is_open
+   b.strikes = 0
    local function clicked()
-      on_click()
+      local ok, err = pcall(on_click)
+      if not ok then io.stderr:write("popups: backdrop click: " .. tostring(err) .. "\n") end
+      if b.visible and b.is_open and not b.is_open() then b.visible = false end
       popups.focus_under_pointer()
    end
    b:buttons(gears.table.join(
       awful.button({}, 1, clicked), awful.button({}, 2, clicked), awful.button({}, 3, clicked)))
    function b.show_on(s)
       b:geometry((s or awful.screen.focused()).geometry)
+      b.strikes = 0
       b.visible = true
    end
+   table.insert(backdrops, b)
    return b
+end
+
+-- number of sheets on screen (lab tests)
+function popups.visible_backdrops()
+   local n = 0
+   for _, b in ipairs(backdrops) do if b.visible then n = n + 1 end end
+   return n
 end
 
 -- awful.menu: close others before showing, backdrop while open (top-level menus only;
 -- submenus belong to their root). Called from rc.lua's awful.menu.new wrapper.
 local menu_backdrop
+local function any_menu_visible()
+   for om in pairs(open_menus) do
+      if om.wibox and om.wibox.visible then return true end
+   end
+   return false
+end
 function popups.manage_menu(m)
    if m.parent then return m end
    local show, hide = m.show, m.hide
@@ -99,24 +124,52 @@ function popups.manage_menu(m)
       popups.close_all(self)
       if not menu_backdrop then
          menu_backdrop = popups.backdrop(function()
-            for om in pairs(open_menus) do om:hide() end
-         end)
+            for om in pairs(open_menus) do pcall(om.hide, om) end
+            open_menus = {}
+         end, nil, any_menu_visible)
+         popups.menu_backdrop = menu_backdrop   -- lab tests
       end
       menu_backdrop.show_on(awful.screen.focused())
       open_menus[self] = true
-      show(self, args)
-      if not self.wibox.visible then   -- the menu refused to show (no items): no backdrop
+      local ok, err = pcall(show, self, args)
+      if not ok then io.stderr:write("popups: menu show: " .. tostring(err) .. "\n") end
+      if not ok or not self.wibox.visible then   -- the menu refused to show (no items): no backdrop
          open_menus[self] = nil
-         if next(open_menus) == nil then menu_backdrop.visible = false end
+         if not any_menu_visible() then menu_backdrop.visible = false end
       end
    end
    m.hide = function(self)
-      hide(self)
+      local ok, err = pcall(hide, self)
+      if not ok then io.stderr:write("popups: menu hide: " .. tostring(err) .. "\n") end
       open_menus[self] = nil
-      if menu_backdrop and next(open_menus) == nil then menu_backdrop.visible = false end
+      if menu_backdrop and not any_menu_visible() then menu_backdrop.visible = false end
    end
    return m
 end
+
+-- 0.8.2 watchdog: twice a second, a sheet whose popup is not visible gets a strike; on the
+-- second strike in a row (so a popup being drawn right now is never caught) it is hidden.
+-- Menus that vanished without hide() are dropped from the open list.
+gears.timer({ timeout = 0.5, autostart = true, callback = function()
+   for om in pairs(open_menus) do
+      if not (om.wibox and om.wibox.visible) then open_menus[om] = nil end
+   end
+   for _, b in ipairs(backdrops) do
+      if b.visible and b.is_open then
+         if b.is_open() then
+            b.strikes = 0
+         else
+            b.strikes = b.strikes + 1
+            if b.strikes >= 2 then
+               b.visible = false
+               b.strikes = 0
+               popups.watchdog_hits = (popups.watchdog_hits or 0) + 1
+               io.stderr:write("popups: watchdog hid a click sheet whose popup was gone\n")
+            end
+         end
+      end
+   end
+end })
 
 -- awful.keygrabber keeps its stack in a local table; reach it for panic().
 local function awful_grabbers()
@@ -141,6 +194,7 @@ end
 function popups.panic()
    popups.close_all()
    popups.release_grabs()
+   for _, b in ipairs(backdrops) do b.visible = false end   -- 0.8.2: no sheet survives Win+Escape
    -- back to a window: the one under the pointer, else the last focused one
    if not popups.focus_under_pointer() and not client.focus then
       local c = awful.client.focus.history.get(awful.screen.focused(), 0)

@@ -1,10 +1,16 @@
 # GoboRefined (0.8, A/B system): the system's own partitions are never offered as removable
 # drives, also when the system disk is a USB disk. udevil (and so devmon) treats a device with
 # UDISKS_SYSTEM_INTERNAL=1 as internal and does not mount it for normal users.
+# 0.8.2: also BIOS boot partitions (by GPT name and by GPT type; the real PC logged "FAT-fs
+# (sdc1): Directory bread failed" each time devmon tried the unlabelled 1 MB partition) and
+# every partition of the disk that holds the running system's data partition (gobo-system-disk).
 # Installed as /Programs/GoboSpin/Current/lib/udev/rules.d/80-gobo-internal.rules.
 SUBSYSTEM!="block", GOTO="gobo_internal_end"
-ENV{ID_PART_ENTRY_NAME}=="GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+ACTION=="remove", GOTO="gobo_internal_end"
+ENV{ID_PART_ENTRY_NAME}=="BIOSBOOT|GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
 ENV{ID_FS_LABEL}=="GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+ENV{ID_PART_ENTRY_TYPE}=="21686148-6449-6e6f-744e-656564454649", GOTO="gobo_internal_set"
+KERNEL=="sd*|nvme*|mmcblk*|vd*|hd*", PROGRAM=="/Programs/GoboSpin/Current/bin/gobo-system-disk %k", GOTO="gobo_internal_set"
 GOTO="gobo_internal_end"
 LABEL="gobo_internal_set"
 ENV{UDISKS_SYSTEM_INTERNAL}="1", ENV{UDISKS_PRESENTATION_NOPOLICY}="1", ENV{UDISKS_IGNORE}="1"
