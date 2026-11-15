@@ -189,6 +189,15 @@ then
       ln -sfn /Programs/GoboSpin/Current/lib/gobo-udev-dev.so "$T/System/Index/lib/gobo-udev-dev.so"
 fi
 
+# 0.8.3: Intel graphics use the kernel modesetting driver (Xorg picked the old "intel" DDX on a
+# Tiger Lake laptop: only a thin strip of the desktop showed). Matches i915 devices only.
+xorg_snippet="$T/Programs/GoboSpin/Current/share/gobo-xorg/20-intel-modesetting.conf"
+if [ -f "$xorg_snippet" ]
+then
+   mkdir -p "$T/System/Settings/X11/xorg.conf.d"
+   install -m 644 "$xorg_snippet" "$T/System/Settings/X11/xorg.conf.d/20-intel-modesetting.conf"
+fi
+
 # 0.8.1: short press of the power button (acpid had no rule at all): power menu on the
 # desktop, clean shutdown at the login screen or a text console (GoboSpin's gobo-power-button).
 acpi_events="$T/Programs/Acpid/Settings/acpi/events"

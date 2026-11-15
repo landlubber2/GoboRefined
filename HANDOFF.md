@@ -1335,3 +1335,43 @@ The fresh install was made after it and discarded by restoring it. VM powered of
 
 Downloads (0.8.2 part 2): dnsmasq 2.91, https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz (sha256
 `f622682848b33677adb2b6ad08264618a2ae0a01da486a93fd8cd91186b3d153`; upstream GPG signature not checked), GPL-2.0 or GPL-3.0.
+
+## Rebuild from the repository alone (build/, BUILDING.md) — IN PROGRESS (2026-11-15)
+
+**Where it stands (host shutdown interrupted the work):**
+- The VM runs (was being shut down cleanly by the main session) from snapshot `not even installed`:
+  stock 017.01 live session, BIOS firmware, the 40 GB disk formatted as ext4 (label BUILD) and used as
+  the build disk. No snapshot `repo-build-proof` was taken yet; the build disk's state is lost unless
+  the VM is snapshotted powered off before restoring anything else. (Check `VBoxManage snapshot ... list`.)
+- On that disk: `/Mount/Build/goborefined` (the repository from `vm/push-repo.sh --tarball`, i.e.
+  `vm/serve/goborefined-src.tgz`), `WORK=/Mount/Build/work`. **Every download verified** against
+  `build/sources.manifest` (all 19 files plus the stock ISO from `/dev/sr0` matched). **All 19 program
+  steps built** (xorriso ... dnsmasq; times: rtl8852au 377 s, copyq 470 s, the rest short).
+- `build.sh image` was running (run4): packing the live image passed, then it stopped at
+  "system update file": `bash: .../work/image/rootfs/Programs/GoboSpin/1.0/bin/gobo-make-system: No such
+  file or directory`. Not yet diagnosed (GoboSpin had been written into the image overlay earlier in the
+  same run; suspect something unmounted the image overlay `work/image/rootfs` between packing and
+  this step — look at the mounts and at build-iso's dracut `umount -R` lines first).
+- Fixed on the way (in the repo): LibFM's `lxshortcut.desktop` edit ran before `make install` (worked
+  in the lab only because the file was left from an older build); build-iso's folder-colour link check
+  resolved an absolute link against the build machine (now `chroot $R test -e`); wget timeouts.
+- **Next command** (after booting the live session, network `dhcpcd -b enp0s3`, clock check,
+  `mount /dev/sda /Mount/Build`): `WORK=/Mount/Build/work bash /Mount/Build/goborefined/build/build.sh`
+  (it skips the finished downloads and program steps and redoes the image). Push a fixed checkout first
+  with `vm/push-repo.sh --tarball` and re-unpack it into `/Mount/Build/goborefined`.
+- Still to do after the build passes: copy the output to the host, power off, snapshot `repo-build-proof`,
+  UEFI install of the new ISO with `--answers`, login, `vm/input-test.sh`, `vm/settings-test.sh`, Settings,
+  `gobo-update --status`, apply the new `.update` to slot B and reboot; compare `/Programs` with 0.8.2;
+  fill in the time/disk numbers (XX) in `BUILDING.md`; finish this section; restore `iso-0.8.2-updated-efi`.
+
+**What changed (lab flow):** `spin/build-iso.sh` takes every project file from the checkout (`REPO`)
+instead of `http://10.0.2.2:8766/`; `spin/build-programs.sh` reads patches, LXDM files,
+`gobo-wifi-switch` and GoboFiles from `SPIN` and the sources from `SRC` (no downloads) and has new steps
+xorriso, xrandr, inter, jetbrains-mono, papirus, l3afpad (rtl8852au from GitHub's commit archive). The
+`vm/serve/` copies (build-iso.sh, build-programs.sh, patches, ab.tgz, spin-extra.tgz, lxdm-files.tgz,
+gobofiles.tgz, gobo-wifi-switch, software-install.txt, gobo-command-not-found) are gone and the
+"must be identical" rule no longer applies; `welcome.src` moved to `spin/welcome.src`;
+`vm/serve/grub.cfg.in` (duplicate) removed. Lab: `vm/push-repo.sh` copies the checkout (tracked + new
+non-ignored files, uncommitted edits included, nothing committed) into the VM. The project key goes in
+with `GOBO_SIGNING_KEY` (pipe it into the guest's /dev/shm as before). Old snapshots `iso-build-env-*`
+still work with build-iso.sh directly (PROGRAMS_FROM empty = the VM's own /Programs).

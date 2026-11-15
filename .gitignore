@@ -3,18 +3,13 @@
 /vm/GoboLinux-017.01/
 /upstream/
 /dist/*.tgz
+/dist/*.update
 
 # Lab-only secrets and generated files
 /vm/ssh/
+/vm/keys/
 /vm/serve/k
 /vm/serve/lab-answers.env
 /vm/serve/*.tgz
-/vm/serve/build-iso.sh
-/spin/programs/*.tgz
-/vm/serve/build-programs.sh
-/vm/serve/*.patch
-/vm/serve/gobo-command-not-found
-/vm/serve/software-install.txt
-/vm/serve/gobo-wifi-switch
-/vm/keys/
-/dist/*.update
+# old lab packages (no longer used: build/build.sh compiles everything)
+/spin/programs/

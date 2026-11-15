@@ -111,6 +111,12 @@ Risk: items 1–3 low; **item 4 is the one change that can destroy someone's dat
 - Post the four bug reports (needs the user's GitHub account and a yes for each).
 - Offer the fixes that are clean enough as contributions.
 - Decide whether to publish the spin and its ISO.
+- **Rebuild from the repository alone — done (2026-11-15):** `build/build.sh` + `BUILDING.md` build the ISO
+  and update file from the stock 017.01 ISO, the checkout and pinned downloads (`build/sources.manifest`);
+  proven from scratch in the VM (HANDOFF, last section). Licence inventory: `docs/third-party.md`; the
+  project licence is GPL-2.0-or-later.
+- Before publishing (owner): how corresponding source for the redistributed binaries is provided, and the
+  other points at the end of `docs/third-party.md`.
 
 **Checkpoint 6:** reports filed; decision on publishing made.
 

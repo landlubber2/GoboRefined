@@ -1,43 +1,38 @@
 #!/bin/bash
-# Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
-# Runs INSIDE the build VM (snapshot "iso-build-env-8c": 8a + L3afpad + Dnsmasq; hot-attach the stock ISO after boot), as root:
+# Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01), as root on a 017.01 system.
 #
-#   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
+# Normally run by build/build.sh (see BUILDING.md), which prepares everything below and sets
+# the variables. Every project file is taken from the repository checkout REPO; nothing is
+# fetched from the network or from a lab file server.
 #
-# Needs, in the VM:
-#   - the stock GoboLinux-017.01 ISO attached as /dev/sr0
-#   - /Data/Build/rootfs            unpacked stock gobolinux-live.squashfs (unsquashfs)
-#   - /Data/Build/xorriso-inst      GNU xorriso built from source
-#   - /Programs/XRandR-Tool         xrandr built from source
-#   - /Programs/Inter, /Programs/JetBrains-Mono, /Programs/Papirus-Icon-Theme
-#                                   fonts and icons (snapshot "iso-build-env-3"; tarballs in spin/programs/)
-#   - /Programs/Menu-Cache, LibFM, PCManFM, PaVuControl, LxRandr, LXDM
-#                                   desktop programs (snapshot "iso-build-env-4"; built with
-#                                   spin/build-programs.sh; tarballs in spin/programs/)
-#   - /Programs/Udevil, USB-ModeSwitch, RTL8852AU, OnlyOffice
-#                                   USB automount, Wi-Fi mode switch + driver, office suite
-#                                   (snapshot "iso-build-env-5"; spin/build-programs.sh)
-#   - /Programs/CopyQ, and USB-ModeSwitch rebuilt with gobo-wifi-switch + the new udev rule
-#                                   clipboard history, Wi-Fi switch wrapper (snapshot "iso-build-env-6a")
-#   - LibFM and PCManFM rebuilt with spin/patches/*-gobo.patch (search, USB entry, folder icons,
-#     trash rule, desktop menu/work area), /Programs/GoboFiles (Trash window, folder colours)
-#                                   (snapshot "iso-build-env-6b"; spin/build-programs.sh)
-# and on the host: `node vm/serve.js` serving installer/gobo-install, gobo11.tgz, welcome.src,
-# gobo-command-not-found and software-install.txt (copies of spin/gobo-command-not-found and
-# docs/software-install.md in vm/serve/), lxdm-files.tgz (cd spin && tar czf ../vm/serve/lxdm-files.tgz
-# --exclude=render-title.sh lxdm), ab.tgz (0.8 A/B system: cd spin && tar czf ../vm/serve/ab.tgz ab).
+# Variables (defaults in brackets):
+#   REPO           the repository checkout                         [the folder above spin/]
+#   B              work folder for this image build                [/Data/Build]
+#   R              the stock live image tree to add to: an overlay over (or an unpacked copy of)
+#                  the stock gobolinux-live.squashfs; it is changed in place   [$B/rootfs]
+#   PROGRAMS_FROM  root of the tree holding the built /Programs/<Name> (build/build.sh: its
+#                  build root)                                     [empty = this system's /]
+#   ISO            the stock GoboLinux-017.01 ISO (file or device) [/dev/sr0]
+#   XORRISO        GNU xorriso binary                              [$B/xorriso-inst/bin/xorriso]
+#   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
+#                  this script ends                                [/dev/shm/gobo-update-signing.pem]
+#   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
+#   VERSION        [0.8.2]
+# Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
+# with spin/build-programs.sh.
 #
-# 0.8: also writes GoboRefined-$VERSION.update (the pristine system as a signed squashfs, for
-# gobo-update) next to the ISO. The signing key is NOT in the VM: before the build, put it into
-# memory only, from the host:  vm/ssh.sh 'umask 077; cat > /dev/shm/gobo-update-signing.pem' \
-#                                 < vm/keys/update-signing.pem
-# This script deletes it when it ends. Needs about 13 GB free in /Data/Build.
+# Writes $B/GoboRefined-$VERSION.iso and GoboRefined-$VERSION.update (the pristine system as a
+# signed squashfs, for gobo-update). Needs about 13 GB free in $B.
 set -e
-B=/Data/Build
-R=$B/rootfs
-HOST=http://10.0.2.2:8766
-VERSION=${VERSION:-0.8.2}
+B=${B:-/Data/Build}
+R=${R:-$B/rootfs}
+REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+PROGRAMS_FROM=${PROGRAMS_FROM:-}
+ISO=${ISO:-/dev/sr0}
+XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
+VERSION=${VERSION:-0.8.3}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
+PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
 # stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
 OUT=$B/GoboRefined-$VERSION.iso
@@ -47,15 +42,23 @@ cd $B
 [ -s "$SIGNING_KEY" ] || { echo "no signing key at $SIGNING_KEY (see the header of this script)"; exit 1; }
 trap 'rm -f "$SIGNING_KEY"' EXIT
 
-echo "== fetching installer and look from the host"
-for f in gobo-install gobo11.tgz welcome.src gobo-command-not-found software-install.txt ab.tgz spin-extra.tgz
-do wget -qO $f $HOST/$f
-done
+[ -f "$REPO/spin/build-iso.sh" ] && [ -f "$REPO/installer/gobo-install" ] || { echo "REPO=$REPO is not a GoboRefined checkout"; exit 1; }
+[ -d "$R/Programs/LiveCD" ] || { echo "$R is not the stock live image tree"; exit 1; }
+[ -x "$XORRISO" ] || { echo "no xorriso at $XORRISO"; exit 1; }
+[ -s "$PUBKEY" ] || { echo "no public key at $PUBKEY"; exit 1; }
+
+echo "== taking installer, look and spin files from the checkout $REPO"
+rm -rf gobo11 ab firmware settings
+cp "$REPO/installer/gobo-install" gobo-install
+cp "$REPO/spin/welcome.src" welcome.src
+cp "$REPO/spin/gobo-command-not-found" gobo-command-not-found
+cp "$REPO/docs/software-install.md" software-install.txt
+cp -r "$REPO/look/gobo11" gobo11
+cp -r "$REPO/spin/ab" ab
+# 0.8.2: firmware/ (regulatory.db) and settings/ (Settings app)
+cp -r "$REPO/spin/firmware" firmware
+cp -r "$REPO/spin/settings" settings
 bash -n gobo-install
-rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
-rm -rf ab && tar xzf ab.tgz 2>/dev/null
-# 0.8.2: firmware/ (regulatory.db) and settings/ (Settings app); cd spin && tar czf ../vm/serve/spin-extra.tgz firmware settings
-rm -rf firmware settings && tar xzf spin-extra.tgz 2>/dev/null
 bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass
 for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
@@ -63,8 +66,9 @@ for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
 # boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
 head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in ||
    { echo "ab/grub.cfg.in is not a valid boot menu template"; exit 1; }
-openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - ab/update-signing.pub.pem ||
-   { echo "the signing key does not belong to ab/update-signing.pub.pem"; exit 1; }
+openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - "$PUBKEY" ||
+   { echo "the signing key does not belong to $PUBKEY"; exit 1; }
+grep -q "PRIVATE KEY" "$PUBKEY" && { echo "$PUBKEY holds a private key"; exit 1; }
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
@@ -73,12 +77,13 @@ EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCMa
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
 for prog in $EXTRA $MODULES
-do rm -rf $R/Programs/$prog && cp -a /Programs/$prog $R/Programs/
+do
+   [ -d "$PROGRAMS_FROM/Programs/$prog" ] || { echo "program $prog not built (no $PROGRAMS_FROM/Programs/$prog)"; exit 1; }
+   rm -rf $R/Programs/$prog && cp -a "$PROGRAMS_FROM/Programs/$prog" $R/Programs/
 done
-# Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm on the host,
-# so a theme change does not depend on the build VM's copy of /Programs/LXDM being up to date.
-rm -rf lxdm-files && mkdir lxdm-files && wget -qO- $HOST/lxdm-files.tgz | tar xz -C lxdm-files
-install -m 644 lxdm-files/lxdm/Gobo11/* $R/Programs/LXDM/0.5.3/share/lxdm/themes/Gobo11/
+# Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm in the
+# checkout, so a theme change does not depend on the copy built into /Programs/LXDM.
+install -m 644 "$REPO"/spin/lxdm/Gobo11/* $R/Programs/LXDM/0.5.3/share/lxdm/themes/Gobo11/
 P=$R/Programs/GoboSpin
 rm -rf $P && mkdir -p $P/1.0/bin $P/1.0/share $P/1.0/Resources
 install -m 755 gobo-install $P/1.0/bin/gobo-install
@@ -99,8 +104,16 @@ chmod 755 $P/1.0/lib/gobo-udev-dev.so
 mkdir -p $P/1.0/share/gobo-update/dracut $P/1.0/lib/udev/rules.d
 cp -r ab/dracut/90goboab $P/1.0/share/gobo-update/dracut/
 chmod 755 $P/1.0/share/gobo-update/dracut/90goboab/*.sh
-install -m 644 ab/update-signing.pub.pem ab/generated-caches ab/grub.cfg.in $P/1.0/share/gobo-update/
+install -m 644 ab/generated-caches ab/grub.cfg.in $P/1.0/share/gobo-update/
+# the public key updates for this image must be signed with (the project's, or the builder's own)
+install -m 644 "$PUBKEY" $P/1.0/share/gobo-update/update-signing.pub.pem
 install -m 644 ab/80-gobo-internal.rules $P/1.0/lib/udev/rules.d/
+# 0.8.3: Intel graphics on the modesetting driver (gobo-make-system copies it into
+# /System/Settings/X11/xorg.conf.d of every system tree; the live image gets it below)
+mkdir -p $P/1.0/share/gobo-xorg
+install -m 644 ab/20-intel-modesetting.conf $P/1.0/share/gobo-xorg/
+mkdir -p $R/System/Settings/X11/xorg.conf.d
+install -m 644 ab/20-intel-modesetting.conf $R/System/Settings/X11/xorg.conf.d/
 # 0.8.2: Wi-Fi regulatory database (wireless-regdb, ISC; spin/firmware/wireless-regdb/SOURCE):
 # cfg80211 loads regulatory.db(.p7s) from /lib/firmware (= /System/Index/lib/firmware)
 mkdir -p $P/1.0/lib/firmware
@@ -118,6 +131,8 @@ cp -r gobo11 $P/1.0/share/gobo11
 echo "GoboRefined (unofficial spin of GoboLinux 017.01): thin installer and desktop look." > $P/1.0/Resources/Description
 echo "$VERSION" > $P/1.0/share/spin-version
 ln -sfn 1.0 $P/Current
+# never a private key in the image
+grep -rqs -e "PRIVATE KEY" $P && { echo "a private key ended up in GoboSpin"; exit 1; }
 mount -t proc proc $R/proc
 for prog in $EXTRA
 do chroot $R SymlinkProgram $prog | tail -n 1
@@ -176,14 +191,15 @@ grep -q 'gobo-wifi-switch --udev' $R/Programs/USB-ModeSwitch/Current/lib/udev/ru
 for f in bin/gobo-trash bin/gobo-trash-purge bin/gobo-folder-colour share/file-manager/actions/gobo-folder-colour.desktop
 do [ -e $R/Programs/GoboFiles/Current/$f ] || { echo "GoboFiles: $f missing"; exit 1; }
 done
-[ -e $R/System/Index/share/file-manager/actions/gobo-folder-colour.desktop ] || { echo "folder colour action not linked"; exit 1; }
+# (inside the chroot: GoboLinux links are absolute and would resolve against the build machine)
+chroot $R test -e /System/Index/share/file-manager/actions/gobo-folder-colour.desktop || { echo "folder colour action not linked"; exit 1; }
 # no stray link inside /Mount/Media (USB drives are mounted there; see gobo-install)
 [ -L $R/Mount/Media/Media ] && rm -f $R/Mount/Media/Media
 echo "== initramfs with the A/B root (dracut module goboab; same modules as the stock image + goboab)"
 DRACUT_MODS=$R/Programs/Dracut/Current/lib/dracut/modules.d
 ln -sfn /Programs/GoboSpin/Current/share/gobo-update/dracut/90goboab $DRACUT_MODS/90goboab
-mount --rbind /sys $R/System/Kernel/Objects
-mount --rbind /dev $R/System/Kernel/Devices
+mount --rbind /sys $R/System/Kernel/Objects && mount --make-rslave $R/System/Kernel/Objects
+mount --rbind /dev $R/System/Kernel/Devices && mount --make-rslave $R/System/Kernel/Devices
 IMG=/Programs/Linux/Current/Resources/Unmanaged/System/Kernel/Boot/initramfs-$KREL.img
 chroot $R dracut --kver $KREL --force --no-hostonly -L 4 --add goboab $IMG > $B/dracut.log 2>&1 ||
    { tail -n 20 $B/dracut.log; exit 1; }
@@ -243,7 +259,7 @@ ls -la $UPDATE
 sha256sum $UPDATE
 
 echo "== writing the ISO (boot records are replayed from the stock ISO)"
-$B/xorriso-inst/bin/xorriso -indev stdio:/dev/sr0 -outdev $OUT \
+"$XORRISO" -indev "stdio:$ISO" -outdev $OUT \
    -boot_image any replay \
    -rm /gobolinux-live.squashfs -- \
    -map $B/gobolinux-live.squashfs /gobolinux-live.squashfs \

@@ -1,19 +1,37 @@
 #!/bin/bash
-# Build the stage 3 desktop programs by hand in the build VM (as root), GoboLinux style:
-# each one goes to /Programs/<Name>/<Version> (settings in /Programs/<Name>/Settings) and is
-# activated with SymlinkProgram. Sources are expected in /Data/Build/src3 (list in HANDOFF.md, stage 3).
+# Build the programs GoboRefined adds to the stock GoboLinux 017.01 image, one step at a time,
+# GoboLinux style: each one goes to /Programs/<Name>/<Version> (settings in
+# /Programs/<Name>/Settings) and is activated with SymlinkProgram. Run as root on a 017.01
+# system. build/build.sh runs every step, in order, inside its own build root (a chroot of the
+# stock image), so nothing here touches the computer the build runs on.
 #
-#   bash build-programs.sh <step>      steps, in order: menu-cache libfm pcmanfm pavucontrol lxrandr lxdm
-#                                      0.5: udevil usb-modeswitch rtl8852au onlyoffice
-#                                      0.6: copyq (and usb-modeswitch again: gobo-wifi-switch),
-#                                           libfm + pcmanfm again (spin/patches/*-gobo.patch), gobofiles
-#                                      0.8.2: dnsmasq (DHCP for the Wi-Fi hotspot)
-#   (0.5 sources: udevil-0.4.4.tar.gz, usb-modeswitch-2.6.1.tar.bz2 in src3; rtl8852au is cloned
-#    from GitHub and onlyoffice downloaded by their steps; list in HANDOFF.md, 0.5 section)
+#   bash build-programs.sh <step>
+#
+# Steps, in this order (later ones need earlier ones):
+#   xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
+#   lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq
+# (menu-cache builds LibFM "extra only" first, so libfm and pcmanfm must follow it.)
+#
+# Environment:
+#   SRC   folder holding the downloaded sources (file names as in build/sources.manifest;
+#         build/build.sh downloads and checks them). Default /Data/Build/src3.
+#   WORK  scratch folder for unpacked sources. Default /Data/Build/work3.
+#   SPIN  the repository's spin/ folder (patches, LXDM theme, gobo-wifi-switch, gobofiles).
+#         Default: the folder this script is in.
 set -e
-SRC=/Data/Build/src3
-WORK=/Data/Build/work3
+SRC=${SRC:-/Data/Build/src3}
+WORK=${WORK:-/Data/Build/work3}
+SPIN=${SPIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+[ -d "$SPIN/patches" ] || { echo "SPIN=$SPIN is not the repository's spin/ folder"; exit 1; }
 mkdir -p $WORK
+
+# need <file>...: the sources must be there (build/build.sh fetches them)
+need() {
+   local f
+   for f in "$@"
+   do [ -f "$SRC/$f" ] || { echo "missing source $SRC/$f (run build/build.sh fetch)"; exit 1; }
+   done
+}
 # gcc 14 turns several old warnings into errors; these 2016-era sources need them as warnings again
 CF="-O2 -fcommon -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
 
@@ -27,13 +45,24 @@ gobo_configure() {
       --disable-static "$@"
 }
 
-# unpack <tarball>: fresh source tree, cd into it
+# unpack <tarball> [<folder it unpacks to>]: fresh source tree, cd into it
 unpack() {
-   local t=$1 d
-   d=$(basename $t | sed -E 's/\.tar\.(xz|gz|bz2)$//')
+   local t=$1 d=${2:-}
+   need $t
+   [ -n "$d" ] || d=$(basename $t | sed -E 's/\.tar\.(xz|gz|bz2)$//')
    rm -rf $WORK/$d
    tar xf $SRC/$t -C $WORK
    cd $WORK/$d
+}
+
+# resources <Name> <Version> <Summary> <Licence> <Homepage>: Resources for data-only programs
+resources() {
+   local P=/Programs/$1/$2
+   mkdir -p $P/Resources
+   echo x86_64 > $P/Resources/Architecture
+   : > $P/Resources/Dependencies
+   printf '[Name] %s\n[Summary] %s\n[License] %s\n[Homepage] %s\n' "$1" "$3" "$4" "$5" > $P/Resources/Description
+   ln -sfn $2 /Programs/$1/Current
 }
 
 # finish <Name> <Version> <Description>: make install, Resources, Current link, SymlinkProgram
@@ -55,6 +84,75 @@ finish() {
 }
 
 case "$1" in
+xorriso)
+   # GNU xorriso, only a build tool (writes the ISO; 017.01 has no ISO authoring tool).
+   # Not part of the image: installed to /Data/Build/xorriso-inst.
+   unpack xorriso-1.5.6.pl02.tar.gz xorriso-1.5.6
+   ./configure --prefix=/Data/Build/xorriso-inst
+   make -j2
+   make install
+   /Data/Build/xorriso-inst/bin/xorriso -version | head -n 1
+   ;;
+xrandr)
+   # the xrandr command (017.01 ships only the XRandR library); needed by displays.sh and LxRandr
+   unpack xrandr-1.5.2.tar.xz
+   ./configure --prefix=/Programs/XRandR-Tool/1.5.2
+   finish XRandR-Tool 1.5.2 "xrandr command-line tool (X.Org), built from source."
+   ;;
+inter)
+   # Inter 4.1, the static TTFs of the text family (Light to Bold, with italics)
+   need Inter-4.1.zip
+   P=/Programs/Inter/4.1 D=$WORK/inter
+   rm -rf $D $P && mkdir -p $D $P/share/fonts/Inter $P/doc
+   unzip -q $SRC/Inter-4.1.zip -d $D
+   for w in Light Regular Medium SemiBold Bold
+   do
+      [ $w = Regular ] && it=Italic || it=${w}Italic
+      install -m 644 $D/extras/ttf/Inter-$w.ttf $D/extras/ttf/Inter-$it.ttf $P/share/fonts/Inter/
+   done
+   install -m 644 $D/LICENSE.txt $P/doc/LICENSE
+   resources Inter 4.1 "Inter UI typeface (static TTF, text family)" "SIL Open Font License 1.1" "https://rsms.me/inter/"
+   SymlinkProgram Inter 4.1 | tail -n 1
+   ;;
+jetbrains-mono)
+   need JetBrainsMono-2.304.zip
+   P=/Programs/JetBrains-Mono/2.304 D=$WORK/jbmono
+   rm -rf $D $P && mkdir -p $D $P/share/fonts/JetBrainsMono $P/doc
+   unzip -q $SRC/JetBrainsMono-2.304.zip -d $D
+   for s in Regular Italic Medium MediumItalic Bold BoldItalic
+   do install -m 644 $D/fonts/ttf/JetBrainsMono-$s.ttf $P/share/fonts/JetBrainsMono/
+   done
+   install -m 644 $D/OFL.txt $P/doc/LICENSE
+   resources JetBrains-Mono 2.304 "JetBrains Mono monospace typeface" "SIL Open Font License 1.1" "https://www.jetbrains.com/lp/mono/"
+   SymlinkProgram JetBrains-Mono 2.304 | tail -n 1
+   ;;
+papirus)
+   # Papirus, Papirus-Dark, Papirus-Light: only the sizes 16-64 (no 8, 18, 42, 84, 96, 128,
+   # no @2x HiDPI folders); index.theme lists only the folders that are kept.
+   unpack papirus-icon-theme-20260801.tar.gz
+   P=/Programs/Papirus-Icon-Theme/20260801
+   rm -rf $P && mkdir -p $P/share/icons $P/doc
+   for t in Papirus Papirus-Dark Papirus-Light
+   do
+      mkdir -p $P/share/icons/$t
+      for s in 16x16 22x22 24x24 32x32 48x48 64x64
+      do if [ -d $t/$s ]; then cp -a $t/$s $P/share/icons/$t/; fi
+      done
+      awk -F= '
+         /^Directories=/ {
+            n = split($2, a, ","); s = ""
+            for (i = 1; i <= n; i++) { split(a[i], b, "/"); if (b[1] ~ /^(16|22|24|32|48|64)x/) s = s (s == "" ? "" : ",") a[i] }
+            print "Directories=" s; next }
+         /^ScaledDirectories=/ { print "ScaledDirectories="; next }
+         { print }' $t/index.theme > $P/share/icons/$t/index.theme
+   done
+   install -m 644 AUTHORS LICENSE $P/doc/
+   resources Papirus-Icon-Theme 20260801 "Papirus icon theme (sizes 16-64 only, no HiDPI @2x)" "GPL-3.0" "https://github.com/PapirusDevelopmentTeam/papirus-icon-theme"
+   SymlinkProgram Papirus-Icon-Theme 20260801 | tail -n 1
+   for t in Papirus Papirus-Dark Papirus-Light
+   do gtk-update-icon-cache -q -f $P/share/icons/$t || true
+   done
+   ;;
 menu-cache)
    # menu-cache needs libfm-extra (part of libfm, built "extra only" first; the libfm step replaces it)
    unpack libfm-1.2.5.tar.xz
@@ -71,12 +169,14 @@ libfm)
    # (folder colours); only files on the home file system go to the trash (others: asked,
    # then deleted for good). Custom actions are on again (0.6, folder colours): the tarball
    # ships the C files generated from Vala, so no Vala compiler is needed.
-   wget -qO- http://10.0.2.2:8766/libfm-1.2.5-gobo.patch | patch -p1
+   patch -p1 < $SPIN/patches/libfm-1.2.5-gobo.patch
    gobo_configure LibFM 1.2.5 --with-gtk=3 --disable-exif CFLAGS="$CF"
    grep -q '^#define HAVE_ACTIONS 1' config.h
-   # the shortcut editor is not useful as a menu entry
-   echo "NoDisplay=true" >> /Programs/LibFM/1.2.5/share/applications/lxshortcut.desktop
    finish LibFM 1.2.5 "File management library used by PCManFM (GTK 3 build)."
+   # the shortcut editor is not useful as a menu entry (after "make install": the lab build
+   # once wrote this before it, which only worked because the file was there from a build before)
+   grep -q '^NoDisplay=true' /Programs/LibFM/1.2.5/share/applications/lxshortcut.desktop ||
+      echo "NoDisplay=true" >> /Programs/LibFM/1.2.5/share/applications/lxshortcut.desktop
    ;;
 pcmanfm)
    unpack pcmanfm-1.2.5.tar.xz
@@ -85,7 +185,7 @@ pcmanfm)
    # stays as Tools -> Advanced Search (Ctrl+Shift+F). Desktop mode (0.6, desktop icons): a right
    # click on an empty spot runs $GOBO_DESKTOP_MENU_COMMAND (Awesome's menu; Ctrl+right click =
    # PCManFM's own), and the icon area follows _NET_WORKAREA read directly (set by the look)
-   wget -qO- http://10.0.2.2:8766/pcmanfm-1.2.5-gobo.patch | patch -p1
+   patch -p1 < $SPIN/patches/pcmanfm-1.2.5-gobo.patch
    gobo_configure PCManFM 1.2.5 --with-gtk=3 CFLAGS="$CF"
    finish PCManFM 1.2.5 "Lightweight file manager (GTK 3 build)."
    # Awesome owns the wallpaper: hide the "Desktop Preferences" entry (it manages desktop icons)
@@ -106,15 +206,13 @@ lxrandr)
 lxdm)
    # LXDM installs its settings straight into /etc/lxdm and /etc/pam.d; move them into
    # /Programs/LXDM/Settings (SymlinkProgram links them back) and replace them with the
-   # spin's files from spin/lxdm (fetched from the host as lxdm-files.tgz).
+   # spin's files from spin/lxdm.
    post_install() {
       local S=/Programs/LXDM/Settings
       mkdir -p $S/lxdm $S/pam.d
       mv /etc/lxdm/* $S/lxdm/ && rmdir /etc/lxdm
       rm -f /etc/pam.d/lxdm
-      rm -rf /Data/Build/lxdm-files && mkdir -p /Data/Build/lxdm-files
-      wget -qO- http://10.0.2.2:8766/lxdm-files.tgz | tar xz -C /Data/Build/lxdm-files
-      local F=/Data/Build/lxdm-files/lxdm
+      local F=$SPIN/lxdm
       install -m 640 $F/lxdm.conf $S/lxdm/lxdm.conf
       install -m 755 $F/Xsession $S/lxdm/Xsession
       install -m 755 $F/PostLogout $S/lxdm/PostLogout
@@ -156,8 +254,8 @@ udevil)
    unpack udevil-0.4.4.tar.gz
    # libudev ignores "udev" event monitors on GoboLinux (/dev is a link, not a devtmpfs mount),
    # so devmon never heard of new drives: listen to kernel events and wait for udevd instead.
-   # (spin/patches/, served by vm/serve.js like the LXDM files)
-   wget -qO- http://10.0.2.2:8766/udevil-0.4.4-gobo-monitor.patch | patch -p1
+   # (spin/patches/udevil-0.4.4-gobo-monitor.patch)
+   patch -p1 < $SPIN/patches/udevil-0.4.4-gobo-monitor.patch
    gobo_configure Udevil 0.4.4 --disable-systemd CFLAGS="$CF"
    finish Udevil 0.4.4 "Mounts removable drives as a normal user (setuid helper) and devmon automounter."
    ;;
@@ -171,12 +269,12 @@ usb-modeswitch)
    rm -rf $P && mkdir -p $P/bin $P/share/man/man1 $P/lib/udev/rules.d $P/Resources
    install -m 755 usb_modeswitch $P/bin/
    install -m 644 usb_modeswitch.1 $P/share/man/man1/
-   # 0.6: the rule starts gobo-wifi-switch (spin/gobo-wifi-switch, fetched from the host): it
+   # 0.6: the rule starts gobo-wifi-switch (spin/gobo-wifi-switch): it
    # leaves udev at once, waits, retries the switch and logs to /var/log/gobo-wifi-switch.log.
    # (0.5 ran usb_modeswitch straight from the rule; on the real PC nothing happened, while the
    # same command typed later worked.) The desktop session runs it too (sudo rule: build-iso.sh).
-   wget -qO $P/bin/gobo-wifi-switch http://10.0.2.2:8766/gobo-wifi-switch
-   chmod 755 $P/bin/gobo-wifi-switch
+   bash -n $SPIN/gobo-wifi-switch
+   install -m 755 $SPIN/gobo-wifi-switch $P/bin/gobo-wifi-switch
    cat > $P/lib/udev/rules.d/40-gobo-realtek-wifi.rules <<'RULES'
 # GoboRefined: Realtek Wi-Fi USB adapters (e.g. TP-Link Archer TX20U Plus) first show up
 # as a virtual "driver CD" with ID 0bda:1a2b. Switch them (gobo-wifi-switch ejects the CD in
@@ -199,10 +297,10 @@ rtl8852au)
    # the 6.12 kernel's rtw89 has no USB support. Built against the image's own kernel tree.
    # The kernel tree lacks include/config/kernel.release, so KERNELRELEASE is passed by hand,
    # and the driver's Makefile is used through kbuild directly (it needs TopDIR for that).
+   # Source: GitHub's archive of commit 865ab0f (same files as a git checkout of that commit).
    KREL=6.12.16-Gobo REV=865ab0f V=20240506 P=/Programs/RTL8852AU/20240506
-   [ -d $SRC/rtl8852au ] || git clone -q https://github.com/lwfinger/rtl8852au.git $SRC/rtl8852au
-   rm -rf $WORK/rtl8852au && git clone -q $SRC/rtl8852au $WORK/rtl8852au
-   cd $WORK/rtl8852au && git checkout -q $REV
+   FULL=865ab0fa91471d595c283d2f3db323f7f15455f5
+   unpack rtl8852au-$FULL.tar.gz rtl8852au-$FULL
    make -j2 -C /lib/modules/$KREL/build M=$PWD KERNELRELEASE=$KREL TopDIR=$PWD CONFIG_RTL8852AU=m modules
    rm -rf $P && mkdir -p $P/lib/modules/$KREL/updates $P/Resources $P/doc
    install -m 644 8852au.ko $P/lib/modules/$KREL/updates/
@@ -221,7 +319,7 @@ onlyoffice)
    # the image has 2.30). Downloaded from the ONLYOFFICE GitHub releases into $SRC.
    V=10.0.0 P=/Programs/OnlyOffice/10.0.0
    T=onlyoffice-desktopeditors-x64-$V.tar.xz
-   [ -f $SRC/$T ] || wget -q -O $SRC/$T https://github.com/ONLYOFFICE/DesktopEditors/releases/download/v$V/onlyoffice-desktopeditors-x64.tar.xz
+   need $T
    rm -rf $WORK/onlyoffice && mkdir -p $WORK/onlyoffice && tar xJf $SRC/$T -C $WORK/onlyoffice
    cd $WORK/onlyoffice
    rm -rf $P && mkdir -p $P/bin $P/lib $P/share $P/Resources
@@ -252,7 +350,7 @@ copyq)
    # Qt 5.15+). No KDE Frameworks on the image: Qt's own notifications instead of KNotifications.
    # Source: https://github.com/hluk/CopyQ/archive/refs/tags/v6.4.0.tar.gz -> $SRC/CopyQ-6.4.0.tar.gz
    V=6.4.0 P=/Programs/CopyQ/6.4.0
-   [ -f $SRC/CopyQ-$V.tar.gz ] || wget -q -O $SRC/CopyQ-$V.tar.gz https://github.com/hluk/CopyQ/archive/refs/tags/v$V.tar.gz
+   need CopyQ-$V.tar.gz
    rm -rf $WORK/CopyQ-$V && tar xzf $SRC/CopyQ-$V.tar.gz -C $WORK
    # X11 only: its Wayland clipboard needs extra-cmake-modules, Wayland and QtWaylandClient,
    # none of which the image has. Drop that part (it is used only when not running on X11).
@@ -286,13 +384,12 @@ copyq)
    SymlinkProgram CopyQ $V | tail -n 1
    ;;
 gobofiles)
-   # 0.6: the spin's own file tools (sources in spin/gobofiles/, served as gobofiles.tgz):
+   # 0.6: the spin's own file tools (sources in spin/gobofiles/):
    # gobo-trash (Trash window, GTK 3, C), gobo-trash-purge (all deleting from the Trash, age
    # limit), gobo-folder-colour + the PCManFM menu entry "Folder colour..." (libfm custom action).
    V=0.6 P=/Programs/GoboFiles/0.6
-   rm -rf $WORK/gobofiles && mkdir -p $WORK/gobofiles && cd $WORK/gobofiles
-   wget -qO- http://10.0.2.2:8766/gobofiles.tgz | tar xz
-   cd gobofiles
+   rm -rf $WORK/gobofiles && cp -r $SPIN/gobofiles $WORK/gobofiles
+   cd $WORK/gobofiles
    for s in gobo-trash-purge gobo-folder-colour; do bash -n $s; done
    gcc -O2 -Wall -o gobo-trash gobo-trash.c $(pkg-config --cflags --libs gtk+-3.0)
    rm -rf $P && mkdir -p $P/bin $P/share/applications $P/share/file-manager/actions $P/Resources
@@ -308,7 +405,7 @@ dnsmasq)
    # Hotspot; started by gobo-hotspot with its own command line, never as a system service).
    # Plain Makefile, no dependencies. Source: https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz
    V=2.91 P=/Programs/Dnsmasq/2.91
-   [ -f $SRC/dnsmasq-$V.tar.xz ] || wget -q -O $SRC/dnsmasq-$V.tar.xz https://thekelleys.org.uk/dnsmasq/dnsmasq-$V.tar.xz
+   need dnsmasq-$V.tar.xz
    rm -rf $WORK/dnsmasq-$V && tar xf $SRC/dnsmasq-$V.tar.xz -C $WORK
    cd $WORK/dnsmasq-$V
    make -j2 PREFIX=$P COPTS="-O2"
@@ -318,6 +415,13 @@ dnsmasq)
    echo "dnsmasq: small DHCP and DNS server (gives addresses to devices on the Wi-Fi hotspot)." > $P/Resources/Description
    ln -sfn $V /Programs/Dnsmasq/Current
    SymlinkProgram Dnsmasq $V | tail -n 1
+   ;;
+l3afpad)
+   # 0.8.1: plain text editor (GTK 3 fork of Leafpad), the default for text/plain (apply.sh)
+   unpack l3afpad-0.8.18.1.11.tar.gz
+   ./autogen.sh
+   ./configure --prefix=/Programs/L3afpad/0.8.18.1.11
+   finish L3afpad 0.8.18.1.11 "L3afpad: simple GTK 3 text editor (Leafpad fork)."
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

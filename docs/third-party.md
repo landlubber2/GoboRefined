@@ -1,0 +1,82 @@
+# Third-party components in GoboRefined
+
+What the GoboRefined ISO (and update file) contains besides the project's own files, with the
+licence each upstream states, where it comes from, and whether we change it. Facts only, gathered
+from the sources and from `HANDOFF.md`; this is not legal advice. Pins (version, URL, sha256) are
+in `build/sources.manifest`.
+
+The project's own scripts, look files and tools (`installer/`, `look/gobo11/`, `spin/ab/`,
+`spin/settings/`, `spin/gobofiles/`, `spin/gobo-*`, `spin/lxdm/` files, the patches in
+`spin/patches/`, `build/`) are GPL-2.0-or-later (owner's decision; `LICENSE` at the repository root).
+
+## Added by GoboRefined (built or copied into the image)
+
+| Component | Version | Licence (as stated upstream) | Source | Changed by us? |
+|---|---|---|---|---|
+| xrandr (program `XRandR-Tool`) | 1.5.2 | X.Org permissive licence (COPYING; HPND-style) | https://www.x.org/releases/individual/app/xrandr-1.5.2.tar.xz | no |
+| Inter | 4.1 | SIL Open Font License 1.1 | https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip | no (10 of the static TTF files copied unchanged) |
+| JetBrains Mono | 2.304 | SIL Open Font License 1.1 | https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip | no (6 TTF files copied unchanged) |
+| Papirus icon theme (Papirus, -Dark, -Light) | 20260801 | GPL-3.0 (LICENSE) | https://github.com/PapirusDevelopmentTeam/papirus-icon-theme | trimmed: only sizes 16–64 copied, `index.theme` lists only those folders (`spin/build-programs.sh`, step `papirus`); icon files unchanged. `gobo-folder-colour` makes recoloured copies of one folder icon at run time in the user's home |
+| Menu-Cache | 1.0.2 | LGPL-2.1-or-later | https://downloads.sourceforge.net/lxde/menu-cache-1.0.2.tar.xz | no (compiler flags only) |
+| LibFM | 1.2.5 | GPL-2.0 (COPYING); most library sources carry LGPL-2.1-or-later headers | https://downloads.sourceforge.net/pcmanfm/libfm-1.2.5.tar.xz | **yes**: `spin/patches/libfm-1.2.5-gobo.patch`; shortcut-editor menu entry hidden |
+| PCManFM | 1.2.5 | GPL-2.0-or-later | https://downloads.sourceforge.net/pcmanfm/pcmanfm-1.2.5.tar.xz | **yes**: `spin/patches/pcmanfm-1.2.5-gobo.patch`; "Desktop Preferences" entry hidden |
+| PaVuControl | 4.0 | GPL-2.0-or-later | https://freedesktop.org/software/pulseaudio/pavucontrol/pavucontrol-4.0.tar.xz | no |
+| LxRandr | 0.3.1 | GPL-2.0-or-later | https://downloads.sourceforge.net/lxde/lxrandr-0.3.1.tar.xz | menu entry icon name changed (sed in the build step) |
+| LXDM | 0.5.3 | GPL-3.0-or-later | https://downloads.sourceforge.net/lxde/lxdm-0.5.3.tar.xz | configuration and theme replaced by `spin/lxdm/` (our files; theme started as a copy of LXDM's "Industrial" theme with its files removed/replaced); program code unchanged |
+| Udevil (+ devmon) | 0.4.4 | GPL-3.0-or-later | https://github.com/IgnorantGuru/udevil/archive/refs/tags/0.4.4.tar.gz | **yes**: `spin/patches/udevil-0.4.4-gobo-monitor.patch`; `udevil.conf` edited; a small `mount.ntfs` helper added |
+| USB-ModeSwitch | 2.6.1 | GPL-2.0-or-later | https://www.draisberghof.de/usb_modeswitch/usb-modeswitch-2.6.1.tar.bz2 | no (only the `usb_modeswitch` binary and man page; our udev rule and `gobo-wifi-switch` added) |
+| rtl8852au (Realtek RTL8852AU/RTL8832AU USB Wi-Fi driver, program `RTL8852AU`) | git 865ab0f (2024-05-06) | GPL-2.0 (driver); contains Realtek firmware as C arrays | https://github.com/lwfinger/rtl8852au | no (built out of tree for kernel 6.12.16-Gobo) |
+| ONLYOFFICE Desktop Editors | 10.0.0 | AGPL-3.0 (with the additional terms in its `LICENSE`); bundles third-party libraries (Qt 5, Chromium Embedded Framework, ICU and others, listed in its `3DPARTYLICENSE`) | https://github.com/ONLYOFFICE/DesktopEditors/releases/download/v10.0.0/onlyoffice-desktopeditors-x64.tar.xz (official binary build) | binaries unchanged; their launcher script is edited (install path, `--system-title-bar`) and their menu entry edited (path, three MIME types removed) |
+| CopyQ | 6.4.0 | GPL-3.0-or-later | https://github.com/hluk/CopyQ/archive/refs/tags/v6.4.0.tar.gz | **yes**: the Wayland clipboard part removed with `sed` in the build step (`spin/build-programs.sh`, step `copyq`) |
+| L3afpad | 0.8.18.1.11 | GPL-2.0-or-later (source headers) | https://github.com/stevenhoneyman/l3afpad/archive/refs/tags/v0.8.18.1.11.tar.gz | no |
+| dnsmasq | 2.91 | GPL-2.0 or GPL-3.0 (COPYING, COPYING-v3) | https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz | no |
+| wireless-regdb (`regulatory.db`, `.p7s`) | 2026.09.03 | ISC | https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/ | no (files kept in `spin/firmware/wireless-regdb/`) |
+| GoboNet menu widget (`look/gobo11/awesome/spin/gobonet_menu.lua`) | from GoboNet 0.12 | GPL-3.0 (GoboNet) | https://github.com/gobolinux/GoboNet | **yes**: a patched copy of upstream's widget lives in our look (see `HANDOFF.md`, 0.8.1) |
+
+Used only to build, not shipped: GNU xorriso 1.5.6.pl02 (GPL-3.0-or-later), writes the ISO.
+
+## Inherited from the stock GoboLinux 017.01 ISO
+
+The ISO is the stock 017.01 live ISO with a repacked live image; the stock image's ~450 programs
+(kernel, GoboLinux's own tools, Xorg, GTK, Qt, Awesome, Firefox, ...) are redistributed unchanged,
+each under its own licence. The boot loader files (isolinux, the UEFI `efiboot.img`) are replayed
+unchanged from the stock ISO. Stock files we change in the image: the `CommandNotFound` hook and
+`bashrc` lines of GoboLinux's Scripts (`sed` in `spin/build-iso.sh`), the sudoers file (added
+rules), the skeleton home (our look), the live welcome text, GoboNet's backend gets back its setuid
+bit, and the initramfs is rebuilt with our dracut module.
+
+## Points that deserve the owner's attention
+
+These are observations, not conclusions:
+
+1. **Source for the binaries we redistribute.** The ISO contains GPL/LGPL/AGPL programs as
+   binaries (our additions above and the whole stock system). Those licences attach conditions to
+   distributing binaries (making the corresponding source available in one of the ways each licence
+   names). Today the repository has the build scripts, patches and the URL list; the sources
+   themselves are on the upstream sites. How the project will provide corresponding source alongside
+   published ISOs (e.g. a source archive next to each release, mirroring `WORK/sources/`) is an open
+   question. The same applies to the stock 017.01 programs inherited unchanged.
+2. **ONLYOFFICE.** Redistributed as the vendor's binary build under AGPL-3.0; its `LICENSE` adds
+   terms under AGPL section 7 (about the product logo and trademarks), and it bundles many
+   third-party libraries with their own licences (`3DPARTYLICENSE` in the package). We edit their
+   launcher script and menu entry. Worth reading those files before publishing.
+3. **Realtek driver (rtl8852au).** The driver code is GPL-2.0, but it carries Realtek's Wi-Fi
+   firmware as C arrays inside the source; the repository states no separate licence for that
+   firmware. Out-of-tree driver from a third-party GitHub repository, not from Realtek or the kernel.
+4. **Fonts (Inter, JetBrains Mono).** SIL OFL 1.1 allows bundling with software. We copy a subset of
+   the files unchanged; the licence restricts the font names for modified versions (we do not
+   modify them) and asks that the licence travel with the fonts (installed in each program's `doc/`).
+5. **Firefox.** The stock image contains Mozilla's official Firefox 136.0 binary (`Firefox
+   136.0_bin`) with Mozilla's branding. Mozilla's trademark policy governs redistribution of the
+   branded build; we pass it on unchanged.
+6. **GPL-3.0 components next to GPL-2.0-or-later code.** Papirus, LXDM, Udevil, CopyQ, GoboNet's
+   widget are GPL-3.0(-or-later); ONLYOFFICE is AGPL-3.0. Our code being GPL-2.0-or-later allows it
+   to be combined with GPL-3.0 code (under GPL-3.0). Two places where our code and GPL-3.0 code are
+   in the same work: the Udevil patch (`spin/patches/udevil-0.4.4-gobo-monitor.patch`, applied to
+   GPL-3.0-or-later code) and the patched GoboNet widget in `look/gobo11/awesome/spin/`
+   (GPL-3.0 upstream code inside the look). Nothing of ours is GPL-2.0-only, so no conflict is known;
+   the GoboNet widget file may need GoboNet's GPL-3.0 notice rather than ours.
+7. **Names and logos.** "GoboLinux" and its artwork belong to the GoboLinux project; the spin calls
+   itself "an unofficial spin of GoboLinux 017.01" and keeps stock names in places (volume label,
+   boot menu of the live ISO, `/Mount/GoboLinux`, the efibootmgr label). Whether upstream is fine
+   with the name "GoboRefined" and the use of its name is a question for upstream.
