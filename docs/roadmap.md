@@ -237,3 +237,28 @@ Confirmed on the real PC: the update 0.8 → 0.8.1 worked.
 3. A way to see what is going on without the mouse: a "System report" command (USB devices, network
    interfaces, last kernel messages, Xorg input devices, our logs) written to a file in the home folder,
    reachable from the keyboard.
+
+### 0.8.2 — decided 2026-11-15 (owner's list + findings from the real-PC report)
+
+Real PC confirmed: update 0.8 → 0.8.1 with the file works. The report (kernel + Xorg logs) shows the mouse was
+never lost by kernel or Xorg when clicks stopped: the desktop swallowed them (stuck popup sheet suspected).
+
+Part 1 (desktop + Settings app core):
+1. Thin "show desktop" strip at the right end of the taskbar.
+2. Click loss: no menu opens by itself on adapter events; the click-catching sheet cannot outlive its menu.
+3. Power menu: choose with arrow keys, Enter, Escape.
+4. Hide the BIOS boot partition (and every partition of the disk the system runs from, also when that disk
+   is attached over USB) from the automounter and the "USB drives" place.
+5. Wi-Fi regulatory database (`regulatory.db` missing in the kernel log).
+6. **Settings app** ("control panel"): one window gathering what exists (appearance light/dark, displays,
+   sound, network, trash retention, updates with slot status / apply file / rollback, about + "save system
+   report") plus new: accounts (password, add/remove user, administrator or standard, automatic login),
+   wallpaper, remote access (SSH on/off, off by default, shows the address). Other items from the
+   "Control Panel but not here" list only where quick (keyboard layout, timezone/date, mouse speed, startup
+   programs, default programs).
+
+Part 2 (needs hardware the VM lacks — shipped as experimental until the owner confirms):
+7. Bluetooth (on/off, pair, connect) in the Settings app.
+8. Wi-Fi hotspot in the Settings app.
+
+Then: build 0.8.2 (ISO + update file), update test 0.8.1 → 0.8.2 in the VM.
