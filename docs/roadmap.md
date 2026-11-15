@@ -187,3 +187,29 @@ Waydroid would need Wayland; the desktop is X11.
 
 14. `/System/Settings/shadow` is world-readable (mode 644) in stock 017.01: every user can read the password
     hashes. Find out what depends on it (lock screen, LXDM) and tighten it.
+
+### Prep for the first update (0.8.1 = the 0.6.2 list) — diagnosis notes, 2026-11-15
+
+Read from upstream's widget (`look/reference/gobo-widgets/gobonet.lua`; ours wraps it in `spin/network.lua`):
+
+- **Item 1 (Wi-Fi menu empty) — likely cause.** The widget asks `gobonet interface` for the Wi-Fi interface
+  **once**, when it is created at desktop start (lines 82–84, module-level variable, never re-read), and builds
+  the "Rescan" command string from it at the same moment (line 179). An adapter plugged in later is never
+  picked up: quick-scan and Rescan run against no interface, so the menu shows only the wired entry and
+  "Rescan" — what the owner saw. Second candidate: `wlan0` is not brought up after hot-plug, so the scan
+  returns nothing until something else brings interfaces up. Fix both in our wrapper: when a wireless
+  interface appears or disappears (we already poll `/sys/class/net`), bring it up and recreate the hidden
+  GoboNet widget with a fresh interface name (reset the module's cached names), then refresh the icon.
+  Not provable in the VM (no Wi-Fi): unit-test the re-detection with a faked `gobonet interface`, and ask
+  the owner to confirm on the real PC.
+- **Item 7 (eth0 listed without cable).** Line 286 adds the wired entry whenever a wired interface exists;
+  check `/sys/class/net/<if>/carrier` and label it "no cable" or hide it.
+- **Item 8 (screenshot while a menu is open).** Menus hold the keyboard grab; route Print / Win+Shift+S
+  through the grab filter in `popups.lua` the way Win+Escape already is (close the menu, then shoot).
+- **Item 4 (mouse dead after re-plug).** Check first whether Xorg gets udev events at all on this system
+  (`/dev` is a symlink to `/System/Kernel/Devices`; udevil needed a patch for the same reason). If not:
+  an `xorg.conf.d` fallback or a small hot-plug helper; testable in the VM with a virtual USB mouse/tablet.
+- **Item 3 (freeze on unplugging the adapter)** cannot be reproduced in the VM. Do not spend worker time on
+  it beyond checking whether a newer driver revision mentions a disconnect fix.
+- Delivery: as `GoboRefined-0.8.1.update` (and ISO), tested by updating the `iso-0.8-installed-efi` snapshot.
+  Look changes reach existing users through the first-boot `apply.sh` run — verify that on the update.
