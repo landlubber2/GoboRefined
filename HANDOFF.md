@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-14. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8-dev (A/B system)**, `dist/GoboRefined-0.8-dev*.iso` + `.update` (see the last section; 0.5 and 0.6 kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-15. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8 release candidate (A/B system, installer menus)**, `dist/GoboRefined-0.8.iso` + `GoboRefined-0.8.update` (see the last section; 0.5, 0.6 and the 0.8 dev builds kept). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -894,5 +894,97 @@ Install 76-83 s (VM). Update 37-38 s (2.6 GB file: verify ~15 s, unpack ~20 s). 
 - GoboLinux links are absolute (`/System/Index/bin/x -> /Programs/...`): `-x` on them from outside the tree fails.
 - A stopped build-iso run can leave proc mounted inside the rootfs; build-iso now refuses to pack in that case.
 - openssl on Windows writes CRLF PEM files: convert before comparing keys.
+
+Downloads: none.
+
+## 0.8 release candidate: hardening, installer menus, ISO 0.8 (2026-11-15)
+
+**`dist/GoboRefined-0.8.iso`** (2,867,200,000 bytes, sha256 `d31f8c979a1dd0889f31f1e5bee028a1827306f90eb003ac34e93a5a23e8ba38`)
+and **`dist/GoboRefined-0.8.update`** (2,734,075,904 bytes, sha256 `7b02b424b6a8f77759104ff87a5b1004bad4fd2f0ab93bbb03daf072ff41249b`);
+`.sha256` files next to them, checked on host and build VM. One build (from `iso-build-env-8a`, VERSION=0.8).
+`dist/README.md` rewritten for the owner's real-PC test.
+
+### Hardening (A)
+
+| # | Item | State | How verified |
+|---|---|---|---|
+| 1 | Slot size | done | installer: disk >= 48,000,000,000 bytes -> 16 GiB slots, else 12 GiB. gobo-update reads the slot size from the device (unchanged code, checked). 64 GiB disk -> 16/16/31.5 GiB; 40 GiB disk -> 12/12/15.5 GiB |
+| 2 | Update file read twice | done | file opened once (fd 8), checked and unpacked through `/proc/self/fd/8`; must be owned by root or `$SUDO_UID` and not group/other-writable; size+mtime re-checked after unpacking. Tests: mode 666 refused, owner uid 1000 refused, a `touch` during unpacking -> "changed while it was being installed", slot left empty, symlinked path works |
+| 3 | Data partition after power cuts | done | goboab-root now sends every e2fsck line to the kernel log. Finding: **e2fsck -p in the initramfs does replay the journal** ("recovering journal", clears orphan inodes) and the kernel then mounts a clean fs; same e2fsck 1.47.1 as mkfs. The old "kernel still replays" note is not reproducible (old log went to a file that was not kept). 3 forced power-offs (2 while writing files, 1 while gobo-update unpacked): every boot clean, no EXT4 errors. Slots made with orphan_file logged "orphan cleanup on readonly fs" at every mount; gone with `^orphan_file` |
+| 4 | Clean shutdown | done (no change needed) | stock `Shutdown` does `killall5` then `umount -a -r`; after a normal `reboot` e2fsck reports "clean" with no journal recovery -> the data partition is remounted read-only. Not changed |
+| 5 | New system accounts | done | `merge_accounts` in the first-boot step: users/groups with id < 1000 that the new image has and the machine has not (name and id free) are appended to passwd/group/shadow/gshadow (copy + rename; existing lines untouched). Test image `0.8-test3` (slot B from dev2 + group/user `gobotest` 990): after the update both appeared, `diff` of passwd = only the new line, log "accounts: adding ..." |
+| 6 | grub.cfg updates | done | template `spin/ab/grub.cfg.in` (`# gobo-grub-template 1`), used by gobo-install and by gobo-update (rewrites grub.cfg when the new image's number is higher; checks; `grub.cfg.old` kept). Tested: test3 (template 2) replaced the menu; the release update replaced a dev2 menu (0 -> 1) and booted both slots incl. automatic rollback. GRUB binary never updated (documented) |
+| 7 | Post-dev2 repo changes in the ISO | done | in the 0.8 image: `-O ^orphan_file` in gobo-update and gobo-install, e2fsck kernel-log lines in goboab-root, `tr -d '\000'` on the trailer line |
+
+**Incident (fixed before the build):** the first template was cut out of the installer's here-document with its
+`\$` escapes left in. gobo-update installed it on the test machine; GRUB showed entries named `$ver_a` and started
+nothing. Recovered at the GRUB prompt with `configfile $prefix/grub.cfg.old`. Fixes: template cleaned;
+gobo-update now refuses a rendered menu containing `\$` or failing `grub-script-check`; build-iso checks the
+template. Lesson: the Bash tool of this host mangles `\$` in command strings: edit such files with the Edit tool.
+
+### Installer menus (B)
+
+`gobo-install` on a terminal without `--answers`/`--yes`/`--plain` uses `dialog`: welcome -> disk list (model,
+size; under 32 GB "too small"; the disk holding the live medium "you started from it, cannot be used"; sr0 never
+listed) -> red erase warning naming disk, model and size (default "Back") -> full name -> login (suggested from the
+name; syntax, `root` and names already used by the system refused) -> password twice (stars) -> checkbox "same
+password for root" (else root twice) -> computer name -> time zone region -> city -> keyboard (27 common, then all
+of xkb's base.lst) -> options (autologin, text login) -> swap MB -> summary (Install/Cancel) -> gauge (copy
+progress from gobo-make-system) -> "Restart now / Later". Cancel/Esc anywhere: "Quit?" (nothing changed).
+`--plain` = old prompts; `--answers`/flags unchanged; the same checks run for every way of answering.
+Passwords: shell variables only; hashed via `openssl passwd -6 -stdin`; hash written into shadow by awk from its
+environment (no `usermod -p`, nothing on a command line); log moved to `/Data/Variable/log/gobo-install.log`
+(mode 600; was `/tmp/gobo-install.log`). Checked: no password and no `$6$` hash in the log; `ps` during a password
+box shows only the prompt. Screenshots `docs/screenshots/0.8-installer-*.png`.
+
+### Tests of the final ISO (VM)
+
+| Test | Result | Evidence |
+|---|---|---|
+| UEFI install through the menus, new 64 GiB disk (`vm/GoboLinux-017.01/test64.vdi`) | pass | 86 s; 16 GiB slots; "Restart now" booted the disk; LXDM login as lab; Europe/Warsaw; pl |
+| BIOS install `--answers --autologin --swap 1024` on the 40 GiB disk | pass | 12 GiB slots; autologin desktop; 1 GiB swap file active; grub.cfg template 1 |
+| `--plain` | pass (first prompt only) | old disk list + "(/dev/sr0 holds the installation medium ...)" |
+| dev2 -> 0.8 with `GoboRefined-0.8.update` (snapshot `iso-0.8-dev-installed-efi`, dev2's own gobo-update) | pass | 48 s; boots 0.8 in slot A; look re-applied; "slot a (0.8) started fine" |
+| `--rollback` and back | pass | B (0.8-dev2) then A (0.8) |
+| automatic rollback | pass | 0.8 re-applied to B with 0.8's gobo-update (menu 0 -> 1), B's init broken -> two failed tries -> A, notice "rolled-back", `--status` "last rollback" |
+| `vm/input-test.sh` on the UEFI menu install | pass 32/32 | |
+| 0.6 spot checks (UEFI menu install) | pass | desktop Trash icon; `gio trash` -> Trash/files; Print -> `~/Pictures/Screenshots/...png`; CopyQ running, clipboard text read back by `copyq read 0`; USB stick notification at login; light mode and back (`power.toggle_mode`, screenshot); log out -> greeter -> log in; search covered by input-test scenarios |
+| update cycle on the UEFI menu install | pass | `GoboRefined-0.8.update` into slot B (6.8 GB free in a 16 GiB slot), restart -> slot B running, data partition clean |
+
+Also on the hardening machine (not the final ISO): installer pre-test with the dev2 live ISO + the new installer,
+BIOS, 64 GiB disk: whole menu flow incl. "too small" disk, invalid login, system name `man`, mismatched
+passwords; booted, LXDM login with the menu-set password.
+
+### Fragile / not tested on real hardware
+
+- Real UEFI firmware and its boot list (efibootmgr entry "GoboLinux" + removable path); NVMe names
+  (`part_dev` adds `p`; never run on NVMe); the live medium being a USB stick (detection tested only with the
+  virtual DVD `sr0`; for a stick it uses the parent disk of the medium's partition).
+- A grub.cfg template change is shared by both slots: a broken one stops both (recovery: `configfile
+  $prefix/grub.cfg.old` at the GRUB prompt). Checks catch the mistake seen in the lab, not every possible one.
+- Account merge only for ids < 1000 and free names/ids; a clash is logged and skipped.
+- `/System/Settings/shadow` (and gshadow) are mode 644 in stock 017.01, so password hashes are readable by every
+  user. Found, NOT changed (the lock screen's PAM path may rely on it); worth an upstream report and a careful fix.
+- Data partition on a 48 GB disk is smaller (12 GiB) than on a 47.9 GB one (20 GiB) because of the slot rule.
+- The 0.6.2 list (`docs/roadmap.md`) is not fixed.
+
+### VM and disks
+
+- New disk `vm/GoboLinux-017.01/test64.vdi` (64 GiB dynamic, 22 GB on the host): SATA port 0 in the final state.
+- Snapshot **`iso-0.8-installed-efi`** (taken powered off): UEFI menu install of the final ISO on test64, user lab,
+  LXDM, pl, Europe/Warsaw, after one update cycle (slot B running). VM powered off, firmware EFI, DVD empty.
+- Two orphaned differencing images from this session (not attached to anything, not deleted per the rules):
+  `Snapshots/{76237ade-...}.vdi` (12 GB, the hardening test state) and `Snapshots/{979f1982-...}.vdi` (20 GB, the
+  BIOS answers-file install). They can be removed with `VBoxManage closemedium disk <uuid> --delete` if the owner agrees.
+- Rebuild: snapshot `iso-build-env-8a` as before; `vm/serve/ab.tgz`, `build-iso.sh`, `grub.cfg.in` refreshed and
+  identical to `spin/`. The build VM's leftover `/Data/Build/GoboLinux-017.01-spin.iso` must be deleted before a build
+  (space; it is in the snapshot).
+
+### Lab lessons (0.8 release)
+
+- zsh on the guest: an unmatched glob aborts the whole command line (`rm -f a *.update` deleted nothing).
+- Do not force-eject the live DVD before rebooting the live session: its shutdown then hangs ("no more processes").
+- `vm/ssh.sh 'cat > FILE' < local` copies a 2.7 GB update into a VM in under a minute.
+- Background loops in the Bash tool are moved to the background after 3 minutes; use Monitor for long waits.
 
 Downloads: none.

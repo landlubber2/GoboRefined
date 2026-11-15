@@ -1,79 +1,112 @@
-# GoboRefined — test ISO
+# GoboRefined 0.8 — release candidate
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
 
-`GoboRefined-0.6.iso` (2,863,726,592 bytes, about 2.9 GB) — check it against `GoboRefined-0.6.iso.sha256` before use:
-sha256 `0f01edeb327f476213a2ac9b26a5bfde78e3b2e2af639fce148461216e19bdf1`.
-It needs a **USB stick of 4 GB or larger**. (`GoboRefined-0.5.iso` is kept next to it.)
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.iso` | 2,867,200,000 bytes (2.9 GB) | `d31f8c979a1dd0889f31f1e5bee028a1827306f90eb003ac34e93a5a23e8ba38` |
+| `GoboRefined-0.8.update` | 2,734,075,904 bytes (2.7 GB) | `7b02b424b6a8f77759104ff87a5b1004bad4fd2f0ab93bbb03daf072ff41249b` |
 
-## New in 0.6 (fixes and wishes from the 0.5 test on the real PC)
+Check them against the `.sha256` files before use (Windows: `certutil -hashfile GoboRefined-0.8.iso SHA256`).
+The ISO needs a **USB stick of 4 GB or larger**. Older files (0.5, 0.6, 0.8-dev1, 0.8-dev2) are kept next to it;
+the dev files were test builds and are not needed.
 
-- **Keyboard no longer gets stuck** after menus and pop-ups: a click anywhere outside a menu closes it and the
-  window you clicked gets the keyboard. If anything still holds the keyboard, **Win+Escape** closes every pop-up
-  and frees it.
-- **Wi-Fi adapter (TP-Link Archer TX20U Plus)** is switched out of its "driver CD" mode by itself, with retries
-  and a log file (`/var/log/gobo-wifi-switch.log`). Not tried with the adapter yet — see below.
-- **Network icon** shows the real state: wired, Wi-Fi with signal bars, connecting, or disconnected.
-- **Virtual desktops**: one desktop to start with; **Win+Shift+Tab** lists them (add, remove, switch); the
-  number of desktops is kept after logging out. **Changed:** previous/next desktop is now **Win+,** and **Win+.**
-  (Win+Escape used to be "previous desktop").
-- **Screenshots**: **Win+Shift+S** asks Area / Window / Whole screen; Print takes the whole screen. Pictures go to
-  `Pictures/Screenshots` and onto the clipboard.
-- **Clipboard history**: **Win+Shift+V** lists the last 20 copied texts and pictures; Enter pastes one.
-- **Default folders**: Desktop, Documents, Downloads, Music, Pictures (with Screenshots), Videos.
-- **File manager**: **Ctrl+F** (or the magnifier button) searches by part of a name, in the folder only or in
-  all folders inside it; a **"USB drives"** entry lists plugged-in sticks.
-- **Desktop icons**: files in your Desktop folder appear on the desktop, plus a **Trash** icon. Deleted files go
-  to the Trash, where they can be restored; items older than 6 months (or 1 / 3) are removed automatically.
-- **Folder colours**: right click a folder in your home folder → "Folder colour...".
-- USB notification has a single "Safely remove" button; clicking the notification opens the stick.
+## Before you start: a reinstall is needed
+
+- **Coming from 0.6 (or older), you must reinstall.** 0.8 lays out the disk in a new way; there is no upgrade
+  from 0.6. Copy your files somewhere else first.
+- **The whole disk you choose is erased.** No dual boot, no keeping other partitions.
+- **The disk must have at least 32 GB.** On disks of 48 GB or more each system slot gets 16 GB (room for more
+  programs later); on smaller disks 12 GB.
+
+## What "A/B" means for you
+
+The disk now holds **two copies of the system** ("slot A" and "slot B") plus a **data part** with your home
+folder, your accounts, your settings and programs you add yourself.
+
+- A **system update** is one file (`GoboRefined-<version>.update`). It is written into the copy you are *not*
+  using, while you keep working. At the next restart the computer starts the new copy.
+- If the new copy does not start (twice), the computer **goes back to the old copy by itself** and the desktop
+  says "System update undone". You can also go back by hand.
+- Your files, accounts, passwords and settings are on the data part and are **kept** by updates and by going back.
+- The boot menu shows both copies. Each has an entry **"without my system changes"**: it starts the system as it
+  was installed, ignoring changes made to system files afterwards (programs you compiled, edited settings).
+  Use it if a change of yours stops the system from starting. Your home folder is still there.
+
+## Install (through the menus)
+
+1. Write the ISO to a USB stick with a tool that writes the image as-is ("DD image mode" in Rufus, or
+   balenaEtcher). Everything on the stick is erased.
+2. Boot the PC from the stick (UEFI is fine). Pick a language and a keyboard map.
+3. At the prompt type **`gobo-install`**. Menus ask, one after the other: the disk (a list with model and size;
+   disks under 32 GB are marked too small; the USB stick you started from is marked and cannot be chosen) → a red
+   warning that names the disk which will be **erased** → your full name, login name, password (twice) → whether
+   the administrator (root) uses the same password (otherwise its own, twice) → computer name → time zone
+   (region, then city) → keyboard layout (common ones first, "more layouts" at the end) → options (automatic
+   login, text login, swap file size) → a summary. Nothing is written before you choose **Install** there.
+   A progress bar follows (about 2 minutes), then "Restart now".
+4. Remove the stick when the PC restarts. Log in on the login screen.
+
+Esc or Cancel at any question offers to quit without changing anything. `gobo-install --plain` asks the old way
+(line by line); `gobo-install --help` lists all options.
+
+## Update with a file
+
+    sudo gobo-update /path/to/GoboRefined-<version>.update
+
+It checks the file (signature and checksum), writes it into the other slot, and asks whether to restart.
+The file must belong to you (or root) and must not be writable by others; a file on a USB stick usually is fine.
+Copy the file completely before using it (on a stick: "Safely remove" or `sync` before unplugging).
+
+    sudo gobo-update --status      # both slots, their versions, which one starts next
+    sudo gobo-update --rollback    # start the other slot from the next restart on
+    sudo gobo-update --reset-system-changes
+                                   # at the next restart, forget changes made to system files since the
+                                   # install (accounts, passwords and home folders stay)
 
 ## Please test on the real PC — in this order
 
-1. **Wi-Fi with the TP-Link Archer TX20U Plus** (live session or installed):
-   1. Plug the adapter in and wait about 15 seconds. It should switch by itself (no command needed any more).
-   2. Click the network icon on the taskbar (left of the battery). A list of Wi-Fi networks should appear.
-      Click yours and type the Wi-Fi password in the window that pops up. The icon should show signal bars.
-   3. If it fails, send these three: the file **`/var/log/gobo-wifi-switch.log`**, and the output of
-      **`lsusb`** and **`dmesg | tail -40`** (typed in a terminal).
-2. Keyboard after menus: open the dots menu, click into a terminal, type — it should arrive in the terminal.
-   If the keyboard ever seems dead, press **Win+Escape** and say what you did just before.
-3. New shortcuts: **Win+Escape**, **Win+Shift+Tab** (desktops), **Win+Shift+S** (screenshot),
-   **Win+Shift+V** (clipboard history), **Ctrl+F** in the file manager. Changed: **Win+,** / **Win+.** =
-   previous / next desktop.
-4. Desktop icons and Trash: save a file to the Desktop folder, delete it, restore it from the Trash icon.
-5. Screenshots and the clipboard history on NVIDIA (only tried on the VM's graphics).
-6. Anything from the 0.5 list that still bothers you (title-bar double click, terminal paste, USB sticks,
-   ONLYOFFICE, the `apt` hint).
+1. **Install on real UEFI** through the menus. Note whether the disk list looks right (model and size) and
+   whether the USB stick is marked "you started from it". **NVMe disks** appear as `/dev/nvme0n1`: say if one
+   is in the PC and whether it is listed and installs.
+2. **Boot menu**: after the install it shows "GoboRefined 0.8 (slot A)", its "without my system changes" and
+   "safe graphics" entries, and "Slot B: empty". If the PC starts straight into another system or shows no menu,
+   say so (the boot entry is named "GoboLinux" in the firmware's boot list).
+3. **An update as a dry run**: copy `GoboRefined-0.8.update` onto a USB stick, plug it in, and in a terminal
+   run `sudo gobo-update /Mount/Media/<stick>/GoboRefined-0.8.update`. It puts the same 0.8 into **slot B**
+   (takes about a minute). Restart: the menu should now show 0.8 twice and start slot B. `sudo gobo-update --status`
+   should say slot B is running.
+4. **Rollback**: `sudo gobo-update --rollback`, restart: slot A starts again. Run `--rollback` once more to go
+   back to B if you like.
+5. The 0.6 basics on the real PC: login/logout, desktop icons and Trash, search, screenshots, clipboard history,
+   USB stick, light/dark mode, Wi-Fi adapter.
+6. If something fails, send: `sudo gobo-update --status`, the file `/var/log/gobo-update.log`, and
+   `dmesg | grep GoboRefined` (the start of the system writes its checks there).
 
-## Write it to a USB stick
+## Still open — NOT fixed in 0.8
 
-1. Check the checksum (on Windows: `certutil -hashfile GoboRefined-0.6.iso SHA256`, compare with the `.sha256` file).
-2. Write the ISO with a tool that writes the image as-is ("DD image mode" in Rufus, or balenaEtcher).
-   Everything on the stick is erased.
-3. Boot the PC from the stick. Pick a language and a keyboard map.
-4. At the prompt type `startx` to look around without installing, or `gobo-install` to install.
+These are the problems from the 0.6 test (list "0.6.2" in `docs/roadmap.md`); they are meant for the first real
+update, not for 0.8:
 
-**`gobo-install` erases the whole disk you choose.** No dual boot. Use a spare PC or a spare drive.
+1. Wi-Fi menu lists networks only while some network is already connected; Rescan does not help.
+2. Trouble connecting to Wi-Fi after the adapter was unplugged and plugged in again.
+3. PC froze when the Wi-Fi adapter was unplugged (not reproduced).
+4. A USB mouse stops working after being unplugged and plugged in again, until restart.
+5. Short press of the power button does nothing.
+6. Tapping the Win key alone opens the dots menu.
+7. "Wired network (eth0)" is listed with no cable connected.
+8. Screenshots do not work while a menu is open.
+9. Desktop icons do not redraw after being moved until an empty spot is clicked.
+10. Taskbar icons of minimized windows sometimes look wrong.
+11. Plain text files have no default program.
+12. A second user gets the US keyboard layout on the desktop.
+13. Small things: "Pcmanfm" in the desktops list; light/dark switch jumps to desktop 1; app search misses "Displays".
 
-## Logging in after the install
+## Good to know
 
-- Remove the stick and reboot. The boot menu shows "GoboRefined 0.6 (GoboLinux 017.01)". The **login screen**
-  appears: type your login name, Enter, your password, Enter. The keyboard layout chosen during the install also
-  applies on the login screen.
-- **Log out** (power menu) returns to the login screen. **Restart** and **Shut down** work from the power menu.
-- `gobo-install --autologin` logs you in without a password at boot. After "Log out" the login screen
-  appears and asks for the password as usual.
-- **Text login instead**: `gobo-install --text-login`. You log in on the text console and the desktop starts by
-  itself; "Log out" returns to the text login prompt.
-- Other options: `gobo-install --help` (for example `--swap 1024` for a 1 GB swap file).
-- A second user (`sudo AddUser -f "Full Name" login`, then set a password) gets the look, the folders and the
-  Trash icon, but its desktop keyboard layout is US until `setxkbmap` in that user's `~/.xinitrc` is changed.
-
-## Only tested in a VirtualBox VM
-
-Works there in both BIOS and UEFI mode (see `HANDOFF.md` for the exact checks). Not yet tried: the Wi-Fi adapter,
-exFAT/NTFS sticks, ONLYOFFICE / screenshots / desktop icons on NVIDIA, NVMe drives, a physical second monitor,
-HiDPI screens. If a second monitor does not come on, open the launcher menu (dots icon) -> Desktop -> Detect
-Displays. Plain text files have no default program yet (only Vim is on the image; double-clicking a .txt file
-shows an empty "Choose Application" list).
+- GRUB itself (the boot loader program) is never updated by `gobo-update`; only its menu can be, and the
+  previous menu is kept. If a menu ever shows entries like "$ver_a" and starts nothing: press `c` and type
+  `configfile $prefix/grub.cfg.old`, Enter.
+- After a power cut the start of the system checks the data part first; that is normal and quick.
+- Only tested in a VirtualBox VM (BIOS and UEFI). Not tried yet: real UEFI firmware, NVMe drives, the Wi-Fi
+  adapter with 0.8, HiDPI screens, a physical second monitor.

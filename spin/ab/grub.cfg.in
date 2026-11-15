@@ -1,0 +1,99 @@
+# gobo-grub-template 1
+# GoboRefined A/B boot menu (grub.cfg on GOBO_BOOT). Template: gobo-install writes it at install time,
+# and gobo-update rewrites grub.cfg from the template in a new system image when that template has a
+# higher "gobo-grub-template" number than the installed grub.cfg (old file kept as grub.cfg.old).
+# Placeholders (names between at-signs): UUID_BOOT UUID_A UUID_B UUID_DATA PARTUUID_A PARTUUID_B VIDEO.
+# gobo-update itself only changes grubenv: slot = the default slot, try_slot/tries_left = a new slot
+# being tried, rollback_from = a new slot whose tries ran out. It reads the gobo_* lines below.
+# Rules for changing it: it must still start BOTH slots (the other slot may hold an older version),
+# and it may only use GRUB commands of the GRUB that was installed (GRUB itself is never updated:
+# modules in grub/x86_64-efi or grub/i386-pc on GOBO_BOOT, BOOTX64.EFI, the BIOS core image).
+set gobo_uuid_boot=@UUID_BOOT@
+set gobo_uuid_a=@UUID_A@
+set gobo_uuid_b=@UUID_B@
+set gobo_uuid_data=@UUID_DATA@
+set gobo_partuuid_a=@PARTUUID_A@
+set gobo_partuuid_b=@PARTUUID_B@
+set gobo_args="vt.default_utf8=1 rootwait net.ifnames=0"
+
+set timeout=5
+insmod part_gpt
+insmod fat
+insmod ext2
+insmod loadenv
+insmod test
+@VIDEO@
+
+load_env -f $prefix/grubenv
+
+# What each slot holds (gobo-slot.env is written last when a slot is filled).
+set ver_a=""
+set ver_b=""
+if search --no-floppy --fs-uuid --set=dev_a $gobo_uuid_a; then
+   if [ -f ($dev_a)/gobo-slot.env ]; then
+      set slot_version="?"
+      load_env -f ($dev_a)/gobo-slot.env slot_version
+      set ver_a="$slot_version"
+   fi
+fi
+if search --no-floppy --fs-uuid --set=dev_b $gobo_uuid_b; then
+   if [ -f ($dev_b)/gobo-slot.env ]; then
+      set slot_version="?"
+      load_env -f ($dev_b)/gobo-slot.env slot_version
+      set ver_b="$slot_version"
+   fi
+fi
+
+# Which slot starts: the default, or a new one for at most two tries.
+if [ "$slot" != b ]; then set slot=a; fi
+set boot_slot=$slot
+set try_args=""
+if [ "$try_slot" = a -o "$try_slot" = b ]; then
+   if [ "$tries_left" = 2 ]; then
+      set tries_left=1
+      save_env -f $prefix/grubenv tries_left
+      set boot_slot=$try_slot
+   elif [ "$tries_left" = 1 ]; then
+      set tries_left=0
+      save_env -f $prefix/grubenv tries_left
+      set boot_slot=$try_slot
+   else
+      set rollback_from=$try_slot
+      set try_slot=""
+      set tries_left=""
+      save_env -f $prefix/grubenv rollback_from try_slot tries_left
+   fi
+fi
+if [ "$boot_slot" = a -a -z "$ver_a" ]; then set boot_slot=b; fi
+if [ "$boot_slot" = b -a -z "$ver_b" ]; then set boot_slot=a; fi
+if [ -n "$try_slot" -a "$boot_slot" = "$try_slot" ]; then
+   # A slot that does not start reboots (instead of waiting at a prompt), so the tries run out.
+   set try_args="rd.shell=0 rd.emergency=reboot panic=10"
+   set fallback="slot-$slot"
+fi
+set default="slot-$boot_slot"
+export dev_a dev_b gobo_uuid_a gobo_uuid_b gobo_uuid_data gobo_uuid_boot gobo_args try_slot try_args
+
+function gobo_boot {
+   if [ "$1" = a ]; then set d=$dev_a; set u=$gobo_uuid_a; else set d=$dev_b; set u=$gobo_uuid_b; fi
+   set x=""
+   if [ "$1" = "$try_slot" ]; then set x="$try_args"; fi
+   echo "Starting GoboRefined from slot $1 ..."
+   linux ($d)/System/Kernel/Boot/kernel root=gobo gobo.slot=$1 gobo.root=UUID=$u gobo.data=UUID=$gobo_uuid_data gobo.boot=UUID=$gobo_uuid_boot $gobo_args $x $2 $3
+   initrd ($d)/System/Kernel/Boot/initramfs
+}
+
+if [ -n "$ver_a" ]; then
+   menuentry "GoboRefined $ver_a (slot A)" --id slot-a { gobo_boot a }
+   menuentry "GoboRefined $ver_a (slot A) - without my system changes" --id slot-a-pristine { gobo_boot a gobo.system-changes=off }
+   menuentry "GoboRefined $ver_a (slot A) - safe graphics" --id slot-a-safe { gobo_boot a nomodeset }
+else
+   menuentry "Slot A: empty" --id empty-a { echo "Slot A is empty or incomplete. A system update fills it."; sleep 5 }
+fi
+if [ -n "$ver_b" ]; then
+   menuentry "GoboRefined $ver_b (slot B)" --id slot-b { gobo_boot b }
+   menuentry "GoboRefined $ver_b (slot B) - without my system changes" --id slot-b-pristine { gobo_boot b gobo.system-changes=off }
+   menuentry "GoboRefined $ver_b (slot B) - safe graphics" --id slot-b-safe { gobo_boot b nomodeset }
+else
+   menuentry "Slot B: empty" --id empty-b { echo "Slot B is empty. The first system update (gobo-update) fills it."; sleep 5 }
+fi

@@ -8,7 +8,7 @@
 # image; this computer's settings go into the overlay on the data partition.
 #
 # Run as root from the live session:
-#     gobo-install                 # asks questions
+#     gobo-install                 # asks questions (menus on a terminal; --plain: line by line)
 #     gobo-install --answers FILE  # unattended; FILE sets the variables below
 
 set -euo pipefail
@@ -33,17 +33,38 @@ SOURCE=""               # live image to install from; default: the live session'
 ASSUME_YES=0
 
 MIN_DISK_BYTES=32000000000   # "32 GB"
-SLOT_MIB=12288               # each system slot: 12 GiB
+BIG_DISK_BYTES=48000000000   # from "48 GB" on, the slots are larger (room for more programs)
+SLOT_MIB_SMALL=12288         # each system slot on disks under 48 GB: 12 GiB
+SLOT_MIB_BIG=16384           # each system slot on disks of 48 GB and more: 16 GiB
+SLOT_MIB=""                  # set from the disk size (gobo-update reads the size from the device)
 DEST=/Mount/GoboLinux
-LOG=/tmp/gobo-install.log
+LOG=/Data/Variable/log/gobo-install.log   # root-only folder (not a fixed name in the shared /tmp)
+PLAIN=0                  # 1 = line-by-line questions instead of the dialog menus
+ANSWERS_GIVEN=0
+GAUGE=0                  # 1 = progress is shown in a dialog gauge (menus)
 SPIN_NAME="GoboRefined"  # the spin's name (unofficial; based on GoboLinux 017.01)
 SPIN_VERSION=""          # read from the GoboSpin program's share/spin-version below
 
 ### Helpers ####################################################################
 
 c_cyan=$'\033[1;36m'; c_red=$'\033[1;31m'; c_off=$'\033[0m'
-step() { echo "${c_cyan}==> $*${c_off}"; echo "==> $*" >> "$LOG"; }
-die()  { echo "${c_red}gobo-install: $*${c_off}" >&2; exit 1; }
+step() {
+   echo "==> $*" >> "$LOG"
+   if [ "$GAUGE" = 1 ]
+   then
+      local p=50
+      case "$*" in
+         Partitioning*) p=2 ;; Formatting*) p=5 ;; Copying*) p=8 ;; Preparing*) p=76 ;;
+         Configuring*) p=80 ;; "Creating a"*) p=82 ;; "Creating users"*) p=85 ;; Applying*) p=87 ;;
+         Enabling*) p=90 ;; Closing*) p=92 ;; Installing*) p=94 ;; Writing*) p=97 ;; Unmounting*) p=99 ;;
+      esac
+      printf 'XXX\n%d\n%s\nXXX\n' "$p" "$*" >&4 2>/dev/null || true
+   else
+      echo "${c_cyan}==> $*${c_off}"
+   fi
+}
+gauge_close() { [ "$GAUGE" = 1 ] || return 0; GAUGE=0; exec 4>&-; wait "$GAUGE_PID" 2>/dev/null || true; clear; }
+die()  { LAST_ERROR="$*"; echo "${c_red}gobo-install: $*${c_off}" >&2; exit 1; }
 run()  { echo "+ $*" >> "$LOG"; "$@" >> "$LOG" 2>&1; }
 in_target() { run chroot "$DEST" "$@"; }
 
@@ -59,9 +80,10 @@ cleanup() {
    done
    [ -n "$work" ] && rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null
    [ -L /dev/root ] && [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
+   gauge_close
    if [ $rc -ne 0 ]
    then
-      echo "${c_red}Installation failed. Last lines of $LOG:${c_off}" >&2
+      echo "${c_red}Installation failed${LAST_ERROR:+: $LAST_ERROR}. Last lines of $LOG:${c_off}" >&2
       tail -n 15 "$LOG" >&2
    fi
    exit $rc
@@ -85,6 +107,8 @@ Options:
   --firmware efi|bios install the bootloader for this firmware (default: what the live session booted with)
   --answers FILE      read settings (shell variables) from FILE
   --yes               do not ask anything; needs --disk and passwords from --answers
+  --plain             ask line by line instead of with menus (menus are used on a terminal when
+                      neither --answers nor --yes is given)
   --source IMAGE      install from this live image (squashfs file or unpacked folder) instead of the
                       running live session's (for development; allows running outside the live session)
 EOF
@@ -128,7 +152,8 @@ do
       --swap)      SWAP_MB="$2"; shift ;;
       --firmware)  FIRMWARE="$2"; shift ;;
       --source)    SOURCE="$2"; shift ;;
-      --answers)   [ -r "$2" ] || die "cannot read answers file $2"; . "$2"; shift ;;
+      --answers)   [ -r "$2" ] || die "cannot read answers file $2"; . "$2"; ANSWERS_GIVEN=1; shift ;;
+      --plain)     PLAIN=1 ;;
       --autologin) AUTOLOGIN=1 ;;
       --text-login) LOGIN_SCREEN=0 ;;
       --yes)       ASSUME_YES=1 ;;
@@ -155,7 +180,9 @@ for tool in parted mkfs.ext4 mkfs.fat wipefs blkid lsblk findmnt openssl usermod
 do command -v $tool > /dev/null || die "required tool not found: $tool"
 done
 
+mkdir -p "${LOG%/*}"
 : > "$LOG"
+chmod 600 "$LOG"
 self_dir="$(dirname "$(readlink -f "$0")")"
 MAKE_SYSTEM=""
 for f in "$self_dir/gobo-make-system" /Programs/GoboSpin/Current/bin/gobo-make-system
@@ -207,42 +234,273 @@ ask_password() { # ask_password VAR "who"
    printf -v "$var" '%s' "$p1"
 }
 
-if [ -z "$DISK" ]
+# Checks shared by all ways of answering. Each prints a reason and returns 1 when the value is bad.
+check_login() {
+   [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+      { echo "The login name must start with a small letter (a-z) or _, and use only a-z, 0-9, _ and - (at most 32)."; return 1; }
+   [ "$1" != root ] || { echo "The user cannot be called root."; return 1; }
+   if cut -d: -f1 /System/Settings/passwd /System/Settings/group 2>/dev/null | grep -qx -- "$1"
+   then echo "The name '$1' is already used by the system. Please choose another one."; return 1
+   fi
+   return 0
+}
+check_fullname() {
+   [ -n "$1" ] || { echo "Please type a name (it may be the same as the login name)."; return 1; }
+   [[ "$1" != *:* ]] || { echo "The name cannot contain a colon (:)."; return 1; }
+   return 0
+}
+check_hostname() {
+   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] ||
+      { echo "The computer name may use letters, digits and - (not first), at most 63."; return 1; }
+}
+check_disk() { # check_disk DEV: a whole disk, big enough, not the one the live system runs from
+   [ -b "$1" ] || { echo "$1 is not a block device."; return 1; }
+   [ "$(lsblk -dno TYPE "$1")" = disk ] || { echo "$1 is not a whole disk."; return 1; }
+   [ "$(lsblk -bdno SIZE "$1")" -ge "$MIN_DISK_BYTES" ] ||
+      { echo "$1 has $(human "$(lsblk -bdno SIZE "$1")"); $SPIN_NAME needs a disk of at least 32 GB (two system slots and a data partition)."; return 1; }
+   [ -z "$SOURCE_DISK" ] || [ "$(basename "$(readlink -f "$1")")" != "$SOURCE_DISK" ] ||
+      { echo "$1 holds the system you started from (the installation medium). It cannot be erased."; return 1; }
+   return 0
+}
+
+# The disk that holds the image being installed (the live USB stick / DVD): never offered.
+SOURCE_DISK=""
+src_dev=$(findmnt -no SOURCE -T "$SOURCE" 2>/dev/null | head -n 1 || true)
+if [ -n "$src_dev" ] && [ -b "/dev/$(basename "$src_dev")" ]
 then
-   [ "$ASSUME_YES" != 1 ] || die "--yes needs --disk (refusing to pick a disk to erase by itself)"
-   echo "Disks:"
-   lsblk -dno NAME,SIZE,MODEL,TYPE | awk '$NF == "disk" { $NF = ""; print "  /dev/" $0 }'
-   first=$(lsblk -dno NAME,TYPE | awk '$2 == "disk" { print "/dev/" $1; exit }')
-   ask DISK "Disk to ERASE and install $SPIN_NAME on" "$first"
+   SOURCE_DISK=$(lsblk -no PKNAME "/dev/$(basename "$src_dev")" 2>/dev/null | head -n 1 || true)
+   [ -n "$SOURCE_DISK" ] || SOURCE_DISK=$(basename "$src_dev")
 fi
-[ -b "$DISK" ] || die "$DISK is not a block device"
-[ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "$DISK is not a whole disk"
-disk_bytes=$(lsblk -bdno SIZE "$DISK")
-[ "$disk_bytes" -ge "$MIN_DISK_BYTES" ] ||
-   die "$DISK has $((disk_bytes / 1000000000)) GB; $SPIN_NAME needs a disk of at least 32 GB (two system slots and a data partition)"
 
-ask USER_NAME "Login name for your user" "user"
-[[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid login name: $USER_NAME"
-[ "$USER_NAME" != root ] || die "the user cannot be called root"
-ask USER_FULLNAME "Full name" "$USER_NAME"
-ask_password USER_PASSWORD "$USER_NAME"
-ask_password ROOT_PASSWORD "root (administrator)"
+### Questions as menus (dialog) ################################################
+# Answers come back on stdout through fd 3 (dialog writes them to stderr); passwords stay in shell
+# variables: never in a file, a command line or the log.
 
-ask HOSTNAME_NEW "Name for this computer" "gobolinux"
-[[ "$HOSTNAME_NEW" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || die "invalid computer name: $HOSTNAME_NEW"
+BT="$SPIN_LABEL installer - an unofficial spin of GoboLinux 017.01"
+D() { dialog --backtitle "$BT" "$@" 2>&1 1>&3; }
+human() { awk -v b="$1" 'BEGIN { if (b >= 1e12) printf "%.1f TB", b / 1e12; else if (b >= 1e9) printf "%.0f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }'; }
+disk_model() { local m; m=$(lsblk -dno MODEL "$1" 2>/dev/null | sed 's/[[:space:]]*$//'); echo "${m:-unknown model}"; }
 
-while true
-do
-   ask TIMEZONE "Timezone, e.g. Europe/Warsaw" "UTC"
-   [ -f "/System/Index/share/zoneinfo/$TIMEZONE" ] && break
-   [ "$ASSUME_YES" != 1 ] || die "unknown timezone: $TIMEZONE"
-   echo "Unknown timezone '$TIMEZONE'. Use Region/City, as listed in /System/Index/share/zoneinfo."
-   TIMEZONE=""
-done
+menu_quit() { # Cancel/Esc pressed: leave (nothing changed yet) or go back to the question
+   if dialog --backtitle "$BT" --title "Quit" --defaultno --yesno "Quit the installer? Nothing has been changed on any disk." 7 62
+   then clear; echo "gobo-install: cancelled, nothing was changed."; exit 1
+   fi
+}
+
+menu_error() { dialog --backtitle "$BT" --title "Please check" --msgbox "$1" 9 70; }
+
+menu_input() { # menu_input VAR TITLE TEXT DEFAULT CHECKFUNCTION
+   local var="$1" title="$2" text="$3" def="$4" check="$5" v why
+   while true
+   do
+      if v=$(D --title "$title" --inputbox "$text" 10 70 "$def")
+      then
+         if why=$($check "$v")
+         then printf -v "$var" '%s' "$v"; return 0
+         fi
+         menu_error "$why"; def="$v"
+      else menu_quit
+      fi
+   done
+}
+
+menu_password() { # menu_password VAR WHO
+   local var="$1" who="$2" p1 p2
+   while true
+   do
+      p1=$(D --title "Password" --insecure --passwordbox "Password for $who:\n(each character is shown as a star)" 10 64) || { menu_quit; continue; }
+      p2=$(D --title "Password" --insecure --passwordbox "Type the password for $who again:" 9 64) || { menu_quit; continue; }
+      if [ -z "$p1" ]; then menu_error "The password cannot be empty."; continue; fi
+      if [ "$p1" != "$p2" ]; then menu_error "The two passwords are not the same. Please type them again."; continue; fi
+      printf -v "$var" '%s' "$p1"
+      p1=""; p2=""
+      return 0
+   done
+}
+
+menu_disk() {
+   local items=() name bytes tran model size note pick why n=0
+   while read -r name bytes tran
+   do
+      [ -n "$name" ] || continue
+      model=$(disk_model "/dev/$name"); size=$(human "$bytes"); note=""
+      [ "$tran" = usb ] && note=" (USB)"
+      [ "$tran" = nvme ] && note=" (NVMe)"
+      if [ "$name" = "$SOURCE_DISK" ]
+      then note="$note - you started from it, cannot be used"
+      elif [ "$bytes" -lt "$MIN_DISK_BYTES" ]
+      then note="$note - too small (needs 32 GB)"
+      fi
+      items+=("/dev/$name" "$size  $model$note"); n=$((n + 1))
+   done < <(lsblk -dbno NAME,SIZE,TYPE,TRAN | awk '$3 == "disk" { print $1, $2, ($4 == "" ? "-" : $4) }')
+   [ $n -gt 0 ] || { clear; die "no disks found"; }
+   while true
+   do
+      pick=$(D --title "Disk" --menu "Choose the disk to install $SPIN_NAME on.\nThe WHOLE disk is used: everything on it will be erased (no dual boot)." 17 78 8 "${items[@]}") || { menu_quit; continue; }
+      if why=$(check_disk "$pick")
+      then DISK="$pick"; return 0
+      fi
+      menu_error "$why"
+   done
+}
+
+menu_erase_ok() {
+   local size model
+   size=$(human "$(lsblk -bdno SIZE "$DISK")"); model=$(disk_model "$DISK")
+   dialog --backtitle "$BT" --colors --title "Erase the disk?" --defaultno \
+      --yes-label "Erase and continue" --no-label "Back" --yesno \
+      "\n\Zb\Z1EVERYTHING on $DISK will be ERASED:\Zn\n\n   \Zb\Z4$model, $size\Zn\n\nAll partitions, files and other systems on this disk will be lost.\nNothing is written yet: the summary at the end is the last chance to stop." 14 74
+}
+
+menu_timezone() {
+   local zi=/System/Index/share/zoneinfo items=() r region city
+   while true
+   do
+      items=("UTC" "Coordinated Universal Time")
+      for r in Europe America Asia Africa Australia Pacific Atlantic Indian Antarctica Arctic
+      do [ -d "$zi/$r" ] && items+=("$r" "")
+      done
+      region=$(D --title "Time zone (1/2)" --default-item "${TIMEZONE%%/*}" --menu "Region:" 19 50 12 "${items[@]}") || { menu_quit; continue; }
+      if [ "$region" = UTC ]; then TIMEZONE=UTC; return 0; fi
+      items=()
+      while read -r city
+      do items+=("$city" "")
+      done < <(cd "$zi/$region" && find . -type f | sed 's|^\./||' | sort)
+      city=$(D --title "Time zone (2/2)" --default-item "${TIMEZONE#*/}" --menu "City in $region (a letter key jumps to it):" 20 54 13 "${items[@]}") || continue
+      TIMEZONE="$region/$city"
+      [ -f "$zi/$TIMEZONE" ] && return 0
+   done
+}
+
+menu_keyboard() {
+   local lst=/System/Index/share/X11/xkb/rules/base.lst items=() all=() pick code desc
+   local common="us:English (US)|gb:English (UK)|de:German|fr:French|es:Spanish|it:Italian|pl:Polish|pt:Portuguese|br:Portuguese (Brazil)|nl:Dutch|be:Belgian|ch:Swiss|at:German (Austria)|se:Swedish|no:Norwegian|dk:Danish|fi:Finnish|cz:Czech|sk:Slovak|hu:Hungarian|ru:Russian|ua:Ukrainian|tr:Turkish|gr:Greek|jp:Japanese|latam:Spanish (Latin American)|ca:French (Canada)"
+   while IFS=: read -r code desc
+   do items+=("$code" "$desc")
+   done < <(tr '|' '\n' <<< "$common")
+   [ -f "$lst" ] && items+=("other" "more layouts ...")
+   while true
+   do
+      pick=$(D --title "Keyboard" --default-item "${XKB_LAYOUT:-us}" --menu "Keyboard layout (common ones first):" 20 60 13 "${items[@]}") || { menu_quit; continue; }
+      if [ "$pick" = other ]
+      then
+         all=()
+         while read -r code desc
+         do all+=("$code" "$desc")
+         done < <(awk '/^! layout/ { f = 1; next } /^!/ { f = 0 } f && NF { c = $1; $1 = ""; sub(/^ /, ""); print c, $0 }' "$lst")
+         pick=$(D --title "Keyboard" --menu "All keyboard layouts:" 20 70 13 "${all[@]}") || continue
+      fi
+      XKB_LAYOUT="$pick"; return 0
+   done
+}
+
+menu_options() {
+   local sel a="off" t="off"
+   [ "$AUTOLOGIN" = 1 ] && a=on
+   [ "$LOGIN_SCREEN" = 0 ] && t=on
+   while true
+   do
+      sel=$(D --title "Options" --separate-output --checklist "Space switches an option on or off, Enter continues." 11 76 2 \
+         autologin "Automatic login (no password asked at start)" "$a" \
+         textlogin "Text login instead of the graphical login screen" "$t") || { menu_quit; continue; }
+      AUTOLOGIN=0; LOGIN_SCREEN=1
+      if grep -qx autologin <<< "$sel"; then AUTOLOGIN=1; fi
+      if grep -qx textlogin <<< "$sel"; then LOGIN_SCREEN=0; fi
+      break
+   done
+   while true
+   do
+      sel=$(D --title "Swap" --inputbox "Size of a swap file in MB (0 = none).\nUseful with little memory, e.g. 2048 with 4 GB of RAM." 10 66 "$SWAP_MB") || { menu_quit; continue; }
+      if [[ "$sel" =~ ^[0-9]{1,6}$ ]]; then SWAP_MB=$((10#$sel)); return 0; fi
+      menu_error "Please type a number of MB (0 for no swap file)."
+   done
+}
+
+menu_questions() {
+   local same suggest
+   exec 3>&1
+   dialog --backtitle "$BT" --title "Welcome" --yes-label "Start" --no-label "Quit" --yesno \
+"\nThis installs $SPIN_LABEL, an unofficial spin of GoboLinux 017.01.\n\n\
+It uses one WHOLE disk of at least 32 GB. Everything on that disk is erased.\n\n\
+The disk gets two system slots (A and B) for safe system updates, and a data\n\
+partition for your files, accounts and settings, which updates keep.\n\n\
+A few questions follow; nothing is changed before the summary at the end.\n\
+Esc or Cancel at any question offers to quit." 17 80 || menu_quit
+   while true
+   do
+      menu_disk
+      menu_erase_ok && break
+   done
+   menu_input USER_FULLNAME "Your name" "Your full name (shown on the login screen):" "$USER_FULLNAME" check_fullname
+   suggest=$(tr 'A-Z' 'a-z' <<< "${USER_FULLNAME%% *}" | tr -dc 'a-z0-9_-')
+   menu_input USER_NAME "Login name" "Login name for $USER_FULLNAME (small letters, e.g. anna):" "${USER_NAME:-$suggest}" check_login
+   menu_password USER_PASSWORD "$USER_NAME"
+   same=$(D --title "Administrator" --separate-output --checklist \
+      "The administrator account (root) needs a password too.\nSpace switches the option off or on." 10 76 1 \
+      same "Use the same password for the administrator (root)" on) || same=""
+   if grep -qx same <<< "$same"
+   then ROOT_PASSWORD="$USER_PASSWORD"; ROOT_SAME=1
+   else menu_password ROOT_PASSWORD "the administrator (root)"; ROOT_SAME=0
+   fi
+   menu_input HOSTNAME_NEW "Computer name" "Name for this computer (on the network):" "${HOSTNAME_NEW:-gobolinux}" check_hostname
+   menu_timezone
+   menu_keyboard
+   menu_options
+}
+
+ROOT_SAME=0
+UI=plain
+if [ "$PLAIN" != 1 ] && [ "$ASSUME_YES" != 1 ] && [ "$ANSWERS_GIVEN" != 1 ] && [ -t 0 ] && [ -t 1 ] &&
+   command -v dialog > /dev/null
+then UI=menu
+fi
 
 live_layout=$(sed -n 's/^setxkbmap .*-layout \([a-z,]*\).*/\1/p' /Users/root/.xinitrc 2>/dev/null | head -n 1)
-ask XKB_LAYOUT "Keyboard layout, e.g. us, pl, de" "${live_layout:-us}"
+if [ "$UI" = menu ]
+then
+   [ -n "$XKB_LAYOUT" ] || XKB_LAYOUT="${live_layout:-us}"
+   [ -n "$TIMEZONE" ] || TIMEZONE=UTC
+   menu_questions
+else
+   if [ -z "$DISK" ]
+   then
+      [ "$ASSUME_YES" != 1 ] || die "--yes needs --disk (refusing to pick a disk to erase by itself)"
+      echo "Disks:"
+      lsblk -dno NAME,SIZE,MODEL,TYPE | awk '$NF == "disk" { $NF = ""; print "  /dev/" $0 }'
+      [ -n "$SOURCE_DISK" ] && echo "  (/dev/$SOURCE_DISK holds the installation medium and cannot be used)"
+      first=$(lsblk -dno NAME,TYPE | awk -v src="$SOURCE_DISK" '$2 == "disk" && $1 != src { print "/dev/" $1; exit }')
+      ask DISK "Disk to ERASE and install $SPIN_NAME on" "$first"
+   fi
+   ask USER_NAME "Login name for your user" "user"
+   ask USER_FULLNAME "Full name" "$USER_NAME"
+   ask_password USER_PASSWORD "$USER_NAME"
+   ask_password ROOT_PASSWORD "root (administrator)"
+   ask HOSTNAME_NEW "Name for this computer" "gobolinux"
+   while true
+   do
+      ask TIMEZONE "Timezone, e.g. Europe/Warsaw" "UTC"
+      [ -f "/System/Index/share/zoneinfo/$TIMEZONE" ] && break
+      [ "$ASSUME_YES" != 1 ] || die "unknown timezone: $TIMEZONE"
+      echo "Unknown timezone '$TIMEZONE'. Use Region/City, as listed in /System/Index/share/zoneinfo."
+      TIMEZONE=""
+   done
+   ask XKB_LAYOUT "Keyboard layout, e.g. us, pl, de" "${live_layout:-us}"
+fi
+
+# The same checks for every way of answering (the menus have checked already).
+why=$(check_disk "$DISK") || die "${why%.}"
+why=$(check_login "$USER_NAME") || die "invalid login name '$USER_NAME': ${why%.}"
+why=$(check_fullname "$USER_FULLNAME") || die "invalid full name: ${why%.}"
+why=$(check_hostname "$HOSTNAME_NEW") || die "invalid computer name '$HOSTNAME_NEW': ${why%.}"
+[ -f "/System/Index/share/zoneinfo/$TIMEZONE" ] || die "unknown timezone: $TIMEZONE"
 [[ "$XKB_LAYOUT" =~ ^[a-z,_]+$ ]] || die "invalid keyboard layout: $XKB_LAYOUT"
+[ -n "$USER_PASSWORD" ] && [ -n "$ROOT_PASSWORD" ] || die "empty password"
+[[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "--swap needs a size in MB"
+disk_bytes=$(lsblk -bdno SIZE "$DISK")
+if [ "$disk_bytes" -ge "$BIG_DISK_BYTES" ]
+then SLOT_MIB=$SLOT_MIB_BIG
+else SLOT_MIB=$SLOT_MIB_SMALL
+fi
 if [ -z "$KEYMAP" ]
 then
    if find -L /System/Index/share/keymaps /Programs/KBD/Current -name "$XKB_LAYOUT.map*" 2>/dev/null | grep -q .
@@ -252,14 +510,6 @@ then
 fi
 
 data_gib=$(( (disk_bytes / 1048576 - 514 - 2 * SLOT_MIB) / 1024 ))
-echo
-echo "About to install $SPIN_LABEL, an unofficial spin of GoboLinux 017.01:"
-echo "  disk      $DISK ($(lsblk -dno SIZE "$DISK" | tr -d ' ')) - EVERYTHING ON IT WILL BE ERASED"
-echo "  layout    two system slots of $((SLOT_MIB / 1024)) GB (A and B, for updates), data partition ${data_gib} GB"
-echo "  firmware  $FIRMWARE"
-echo "  hostname  $HOSTNAME_NEW"
-echo "  user      $USER_NAME ($USER_FULLNAME)$([ "$AUTOLOGIN" = 1 ] && echo ', automatic login')"
-echo "  timezone  $TIMEZONE, keyboard $XKB_LAYOUT"
 # Same test as in step 4 (there on the copied system, here on the running one).
 if [ "$LOGIN_SCREEN" = 1 ] && [ -x /System/Index/sbin/lxdm-binary ] && [ -f /Programs/LXDM/Settings/lxdm/lxdm.conf ]
 then
@@ -273,12 +523,42 @@ else
    else login_method="text login on the console, then the desktop starts"
    fi
 fi
-echo "  login     $login_method"
-[ "$SWAP_MB" -gt 0 ] && echo "  swap      ${SWAP_MB} MB swap file on the data partition"
-if [ "$ASSUME_YES" != 1 ]
+summary() {
+   echo "  disk      $DISK ($(disk_model "$DISK"), $(human "$disk_bytes")) - EVERYTHING ON IT WILL BE ERASED"
+   echo "  layout    two system slots of $((SLOT_MIB / 1024)) GB (A and B, for updates), data partition ${data_gib} GB"
+   echo "  firmware  $FIRMWARE"
+   echo "  hostname  $HOSTNAME_NEW"
+   echo "  user      $USER_NAME ($USER_FULLNAME)"
+   if [ "$UI" = menu ]
+   then
+      if [ "$ROOT_SAME" = 1 ]; then echo "  root      same password as the user"; else echo "  root      its own password"; fi
+   fi
+   echo "  timezone  $TIMEZONE, keyboard $XKB_LAYOUT"
+   echo "  login     $login_method"
+   if [ "$SWAP_MB" -gt 0 ]; then echo "  swap      ${SWAP_MB} MB swap file on the data partition"; else echo "  swap      none"; fi
+}
+if [ "$UI" = menu ]
 then
-   read -r -p "Type 'yes' to continue: " reply
-   [ "$reply" = yes ] || die "aborted, nothing was changed"
+   dialog --backtitle "$BT" --title "Summary" --defaultno --yes-label "Install" --no-label "Cancel" --cr-wrap --no-collapse --yesno \
+      "Install $SPIN_LABEL with these settings?
+
+$(summary)
+
+After \"Install\" the disk is erased; the installation takes a few minutes." 20 104 ||
+      { clear; echo "gobo-install: cancelled, nothing was changed."; exit 1; }
+   exec 3>&-
+   # Progress display: step() feeds this gauge from here on (the details go to the log).
+   exec 4> >(dialog --backtitle "$BT" --title "Installing $SPIN_LABEL" --gauge "Starting ..." 9 76 0)
+   GAUGE=1; GAUGE_PID=$!
+else
+   echo
+   echo "About to install $SPIN_LABEL, an unofficial spin of GoboLinux 017.01:"
+   summary
+   if [ "$ASSUME_YES" != 1 ]
+   then
+      read -r -p "Type 'yes' to continue: " reply
+      [ "$reply" = yes ] || die "aborted, nothing was changed"
+   fi
 fi
 
 trap cleanup EXIT
@@ -328,7 +608,17 @@ done
 
 run mount "$A_PART" "$work/slot"
 step "Copying the system into slot A (this takes a few minutes)"
-"$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" || die "the system copy failed"
+if [ "$GAUGE" = 1 ]
+then
+   # gobo-make-system prints "\r    N/TOTAL program": turned into the gauge (8 % .. 75 %).
+   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" 2>> "$LOG" |
+      awk -v RS='\r' '{ gsub(/\033\[[0-9;]*[A-Za-z]/, "") }
+         match($0, /[0-9]+\/[0-9]+/) { split(substr($0, RSTART, RLENGTH), a, "/")
+         if (a[2] > 0) { printf "XXX\n%d\nCopying the system into slot A: %s\nXXX\n", 8 + 67 * a[1] / a[2], $NF; fflush() } }' >&4 ||
+      die "the system copy failed"
+else
+   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" || die "the system copy failed"
+fi
 grub-editenv "$work/slot/gobo-slot.env" create
 grub-editenv "$work/slot/gobo-slot.env" set "slot_version=${SPIN_VERSION:-unknown}"
 sync
@@ -424,13 +714,22 @@ in_target AddUser -f "$USER_FULLNAME" -p '!' --skel "$USER_NAME"
 in_target usermod -aG sys,lpadmin "$USER_NAME"     # sys = may use sudo
 chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is not valid"
 
-# Passwords are hashed here and written with usermod: chpasswd on 017.01
-# exits 0 without changing anything. (Not logged, so hashes stay out of $LOG.)
+# Passwords: hashed here (openssl reads the password on stdin; printf is a shell builtin, so it
+# never appears on a command line) and the hash is put into shadow directly, passed to awk in its
+# environment (readable by root only), not as an argument. chpasswd on 017.01 exits 0 without
+# changing anything; usermod -p would show the hash in ps. Nothing of it goes to $LOG.
 set_password() { # set_password LOGIN PASSWORD
-   local hash
+   local hash shadow new
    hash=$(printf '%s' "$2" | openssl passwd -6 -stdin) || die "could not hash the password for $1"
-   chroot "$DEST" usermod -p "$hash" "$1" >> "$LOG" 2>&1 || die "could not set the password for $1"
-   grep -q "^$1:\\\$6\\\$" "$DEST/System/Settings/shadow" || die "password for $1 was not stored"
+   shadow=$(readlink -f "$DEST/System/Settings/shadow")
+   new=$(mktemp "$shadow.XXXXXX") || die "could not write the password for $1"
+   GOBO_HASH="$hash" awk -F: -v OFS=: -v u="$1" -v today="$(( $(date +%s) / 86400 ))" \
+      '$1 == u { $2 = ENVIRON["GOBO_HASH"]; $3 = today; found = 1 } { print } END { exit !found }' \
+      "$shadow" > "$new" || { rm -f "$new"; die "could not set the password for $1 (no such user)"; }
+   chmod --reference="$shadow" "$new"; chown --reference="$shadow" "$new"
+   mv -f "$new" "$shadow"
+   hash=""
+   grep -q "^$1:\\\$6\\\$" "$shadow" || die "password for $1 was not stored"
 }
 set_password root "$ROOT_PASSWORD"
 set_password "$USER_NAME" "$USER_PASSWORD"
@@ -580,100 +879,17 @@ else
 fi
 
 step "Writing the boot menu"
-cat > "$grubdir/grub.cfg" <<EOF
-# Written by gobo-install: GoboRefined A/B boot menu. Static; gobo-update only changes grubenv
-# (slot = the default slot, try_slot/tries_left = a new slot being tried, rollback_from =
-# a new slot whose tries ran out). The gobo_* lines are read by gobo-update as well.
-set gobo_uuid_boot=$UUID_BOOT
-set gobo_uuid_a=$UUID_A
-set gobo_uuid_b=$UUID_B
-set gobo_uuid_data=$UUID_DATA
-set gobo_partuuid_a=$PARTUUID_A
-set gobo_partuuid_b=$PARTUUID_B
-set gobo_args="vt.default_utf8=1 rootwait net.ifnames=0"
-
-set timeout=5
-insmod part_gpt
-insmod fat
-insmod ext2
-insmod loadenv
-insmod test
-$video
-
-load_env -f \$prefix/grubenv
-
-# What each slot holds (gobo-slot.env is written last when a slot is filled).
-set ver_a=""
-set ver_b=""
-if search --no-floppy --fs-uuid --set=dev_a \$gobo_uuid_a; then
-   if [ -f (\$dev_a)/gobo-slot.env ]; then
-      set slot_version="?"
-      load_env -f (\$dev_a)/gobo-slot.env slot_version
-      set ver_a="\$slot_version"
-   fi
-fi
-if search --no-floppy --fs-uuid --set=dev_b \$gobo_uuid_b; then
-   if [ -f (\$dev_b)/gobo-slot.env ]; then
-      set slot_version="?"
-      load_env -f (\$dev_b)/gobo-slot.env slot_version
-      set ver_b="\$slot_version"
-   fi
-fi
-
-# Which slot starts: the default, or a new one for at most two tries.
-if [ "\$slot" != b ]; then set slot=a; fi
-set boot_slot=\$slot
-set try_args=""
-if [ "\$try_slot" = a -o "\$try_slot" = b ]; then
-   if [ "\$tries_left" = 2 ]; then
-      set tries_left=1
-      save_env -f \$prefix/grubenv tries_left
-      set boot_slot=\$try_slot
-   elif [ "\$tries_left" = 1 ]; then
-      set tries_left=0
-      save_env -f \$prefix/grubenv tries_left
-      set boot_slot=\$try_slot
-   else
-      set rollback_from=\$try_slot
-      set try_slot=""
-      set tries_left=""
-      save_env -f \$prefix/grubenv rollback_from try_slot tries_left
-   fi
-fi
-if [ "\$boot_slot" = a -a -z "\$ver_a" ]; then set boot_slot=b; fi
-if [ "\$boot_slot" = b -a -z "\$ver_b" ]; then set boot_slot=a; fi
-if [ -n "\$try_slot" -a "\$boot_slot" = "\$try_slot" ]; then
-   # A slot that does not start reboots (instead of waiting at a prompt), so the tries run out.
-   set try_args="rd.shell=0 rd.emergency=reboot panic=10"
-   set fallback="slot-\$slot"
-fi
-set default="slot-\$boot_slot"
-export dev_a dev_b gobo_uuid_a gobo_uuid_b gobo_uuid_data gobo_uuid_boot gobo_args try_slot try_args
-
-function gobo_boot {
-   if [ "\$1" = a ]; then set d=\$dev_a; set u=\$gobo_uuid_a; else set d=\$dev_b; set u=\$gobo_uuid_b; fi
-   set x=""
-   if [ "\$1" = "\$try_slot" ]; then set x="\$try_args"; fi
-   echo "Starting GoboRefined from slot \$1 ..."
-   linux (\$d)/System/Kernel/Boot/kernel root=gobo gobo.slot=\$1 gobo.root=UUID=\$u gobo.data=UUID=\$gobo_uuid_data gobo.boot=UUID=\$gobo_uuid_boot \$gobo_args \$x \$2 \$3
-   initrd (\$d)/System/Kernel/Boot/initramfs
-}
-
-if [ -n "\$ver_a" ]; then
-   menuentry "GoboRefined \$ver_a (slot A)" --id slot-a { gobo_boot a }
-   menuentry "GoboRefined \$ver_a (slot A) - without my system changes" --id slot-a-pristine { gobo_boot a gobo.system-changes=off }
-   menuentry "GoboRefined \$ver_a (slot A) - safe graphics" --id slot-a-safe { gobo_boot a nomodeset }
-else
-   menuentry "Slot A: empty" --id empty-a { echo "Slot A is empty or incomplete. A system update fills it."; sleep 5 }
-fi
-if [ -n "\$ver_b" ]; then
-   menuentry "GoboRefined \$ver_b (slot B)" --id slot-b { gobo_boot b }
-   menuentry "GoboRefined \$ver_b (slot B) - without my system changes" --id slot-b-pristine { gobo_boot b gobo.system-changes=off }
-   menuentry "GoboRefined \$ver_b (slot B) - safe graphics" --id slot-b-safe { gobo_boot b nomodeset }
-else
-   menuentry "Slot B: empty" --id empty-b { echo "Slot B is empty. The first system update (gobo-update) fills it."; sleep 5 }
-fi
-EOF
+# From the template of the system just installed (the same file gobo-update uses when an update
+# brings a newer template); a checkout of the installer falls back to the copy next to it.
+GRUB_TEMPLATE=""
+for f in "$work/slot/Programs/GoboSpin/Current/share/gobo-update/grub.cfg.in" "$self_dir/grub.cfg.in"          "$self_dir/../spin/ab/grub.cfg.in"
+do [ -z "$GRUB_TEMPLATE" ] && [ -f "$f" ] && GRUB_TEMPLATE="$f"
+done
+[ -n "$GRUB_TEMPLATE" ] || die "boot menu template grub.cfg.in not found"
+sed -e "s|@UUID_BOOT@|$UUID_BOOT|g" -e "s|@UUID_A@|$UUID_A|g" -e "s|@UUID_B@|$UUID_B|g"     -e "s|@UUID_DATA@|$UUID_DATA|g" -e "s|@PARTUUID_A@|$PARTUUID_A|g" -e "s|@PARTUUID_B@|$PARTUUID_B|g"     -e "s|@VIDEO@|$video|g" "$GRUB_TEMPLATE" > "$grubdir/grub.cfg.new"
+! grep -qE "@[A-Z_]+@" "$grubdir/grub.cfg.new" || die "the boot menu template has unknown placeholders"
+grep -q "^set gobo_uuid_data=$UUID_DATA$" "$grubdir/grub.cfg.new" || die "the boot menu was not written correctly"
+mv "$grubdir/grub.cfg.new" "$grubdir/grub.cfg"
 grub-editenv "$grubdir/grubenv" create
 grub-editenv "$grubdir/grubenv" set slot=a
 sync
@@ -688,12 +904,22 @@ rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null || true
 [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
 echo "+ install time $((SECONDS - t_start)) s" >> "$LOG"
 
+if [ "$AUTOLOGIN" = 1 ]
+then next="Remove the installation medium and restart. The desktop starts by itself (automatic login as '$USER_NAME')."
+elif [ "$LOGIN_SCREEN" = 1 ]
+then next="Remove the installation medium and restart, then log in as '$USER_NAME' on the login screen."
+else next="Remove the installation medium and restart. Log in as '$USER_NAME' on the text console and the desktop starts."
+fi
+if [ "$UI" = menu ]
+then
+   gauge_close
+   if dialog --backtitle "$BT" --title "Done" --yes-label "Restart now" --no-label "Later" --yesno \
+      "\n$SPIN_NAME is installed on $DISK.\n(System slot A; slot B is filled by the first system update.)\n\n$next\n\nDetails of the installation: $LOG" 14 80
+   then clear; exec reboot
+   fi
+   clear
+fi
 echo
 echo "${c_cyan}$SPIN_NAME is installed on $DISK (system slot A; slot B is filled by the first update).${c_off}"
-if [ "$AUTOLOGIN" = 1 ]
-then echo "Remove the installation medium and reboot. The desktop starts by itself (automatic login as '$USER_NAME')."
-elif [ "$LOGIN_SCREEN" = 1 ]
-then echo "Remove the installation medium and reboot, then log in as '$USER_NAME' on the login screen."
-else echo "Remove the installation medium and reboot. Log in as '$USER_NAME' on the text console and the desktop starts."
-fi
+echo "$next"
 echo "Full log: $LOG"

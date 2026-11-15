@@ -23,12 +23,19 @@ Not on the image: sgdisk, rsync.
 |---|---|---|---|
 | 1 | `BIOSBOOT` | 1 MB | BIOS boot partition (GRUB core on BIOS machines) |
 | 2 | `GOBO_BOOT` | 512 MB FAT32 | EFI system partition; GRUB, `grub.cfg`, `grubenv` (same partition on BIOS) |
-| 3 | `GOBO_A` | 12 GiB ext4 | system slot A, mounted read-only |
-| 4 | `GOBO_B` | 12 GiB ext4 | system slot B, mounted read-only |
+| 3 | `GOBO_A` | 12 or 16 GiB ext4 | system slot A, mounted read-only |
+| 4 | `GOBO_B` | 12 or 16 GiB ext4 | system slot B, mounted read-only |
 | 5 | `GOBO_DATA` | rest ext4 | everything that survives updates |
 
 **As built:** "32 GB" is checked as 32,000,000,000 bytes (a disk sold as 32 GB). With two 12 GiB slots the
 data partition is then only about 5 GB; it is 8 GB or more from about 35 GB disks on.
+
+**0.8 release:** slot size depends on the disk: **16 GiB** each on disks of 48,000,000,000 bytes and more,
+**12 GiB** on smaller ones (down to the 32 GB minimum). A 0.8 system uses 8.1 GB of a slot, so 12 GiB leaves
+3.1 GB and 16 GiB 7.1 GB for growth. gobo-update never assumes a size: it reads the target slot size from the
+device (`lsblk -b`) and refuses an update whose `installed_bytes` (+5 % + 256 MiB) does not fit.
+Data partition: about 20 GiB on a disk just under 48 GB (12 GiB slots), 12 GiB on a 48 GB disk, 27 GiB on
+a 64 GB disk, 31 GiB on a 64 GiB disk (VM test disk), about 200 GiB on a 256 GB disk.
 
 No recovery partition: the other slot and the install USB stick are the recovery. Each slot carries its own
 kernel and initramfs in `/System/Kernel/Boot`, so kernel and system are always updated together. The
@@ -79,7 +86,17 @@ Consequences, accepted:
   keeps the user's own files and since 0.8 also their light/dark choice; (c) new folders of the image's
   `/Data/Variable` are copied to the data partition without overwriting anything.
 - New system accounts that a later image adds to `/System/Settings/passwd` are hidden by the install
-  layer's copy (not handled; no such change is planned).
+  layer's copy. **0.8 release:** the first-boot step (`gobo-update --boot-task`) appends system users and
+  groups (id < 1000) that the new image has and the machine has not (by name, with an id nobody uses here)
+  to passwd/group/shadow/gshadow, as copy + rename; existing lines and passwords are never changed.
+- **0.8 release: grub.cfg can be updated, GRUB cannot.** The boot menu is made from a template
+  (`share/gobo-update/grub.cfg.in`, first line `# gobo-grub-template N`). gobo-update writes a new
+  grub.cfg when the new image's template has a higher N than the installed grub.cfg (no line = 0):
+  filled with this computer's IDs, checked (placeholders, IDs, `grub-script-check`), written as a new file +
+  rename, the old one kept as `grub/grub.cfg.old`. The menu is shared by both slots, so a template must
+  still start the older slot. If a new menu is broken: at GRUB press `c` and type
+  `configfile $prefix/grub.cfg.old`. The GRUB binary (BOOTX64.EFI, the BIOS core image, the modules on
+  GOBO_BOOT) stays as installed.
 
 ## Boot and fallback
 
@@ -142,7 +159,15 @@ partition (`/Data/Android`, `/Data/Windows`), not under `/Programs`.
 
 ## As built: open points (see HANDOFF.md, 0.8)
 
-- The initramfs runs `e2fsck -p` on the data partition before mounting it, but in the VM the kernel still replayed
-  the journal at mount time after a power cut: the pre-mount check does not work as intended yet.
-- ext4 is made without `orphan_file` (after power cuts the kernel reported bad orphan inodes with it).
-- A slot holds 8.1 GB of 12 GiB (the design's 6.7 GB figure was before OnlyOffice and later programs).
+- **Settled in the 0.8 release:** the initramfs `e2fsck -p` does replay the journal after a power cut and
+  clears orphan inodes (its output is now in the kernel log: `dmesg | grep GoboRefined`); the kernel then
+  mounts a clean file system. The earlier "kernel still replays" observation could not be reproduced
+  (the old log went to a file that was not kept). Kept as the repair step. Shutdown: the stock
+  `umount -a -r` leaves the data partition clean (verified: e2fsck reports "clean" without journal
+  recovery after a normal restart).
+- ext4 is made without `orphan_file` (after power cuts the kernel reported bad orphan inodes with it; and
+  every mount of a slot made with it logged "orphan cleanup on readonly fs").
+- A slot holds 8.1 GB of 12 GiB (the design's 6.7 GB figure was before OnlyOffice and later programs);
+  disks of 48 GB and more get 16 GiB slots.
+- The update file is read through one open file descriptor (see the comment in gobo-update) and must
+  belong to root or the invoking user and not be writable by others.

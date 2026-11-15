@@ -46,11 +46,15 @@ modprobe -q overlay 2>/dev/null
 modprobe -q ext4 2>/dev/null
 mkdir -p $G/slot $G/data $G/mem
 
-# Data partition: replay/repair after a power cut (preen mode only fixes safe things).
-# Output kept in /run/goboab-fsck.log (= /Data/Variable/run/goboab-fsck.log after the boot).
-mkdir -p /run
-e2fsck -p "$DATADEV" > /run/goboab-fsck.log 2>&1
+# Data partition: e2fsck in preen mode before mounting. After a power cut it replays the journal
+# itself ("recovering journal"; the kernel would do the same at mount, which is normal ext4
+# behaviour) and repairs the inconsistencies that preen mode may fix safely. Every line it prints
+# goes to the kernel log (dmesg | grep GoboRefined), so a check that did something is visible.
+fsck_out=$(e2fsck -p "$DATADEV" 2>&1)
 rc=$?
+printf '%s\n' "$fsck_out" | while IFS= read -r line
+do [ -n "$line" ] && say "  e2fsck: $line"
+done
 say "data partition check: e2fsck exit $rc"
 [ $rc -ge 4 ] && say "the data partition has errors e2fsck could not fix; trying anyway"
 mount -t ext4 -o rw,noatime "$DATADEV" $G/data || fail "cannot mount the data partition $DATADEV"

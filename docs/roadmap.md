@@ -153,7 +153,19 @@ are added.
 - VS Code (official build is proprietary; VSCodium is the open build — owner to choose).
 - KolourPaint (needs many KDE libraries built first; compare with a lighter paint program before committing).
 
-### 0.8 — A/B system updates (owner's idea; design not written yet)
+### 0.8 — A/B system updates — RELEASE CANDIDATE BUILT (2026-11-15), pending the real-PC test
+
+Status: `dist/GoboRefined-0.8.iso` + `GoboRefined-0.8.update`, tested in the VM (HANDOFF.md, "0.8 release
+candidate"). Design and what was built: `docs/ab-design.md`. Done: two system slots + data partition,
+overlay root, `gobo-update` (signed update files, `--status`, `--rollback`, `--reset-system-changes`,
+automatic rollback), "without my system changes" boot entries, menu-driven installer (`dialog`), 16 GiB slots
+on disks of 48 GB and more, boot menu template that updates can replace, new system accounts merged on the
+first start of a new version. **Reinstall needed coming from 0.6** (whole disk erased; at least 32 GB).
+**The 0.6.2 list above is NOT fixed in 0.8** — it is the planned content of the first real update.
+Open: real UEFI firmware and NVMe naming; GRUB itself is never updated; `/System/Settings/shadow` is
+world-readable as in stock 017.01 (found during 0.8, not changed).
+
+Original notes (before the design):
 
 - Partitions: boot (EFI), Root A, Root B, Data. No separate recovery partition proposed: the other root slot
   and the USB stick serve as recovery.
@@ -170,3 +182,8 @@ Keep `/Programs/<Name>/<Version>` for native programs only (it is compiled into 
 every GoboLinux tool and recipe). Other ecosystems (Android, Windows programs) would get their own home on
 the Data partition, e.g. `/Data/Android`, `/Data/Windows`, not `/Programs/android`. Android apps through
 Waydroid would need Wayland; the desktop is X11.
+
+### Added to the 0.6.2 list after the 0.8 work (2026-11-15)
+
+14. `/System/Settings/shadow` is world-readable (mode 644) in stock 017.01: every user can read the password
+    hashes. Find out what depends on it (lock screen, LXDM) and tighten it.

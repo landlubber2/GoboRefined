@@ -36,7 +36,7 @@ set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=${VERSION:-0.8-dev2}
+VERSION=${VERSION:-0.8}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
 # stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
@@ -56,6 +56,9 @@ rm -rf gobo11 && tar xzf gobo11.tgz 2>/dev/null
 rm -rf ab && tar xzf ab.tgz 2>/dev/null
 bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/dracut/90goboab/module-setup.sh
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
+# boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
+head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in ||
+   { echo "ab/grub.cfg.in is not a valid boot menu template"; exit 1; }
 openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - ab/update-signing.pub.pem ||
    { echo "the signing key does not belong to ab/update-signing.pub.pem"; exit 1; }
 
@@ -84,7 +87,7 @@ install -m 755 ab/gobo-make-system $P/1.0/bin/gobo-make-system
 mkdir -p $P/1.0/share/gobo-update/dracut $P/1.0/lib/udev/rules.d
 cp -r ab/dracut/90goboab $P/1.0/share/gobo-update/dracut/
 chmod 755 $P/1.0/share/gobo-update/dracut/90goboab/*.sh
-install -m 644 ab/update-signing.pub.pem ab/generated-caches $P/1.0/share/gobo-update/
+install -m 644 ab/update-signing.pub.pem ab/generated-caches ab/grub.cfg.in $P/1.0/share/gobo-update/
 install -m 644 ab/80-gobo-internal.rules $P/1.0/lib/udev/rules.d/
 mkdir -p $P/1.0/share/doc
 install -m 644 software-install.txt $P/1.0/share/doc/software-install.txt

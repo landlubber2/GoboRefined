@@ -165,15 +165,44 @@ is_mounted() { # is_mounted DEV: anywhere, under any of its names
 
 ### Update file ################################################################
 
-verify_update() { # verify_update FILE: sets U_VERSION, U_IMAGE_SIZE, U_INSTALLED
-   local f="$1" size sum expect
+# The file is checked and then read a second time by unsquashfs. So that nobody can swap or change
+# it in between (without needing free space for a copy):
+#  - it is opened ONCE, as file descriptor 8; the check and unsquashfs both read that open file
+#    through /proc/self/fd/8 (a re-open of the same inode), so renaming, replacing or re-linking
+#    the path after the check has no effect;
+#  - the open file must be a regular file owned by root or by the user who ran sudo, and not
+#    writable by group or others: then only root or that user (the administrator doing the update)
+#    could change its contents in place, and both are trusted anyway;
+#  - after unpacking, its size and modification time (taken from the open file) must be unchanged.
+# Not covered: someone with physical access rewriting a USB stick's sectors behind the kernel's back.
+UPD_FD=/proc/self/fd/8
+open_update() { # open_update FILE
+   local f="$1" owner mode mtime invoker
    [ -f "$f" ] && [ -r "$f" ] || die "cannot read $f"
+   exec 8< "$f" || die "cannot open $f"
+   [ -f "$UPD_FD" ] || die "$f is not a regular file"
+   read -r owner mode U_FILE_SIZE U_FILE_MTIME <<< "$(stat -L -c '%u %a %s %Y' "$UPD_FD")"
+   invoker=0
+   [[ "${SUDO_UID:-}" =~ ^[0-9]+$ ]] && invoker=$SUDO_UID
+   [ "$owner" = 0 ] || [ "$owner" = "$invoker" ] ||
+      die "$f belongs to another user (uid $owner); copy it to a folder of your own first"
+   (( (8#$mode & 8#022) == 0 )) ||
+      die "$f may be changed by other users (mode $mode); run: chmod go-w \"$f\" (or copy it to your home folder)"
+   return 0
+}
+
+update_unchanged() { # the open file has the same size and modification time as when it was checked
+   [ "$(stat -L -c '%s %Y' "$UPD_FD")" = "$U_FILE_SIZE $U_FILE_MTIME" ]
+}
+
+verify_update() { # verify_update DISPLAYNAME (reads the file opened by open_update): sets U_VERSION, U_IMAGE_SIZE, U_INSTALLED
+   local f="$UPD_FD" size sum expect   # $1 = the name shown in messages
    [ -f "$PUBKEY" ] || die "public key $PUBKEY missing"
    make_tmp
-   size=$(stat -c %s "$f")
-   [ "$size" -gt $((TRAILER_SIZE * 2)) ] || die "$f is too small to be an update"
+   size=$(stat -L -c %s "$f")
+   [ "$size" -gt $((TRAILER_SIZE * 2)) ] || die "$1 is too small to be an update"
    tail -c $TRAILER_SIZE "$f" > "$TMP/trailer"
-   [ "$(head -n 1 "$TMP/trailer" | tr -d '\000')" = "GOBOREFINED-UPDATE 1" ] || die "$f is not a GoboRefined update file"
+   [ "$(head -n 1 "$TMP/trailer" | tr -d '\000')" = "GOBOREFINED-UPDATE 1" ] || die "$1 is not a GoboRefined update file"
    sed '/^-----BEGIN SIGNATURE-----$/,$d' "$TMP/trailer" > "$TMP/manifest"
    sed -n '/^-----BEGIN SIGNATURE-----$/,/^-----END SIGNATURE-----$/p' "$TMP/trailer" | sed '1d;$d' |
       openssl base64 -d -A > "$TMP/sig" 2>/dev/null || true
@@ -196,11 +225,61 @@ verify_update() { # verify_update FILE: sets U_VERSION, U_IMAGE_SIZE, U_INSTALLE
    say "    signature and checksum are correct"
 }
 
+### Boot menu ##################################################################
+# GRUB itself (BOOTX64.EFI / the BIOS core image and the modules on GOBO_BOOT) stays as installed:
+# it is never updated. Only grub.cfg can be: when the new system carries a boot menu template
+# (share/gobo-update/grub.cfg.in) with a higher "gobo-grub-template N" than the installed grub.cfg
+# (none = 0), grub.cfg is written from it with this computer's partition IDs, atomically (new file,
+# sync, rename); the previous one is kept as grub.cfg.old. The template must start both slots.
+
+template_version() { # template_version FILE -> N from "# gobo-grub-template N" in line 1, else 0
+   local v
+   v=$(sed -n '1s/^# gobo-grub-template \([0-9]\{1,4\}\)$/\1/p' "$1" 2>/dev/null)
+   echo "${v:-0}"
+}
+
+update_boot_menu() { # update_boot_menu NEWSLOTDIR (needs mount_boot)
+   local tpl="$1/Programs/GoboSpin/Current/share/gobo-update/grub.cfg.in" cfg="$BOOT/grub/grub.cfg" vnew vold video
+   [ -f "$tpl" ] || { log "boot menu: the new system has no template; grub.cfg kept"; return 0; }
+   vnew=$(template_version "$tpl"); vold=$(template_version "$cfg")
+   if [ "$vnew" -le "$vold" ]
+   then log "boot menu: template $vnew, installed $vold: grub.cfg kept"; return 0
+   fi
+   # The video line depends on the firmware the computer was installed for.
+   if grep -qx 'insmod all_video' "$cfg"; then video="insmod all_video"
+   elif grep -qx 'insmod vbe' "$cfg"; then video="insmod vbe"
+   else say "    the installed boot menu is not recognised; it is kept as it is"; return 0
+   fi
+   sed -e "s|@UUID_BOOT@|$BOOT_UUID|g" -e "s|@UUID_A@|$L_uuid_a|g" -e "s|@UUID_B@|$L_uuid_b|g" \
+       -e "s|@UUID_DATA@|$L_uuid_data|g" -e "s|@PARTUUID_A@|$L_partuuid_a|g" \
+       -e "s|@PARTUUID_B@|$L_partuuid_b|g" -e "s|@VIDEO@|$video|g" "$tpl" > "$cfg.new" ||
+      die "could not write the new boot menu"
+   # Checks: all placeholders filled, this computer's IDs in it, GRUB's own syntax check, and no
+   # escaped "\$" (a template written through a shell here-document by mistake: GRUB then shows
+   # entries named "$ver_a" and starts nothing - seen in a test).
+   if grep -qE '@[A-Z_]+@' "$cfg.new" || ! grep -qx "set gobo_uuid_data=$L_uuid_data" "$cfg.new" ||
+      grep -qF '\$' "$cfg.new" ||
+      { command -v grub-script-check > /dev/null && ! grub-script-check "$cfg.new" > /dev/null 2>&1; } ||
+      ! grep -qx "set gobo_partuuid_$OTHER=$(eval echo "\$L_partuuid_$OTHER")" "$cfg.new"
+   then
+      rm -f "$cfg.new"
+      say "    the new boot menu template does not fit this computer; the old boot menu is kept"
+      return 0
+   fi
+   sync
+   cp -f "$cfg" "$cfg.old"
+   sync
+   mv -f "$cfg.new" "$cfg"
+   sync
+   say "    boot menu updated (template $vold -> $vnew; the old one is kept as grub/grub.cfg.old)"
+}
+
 cmd_update() {
    local file dev slotsize need
    file=$(readlink -f "$1")
    need_root; load_layout; lock
    [ "$MODE" = normal ] || die "started without the system changes: restart normally to update"
+   open_update "$file"
    verify_update "$file"
    mount_boot
    dev=$(slot_device "$OTHER") || die "slot $(letter_upper "$OTHER") not found (PARTUUID $(eval echo "\$L_partuuid_$OTHER") with name GOBO_$(letter_upper "$OTHER"))"
@@ -233,17 +312,21 @@ cmd_update() {
    mount -t ext4 "$dev" "$TMP/slot" || die "cannot mount the new slot"
    step "Unpacking GoboRefined $U_VERSION (a few minutes)"
    local t0=$SECONDS
+   # unsquashfs reads the open, checked file (fd 8), not the path (see open_update).
    if [ -t 1 ]
-   then unsquashfs -f -d "$TMP/slot" "$file" || die "unpacking failed"
-   else unsquashfs -no-progress -f -d "$TMP/slot" "$file" >> "$LOG" 2>&1 || die "unpacking failed"
+   then unsquashfs -f -d "$TMP/slot" "$UPD_FD" || die "unpacking failed"
+   else unsquashfs -no-progress -f -d "$TMP/slot" "$UPD_FD" >> "$LOG" 2>&1 || die "unpacking failed"
    fi
    log "unpacked in $((SECONDS - t0)) s"
+   update_unchanged || die "the update file was changed while it was being installed; slot $(letter_upper "$OTHER") stays empty"
+   exec 8<&-
    step "Checking the new system"
    for p in System/Kernel/Boot/kernel System/Kernel/Boot/initramfs System/Index/bin/gobo-update Programs/Scripts
    do [ -e "$TMP/slot/$p" ] || die "the new system has no $p"
    done
    [ "$(head -n 1 "$TMP/slot/Programs/GoboSpin/Current/share/spin-version" | tr -dc '0-9A-Za-z.-')" = "$U_VERSION" ] ||
       die "the new system's version does not match the update file"
+   update_boot_menu "$TMP/slot"
    sync
    # Written last: GRUB and the initramfs treat a slot without this file as empty.
    grub-editenv "$TMP/slot/gobo-slot.env" create
@@ -373,10 +456,76 @@ regenerate_caches() {
    return 0
 }
 
+# New system accounts of a new image. The machine's account files live in the overlay (install
+# layer, later changes in upper) and hide the image's own. System users and groups (id < 1000) that
+# the new image has and this machine has not - by name, and with an id nobody here uses - are
+# appended. Existing lines are never changed or removed; passwords are never touched (a new user
+# gets the image's shadow line, which is locked in the image, or a locked one).
+# Each file is rewritten as a copy + rename in the same folder (permissions kept).
+ACCT_IMG=/System/Slot/System/Settings
+ACCT_CUR=/System/Settings
+
+acct_append() { # acct_append FILE LINES: append LINES (newline-terminated) to FILE atomically
+   local f new
+   f=$(readlink -f "$ACCT_CUR/$1")
+   [ -f "$f" ] || return 1
+   new="$f.gobo-update-new"
+   rm -f "$new"
+   cp -p "$f" "$new" || return 1
+   [ -z "$(tail -c 1 "$new")" ] || echo >> "$new"
+   printf '%s' "$2" >> "$new"
+   sync
+   mv -f "$new" "$f"
+}
+
+merge_accounts() {
+   local add_g add_gs add_u add_s line name
+   [ -f "$ACCT_IMG/passwd" ] && [ -f "$ACCT_IMG/group" ] || return 0
+   # groups: name:x:gid:members
+   add_g=$(awk -F: 'NR == FNR { if (NF == 4) { n[$1] = 1; id[$3] = 1 }; next }
+      NF == 4 && $1 ~ /^[a-z_][a-z0-9_-]*$/ && $3 ~ /^[0-9]+$/ && $3 < 1000 && !($1 in n) {
+         if ($3 in id) { print "SKIP " $1 > "/dev/stderr"; next }
+         print; id[$3] = 1 }' "$ACCT_CUR/group" "$ACCT_IMG/group" 2>> "$LOG")
+   # users: name:x:uid:gid:gecos:home:shell
+   add_u=$(awk -F: 'NR == FNR { if (NF == 7) { n[$1] = 1; id[$3] = 1 }; next }
+      NF == 7 && $1 ~ /^[a-z_][a-z0-9_-]*$/ && $3 ~ /^[0-9]+$/ && $3 < 1000 && !($1 in n) {
+         if ($3 in id) { print "SKIP " $1 > "/dev/stderr"; next }
+         print; id[$3] = 1 }' "$ACCT_CUR/passwd" "$ACCT_IMG/passwd" 2>> "$LOG")
+   [ -n "$add_g$add_u" ] || return 0
+   add_gs=""; add_s=""
+   while IFS=: read -r name _
+   do
+      [ -n "$name" ] || continue
+      if [ -f "$ACCT_CUR/gshadow" ] && ! grep -q "^$name:" "$ACCT_CUR/gshadow"
+      then
+         line=$(grep -m 1 "^$name:" "$ACCT_IMG/gshadow" 2>/dev/null || true)
+         add_gs+="${line:-$name:!::}"$'\n'
+      fi
+      log "accounts: adding system group $name from the new system"
+   done <<< "$add_g"
+   while IFS=: read -r name _
+   do
+      [ -n "$name" ] || continue
+      if ! grep -q "^$name:" "$ACCT_CUR/shadow"
+      then
+         line=$(grep -m 1 "^$name:" "$ACCT_IMG/shadow" 2>/dev/null || true)
+         add_s+="${line:-$name:!:$(( $(date +%s) / 86400 ))::::::}"$'\n'
+      fi
+      log "accounts: adding system user $name from the new system"
+   done <<< "$add_u"
+   # groups first, so that new users' groups exist; shadow files before the visible files
+   [ -n "$add_gs" ] && { acct_append gshadow "$add_gs" || log "accounts: could not update gshadow"; }
+   [ -n "$add_g" ] && { acct_append group "$add_g"$'\n' || log "accounts: could not update group"; }
+   [ -n "$add_s" ] && { acct_append shadow "$add_s" || log "accounts: could not update shadow"; }
+   [ -n "$add_u" ] && { acct_append passwd "$add_u"$'\n' || log "accounts: could not update passwd"; }
+   return 0
+}
+
 first_boot() {
    local version h u
    version=$(head -n 1 "$OVERLAY/first-boot-pending" | tr -dc '0-9A-Za-z.-')
    log "first start of version $version"
+   merge_accounts || log "accounts: merge failed"
    regenerate_caches || true
    # New state folders of the new version (the data partition's copy hides the slot's).
    for d in /System/Slot/Data/Variable/*
