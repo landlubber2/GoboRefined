@@ -221,3 +221,19 @@ Read from upstream's widget (`look/reference/gobo-widgets/gobonet.lua`; ours wra
   it beyond checking whether a newer driver revision mentions a disconnect fix.
 - Delivery: as `GoboRefined-0.8.1.update` (and ISO), tested by updating the `iso-0.8-installed-efi` snapshot.
   Look changes reach existing users through the first-boot `apply.sh` run — verify that on the update.
+
+### Next update (0.8.2) — from the real-PC test of 0.8.1, 2026-11-15
+
+Confirmed on the real PC: the update 0.8 → 0.8.1 worked.
+
+1. "Show desktop" button: a very thin strip at the right end of the taskbar (as on Windows 11); click hides
+   all windows, second click brings them back.
+2. Mouse clicks stopped working (pointer still moved, keyboard worked) around plugging in or unplugging the
+   Wi-Fi adapter. Suspect, not proven: a stuck popup — the network menu opens by itself after the background
+   scan (`popup_menu_when_done` in `gobonet_menu.lua`) and its full-screen click-catching sheet from
+   `popups.lua` stays up, or the Wi-Fi notification holds a pointer grab. Owner to try Win+Escape when it
+   happens. Fix regardless: no menu may open by itself on adapter events; the sheet must never outlive its
+   menu (watchdog: sheet visible with no open menu → hide).
+3. A way to see what is going on without the mouse: a "System report" command (USB devices, network
+   interfaces, last kernel messages, Xorg input devices, our logs) written to a file in the home folder,
+   reachable from the keyboard.
