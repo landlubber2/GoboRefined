@@ -175,8 +175,11 @@ scenario() {
                         steps '@k win up'   # back
                         check win-hold ;;
    power-keys)          # 0.8.2: arrows move the selection in the power menu, Escape closes it
-                        steps '@k ctrl alt del' '@k right' '@k right' '@k right' '@k left'
-                        is power-keys-selection 'return tostring(require("spin.power").selected())' '"2"'
+                        # (0.8.2 part 2: "Lock" is pre-selected when the menu opens)
+                        steps '@k ctrl alt del'
+                        is power-keys-default 'return tostring(require("spin.power").selected())' '"1"'
+                        steps '@k right' '@k right' '@k right' '@k left'
+                        is power-keys-selection 'return tostring(require("spin.power").selected())' '"3"'
                         steps '@k esc'
                         is power-keys-closed 'return tostring(require("spin.power").is_open())' 'false'
                         check power-keys ;;

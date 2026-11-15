@@ -20,6 +20,11 @@
 #   update-status                    gobo-update --status
 #   update-install FILE              gobo-update --yes FILE (output streamed)
 #   update-rollback                  gobo-update --rollback
+#   bluetooth-service start|stop     the Bluetooth daemon (start also lifts an rfkill soft block)
+#   bluetooth-boot on|off            Bluetooth switched on at every start (stock) or off
+#   boot-bluetooth                   (boot scripts) apply bluetooth-boot off
+#   hotspot-set                      hotspot name on stdin line 1, password on line 2
+#   hotspot on|off                   Wi-Fi hotspot (client Wi-Fi on that adapter is stopped)
 #   report                           root-only parts of the system report: last 400 kernel
 #                                    messages, gobo-update --status, the system logs of the spin
 #
@@ -109,6 +114,136 @@ start_sshd() {
 stop_sshd() {
    if sshd_running; then kill "$(cat "$SSHD_PID")"; fi
    rm -f "$SSHD_PID"
+}
+
+### Bluetooth (0.8.2, experimental) ##############################################
+# BlueZ 5.54 is part of 017.01: bluetoothd is started by the stock boot task "Bluetooth Start"
+# (which also unblocks rfkill and powers the adapter on). People use bluetoothctl themselves
+# (the D-Bus policy lets everyone talk to org.bluez); only these need root.
+BLUETOOTHD=/System/Index/lib/bluez/bluetooth/bluetoothd
+BT_OFF_AT_BOOT=$STATE/bluetooth-off-at-boot
+bluetoothd_running() { pgrep -x bluetoothd > /dev/null 2>&1; }
+start_bluetoothd() {
+   rfkill unblock bluetooth > /dev/null 2>&1
+   bluetoothd_running && return 0
+   [ -x "$BLUETOOTHD" ] || BLUETOOTHD=/usr/lib/bluez/bluetooth/bluetoothd
+   [ -x "$BLUETOOTHD" ] || die "bluetoothd is not installed"
+   setsid "$BLUETOOTHD" < /dev/null > /dev/null 2>&1 &
+   local i
+   for i in 1 2 3 4 5 6 7 8 9 10; do bluetoothd_running && return 0; sleep 0.3; done
+   die "the Bluetooth service did not start"
+}
+
+### Wi-Fi hotspot (0.8.2, experimental) ##########################################
+# The Wi-Fi adapter becomes an access point (wpa_supplicant's AP mode, WPA2-PSK); dnsmasq gives
+# the devices addresses in $HS_NET.0/24 and forwards DNS; iptables masquerades their traffic out
+# of every other interface (wired, ...). Not kept over a restart (all state is in /Data/Variable/run).
+# The password never appears on a command line: wpa_passphrase reads it on stdin and only the
+# derived key is stored (root only, $HS_CONF).
+HS_CONF=$STATE/hotspot.conf          # ssid_hex=, psk= (mode 600)
+HS_NAME=$STATE/hotspot.name          # the name alone, for the Settings page (644)
+HS_RUN=/Data/Variable/run/gobo-hotspot   # 755: state, leases (the page reads them)
+HS_PRIV=$HS_RUN/private              # 700: wpa_supplicant config + control socket, saved values
+HS_NET=10.42.0
+valid_iface() { [[ "$1" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; }
+wifi_ifaces() {
+   local d
+   for d in /sys/class/net/*
+   do if [ -e "$d/phy80211" ] || [ -d "$d/wireless" ]; then basename "$d"; fi
+   done
+}
+hs_active() { [ -f "$HS_RUN/state" ]; }
+hs_kill() {   # hs_kill PIDFILE COMMAND-NAME: stop that process if the pid file really names it
+   local pid
+   [ -s "$1" ] || return 0
+   pid=$(head -n 1 "$1")
+   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+   [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "$2" ] || return 0
+   kill "$pid" 2>/dev/null
+   local i; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.2; done
+   kill -9 "$pid" 2>/dev/null
+}
+hs_stop() {
+   local ifc=""
+   [ -f "$HS_RUN/state" ] && ifc=$(sed -n 's/^iface=//p' "$HS_RUN/state")
+   hs_kill "$HS_RUN/dnsmasq.pid" dnsmasq
+   hs_kill "$HS_RUN/wpa.pid" wpa_supplicant
+   iptables -t nat -D POSTROUTING -j GOBO_HOTSPOT 2>/dev/null
+   iptables -t nat -F GOBO_HOTSPOT 2>/dev/null; iptables -t nat -X GOBO_HOTSPOT 2>/dev/null
+   iptables -D FORWARD -j GOBO_HOTSPOT_FWD 2>/dev/null
+   iptables -F GOBO_HOTSPOT_FWD 2>/dev/null; iptables -X GOBO_HOTSPOT_FWD 2>/dev/null
+   if [ -f "$HS_PRIV/ip_forward.before" ]
+   then
+      local before; before=$(cat "$HS_PRIV/ip_forward.before")
+      [[ "$before" =~ ^[01]$ ]] && echo "$before" > /proc/sys/net/ipv4/ip_forward
+   fi
+   if [ -n "$ifc" ] && valid_iface "$ifc" && [ -e "/sys/class/net/$ifc" ]
+   then ip addr flush dev "$ifc" 2>/dev/null
+   fi
+   rm -rf "$HS_RUN"
+}
+hs_start() {
+   local ifc uplink ssid_hex psk i
+   [ -s "$HS_CONF" ] || die "give the hotspot a name and a password first"
+   ssid_hex=$(sed -n 's/^ssid_hex=\([0-9a-f]*\)$/\1/p' "$HS_CONF")
+   psk=$(sed -n 's/^psk=\([0-9a-f]\{64\}\)$/\1/p' "$HS_CONF")
+   [ -n "$ssid_hex" ] && [ -n "$psk" ] || die "the saved hotspot settings are damaged: set name and password again"
+   ifc=$(wifi_ifaces | head -n 1)
+   [ -n "$ifc" ] || die "no Wi-Fi adapter found (the hotspot needs one)"
+   valid_iface "$ifc" || die "unexpected interface name"
+   uplink=$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i+1); exit } }')
+   [ "$uplink" = "$ifc" ] && uplink=""
+   valid_iface "${uplink:-x}" || uplink=""
+   command -v dnsmasq > /dev/null || die "dnsmasq is not installed"
+   # client mode off on this adapter (GoboNet's wpa_supplicant and dhcpcd), so they do not fight
+   gobonet_backend disconnect "$ifc" > /dev/null 2>&1
+   killall -q wpa_supplicant 2>/dev/null
+   dhcpcd -x "$ifc" > /dev/null 2>&1
+   rfkill unblock wifi > /dev/null 2>&1
+   rm -rf "$HS_RUN"
+   mkdir -p "$HS_PRIV"; chmod 755 "$HS_RUN"; chmod 700 "$HS_PRIV"
+   cat /proc/sys/net/ipv4/ip_forward > "$HS_PRIV/ip_forward.before"
+   printf 'iface=%s\nuplink=%s\nstarted=%s\n' "$ifc" "$uplink" "$(date '+%Y-%m-%d %H:%M')" > "$HS_RUN/starting"
+   mv "$HS_RUN/starting" "$HS_RUN/state"
+   ( umask 077
+     printf 'ctrl_interface=DIR=%s/ctrl\nap_scan=2\nnetwork={\n\tssid=%s\n\tmode=2\n\tfrequency=2437\n\tkey_mgmt=WPA-PSK\n\tproto=RSN\n\tpairwise=CCMP\n\tgroup=CCMP\n\tpsk=%s\n}\n' \
+        "$HS_PRIV" "$ssid_hex" "$psk" > "$HS_PRIV/wpa.conf" )
+   psk=""
+   ip link set "$ifc" down 2>/dev/null; ip addr flush dev "$ifc" 2>/dev/null
+   ip link set "$ifc" up 2>/dev/null || { hs_stop; die "the Wi-Fi adapter could not be switched on (rfkill or a hardware switch?)"; }
+   wpa_supplicant -B -D nl80211 -i "$ifc" -c "$HS_PRIV/wpa.conf" -P "$HS_RUN/wpa.pid" > "$HS_PRIV/wpa.log" 2>&1 ||
+      { hs_stop; die "wpa_supplicant did not start on $ifc"; }
+   local up=no st
+   for i in $(seq 1 40)
+   do
+      st=$(wpa_cli -p "$HS_PRIV/ctrl" -i "$ifc" status 2>/dev/null)
+      if echo "$st" | grep -q '^mode=AP' && echo "$st" | grep -q '^wpa_state=COMPLETED'
+      then up=yes; break
+      fi
+      sleep 0.25
+   done
+   if [ "$up" != yes ]
+   then
+      hs_stop
+      die "the Wi-Fi adapter ($ifc) did not start a hotspot: its driver may not support access point mode"
+   fi
+   ip addr add "$HS_NET.1/24" dev "$ifc" || { hs_stop; die "could not give $ifc its address"; }
+   dnsmasq --conf-file=/dev/null --interface="$ifc" --bind-interfaces --listen-address="$HS_NET.1" \
+      --dhcp-range="$HS_NET.10,$HS_NET.250,255.255.255.0,12h" --dhcp-option=option:router,"$HS_NET.1" \
+      --dhcp-option=option:dns-server,"$HS_NET.1" --dhcp-authoritative --dhcp-leasefile="$HS_RUN/leases" \
+      --pid-file="$HS_RUN/dnsmasq.pid" --user=nobody --group=nobody > "$HS_PRIV/dnsmasq.log" 2>&1 ||
+      { hs_stop; die "the address server (dnsmasq) did not start: $(head -c 200 "$HS_PRIV/dnsmasq.log")"; }
+   # share the connection: forward + masquerade everything from the hotspot net that leaves by
+   # another interface (so it keeps working when the uplink changes)
+   modprobe -q iptable_nat 2>/dev/null; modprobe -q ipt_MASQUERADE 2>/dev/null
+   echo 1 > /proc/sys/net/ipv4/ip_forward
+   iptables -t nat -N GOBO_HOTSPOT 2>/dev/null
+   iptables -t nat -A GOBO_HOTSPOT -s "$HS_NET.0/24" ! -o "$ifc" -j MASQUERADE &&
+   iptables -t nat -A POSTROUTING -j GOBO_HOTSPOT || { hs_stop; die "could not set up connection sharing (iptables)"; }
+   iptables -N GOBO_HOTSPOT_FWD 2>/dev/null
+   iptables -A GOBO_HOTSPOT_FWD -i "$ifc" -s "$HS_NET.0/24" -j ACCEPT
+   iptables -A GOBO_HOTSPOT_FWD -o "$ifc" -d "$HS_NET.0/24" -j ACCEPT
+   iptables -I FORWARD 1 -j GOBO_HOTSPOT_FWD
 }
 
 ### sub-commands ###############################################################
@@ -251,6 +386,67 @@ case "$cmd" in
       gobo-update --yes --rollback 2>&1; rc=$?
       log "rollback chosen: exit $rc"
       exit $rc ;;
+
+   bluetooth-service)
+      nargs 1 "$@"; need_admin_caller
+      case "$1" in
+         start) start_bluetoothd ;;
+         stop)  pkill -x bluetoothd 2>/dev/null; true ;;
+         *) die "say start or stop" ;;
+      esac
+      log "bluetooth service: $1" ;;
+
+   bluetooth-boot)
+      nargs 1 "$@"; need_admin_caller
+      mkdir -p "$STATE"; chmod 755 "$STATE"
+      case "$1" in
+         on)  rm -f "$BT_OFF_AT_BOOT" ;;
+         off) touch "$BT_OFF_AT_BOOT" ;;
+         *) die "say on or off" ;;
+      esac
+      log "bluetooth at start: $1" ;;
+
+   boot-bluetooth)
+      # (boot scripts) the stock task powers Bluetooth on at every start; switch it off again
+      # if the owner chose so in Settings > Bluetooth
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "boot-bluetooth is for the boot scripts"
+      if [ -e "$BT_OFF_AT_BOOT" ]
+      then ( sleep 8; echo 'power off' | timeout 10 bluetoothctl > /dev/null 2>&1 ) < /dev/null > /dev/null 2>&1 &
+      fi ;;
+
+   hotspot-set)
+      # name on stdin line 1 (1-32 bytes), password on line 2 (8-63 printable ASCII characters)
+      nargs 0 "$@"; need_admin_caller
+      IFS= read -r name || die "no name given"
+      [ -n "$name" ] && [ "${#name}" -le 32 ] || die "the name must have 1 to 32 characters"
+      [[ "$name" != *[[:cntrl:]]* ]] || die "the name contains control characters"
+      IFS= read -r PW || [ -n "${PW:-}" ] || die "no password given"
+      [[ "$PW" =~ ^[\ -~]{8,63}$ ]] || { PW=""; die "the password must have 8 to 63 characters (letters, digits, punctuation; no accents)"; }
+      psk=$(printf '%s\n' "$PW" | wpa_passphrase "$name" 2>/dev/null | sed -n 's/^[[:space:]]*psk=\([0-9a-f]\{64\}\)$/\1/p')
+      PW=""
+      [ -n "$psk" ] || die "could not derive the Wi-Fi key"
+      ssid_hex=$(printf '%s' "$name" | od -An -tx1 | tr -d ' \n')
+      mkdir -p "$STATE"; chmod 755 "$STATE"
+      new=$(mktemp "$STATE/.hotspot.XXXXXX") || die "could not save"
+      chmod 600 "$new"
+      printf 'ssid_hex=%s\npsk=%s\n' "$ssid_hex" "$psk" > "$new"
+      mv -f "$new" "$HS_CONF"
+      psk=""
+      new=$(mktemp "$STATE/.hotspot.XXXXXX") || die "could not save"
+      printf '%s\n' "$name" > "$new"; chmod 644 "$new"; mv -f "$new" "$HS_NAME"
+      log "hotspot name and password set"
+      if hs_active; then hs_stop; hs_start; log "hotspot restarted"; fi
+      echo "saved" ;;
+
+   hotspot)
+      nargs 1 "$@"; need_admin_caller
+      case "$1" in
+         on)  hs_active && { echo "already on"; exit 0; }
+              hs_start; log "hotspot on ($(sed -n 's/^iface=//p' "$HS_RUN/state"))"; echo "on" ;;
+         off) hs_stop; log "hotspot off"; echo "off" ;;
+         *) die "say on or off" ;;
+      esac ;;
 
    report)
       nargs 0 "$@"

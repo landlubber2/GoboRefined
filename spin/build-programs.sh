@@ -7,6 +7,7 @@
 #                                      0.5: udevil usb-modeswitch rtl8852au onlyoffice
 #                                      0.6: copyq (and usb-modeswitch again: gobo-wifi-switch),
 #                                           libfm + pcmanfm again (spin/patches/*-gobo.patch), gobofiles
+#                                      0.8.2: dnsmasq (DHCP for the Wi-Fi hotspot)
 #   (0.5 sources: udevil-0.4.4.tar.gz, usb-modeswitch-2.6.1.tar.bz2 in src3; rtl8852au is cloned
 #    from GitHub and onlyoffice downloaded by their steps; list in HANDOFF.md, 0.5 section)
 set -e
@@ -301,6 +302,22 @@ gobofiles)
    echo "GoboRefined file tools: Trash window with automatic clean-up, folder colours for PCManFM." > $P/Resources/Description
    ln -sfn $V /Programs/GoboFiles/Current
    SymlinkProgram GoboFiles $V | tail -n 1
+   ;;
+dnsmasq)
+   # 0.8.2: DHCP (and DNS forwarding) for the devices that join the Wi-Fi hotspot (Settings >
+   # Hotspot; started by gobo-hotspot with its own command line, never as a system service).
+   # Plain Makefile, no dependencies. Source: https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz
+   V=2.91 P=/Programs/Dnsmasq/2.91
+   [ -f $SRC/dnsmasq-$V.tar.xz ] || wget -q -O $SRC/dnsmasq-$V.tar.xz https://thekelleys.org.uk/dnsmasq/dnsmasq-$V.tar.xz
+   rm -rf $WORK/dnsmasq-$V && tar xf $SRC/dnsmasq-$V.tar.xz -C $WORK
+   cd $WORK/dnsmasq-$V
+   make -j2 PREFIX=$P COPTS="-O2"
+   rm -rf $P && make install PREFIX=$P
+   mkdir -p $P/Resources $P/share/doc
+   cp COPYING $P/share/doc/dnsmasq-COPYING
+   echo "dnsmasq: small DHCP and DNS server (gives addresses to devices on the Wi-Fi hotspot)." > $P/Resources/Description
+   ln -sfn $V /Programs/Dnsmasq/Current
+   SymlinkProgram Dnsmasq $V | tail -n 1
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

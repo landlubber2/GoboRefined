@@ -45,6 +45,13 @@ end
 function updates.check()
    local n = read_notice()
    if not n or already_seen(n.id) then return end
+   -- 0.8.2: notices name the accounts that existed when they were written; someone whose
+   -- account was made later has nothing to be told (first login of a new user)
+   local me = os.getenv("USER") or os.getenv("LOGNAME") or ""
+   if n.users and me ~= "" and not n.users:find("," .. me .. ",", 1, true) then
+      remember(n.id)
+      return
+   end
    if n.kind == "rolled-back" then
       naughty.notify({
          title = "System update undone",

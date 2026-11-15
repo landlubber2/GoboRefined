@@ -140,6 +140,12 @@ grep -q 'gobo-settings-helper boot-ssh' "$bootup" || cat >> "$bootup" <<'BOOTUP'
 # Settings > Remote access (flag on the data partition; off by default).
 Exec "Starting remote access (if switched on)..." /System/Index/bin/gobo-settings-helper boot-ssh
 BOOTUP
+grep -q 'gobo-settings-helper boot-bluetooth' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.8.2): Bluetooth stays off after the start if it was switched off for
+# good in Settings > Bluetooth (the stock "Bluetooth Start" above always powers it on).
+Exec "Applying the Bluetooth setting..." /System/Index/bin/gobo-settings-helper boot-bluetooth
+BOOTUP
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 

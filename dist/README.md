@@ -1,3 +1,57 @@
+# GoboRefined 0.8.2 — Settings app, Bluetooth and hotspot (experimental), desktop fixes
+
+GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
+
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.2.update` | 2,734,637,056 bytes (2.7 GB) | `228c5d7fab6746dfb8b92676207d3926a4a4c1d1ceaef7278d162f56b43c5500` |
+| `GoboRefined-0.8.2.iso` | 2,867,724,288 bytes (2.9 GB) | `9e3e55afa0547738a9d92f9b97a82cb5fd6150ded460d595169a6fad8b356e87` |
+
+Check them against the `.sha256` files before use (Windows: `certutil -hashfile GoboRefined-0.8.2.update SHA256`).
+The 0.8.1, 0.8 and 0.6 files are kept next to them.
+
+## Already running 0.8.1? Update with the file (no reinstall)
+
+1. Copy `GoboRefined-0.8.2.update` onto the PC (or a USB stick; "Safely remove" before unplugging).
+2. In a terminal: `sudo gobo-update /path/to/GoboRefined-0.8.2.update` and answer "yes" to restart (about one
+   minute). After this update you can also do it from **Settings > Updates > Install update from file...**.
+3. After the restart the desktop says "System updated". Files, accounts, light/dark and your wallpaper stay.
+   Going back: `sudo gobo-update --rollback` (or Settings > Updates > Go back to the previous version).
+
+## What is new in 0.8.2
+
+- **Settings** (power menu, dots menu, app search): Appearance (light/dark, **your own wallpaper**), Accounts
+  (password, add/remove people, administrator or standard, automatic login), Updates, Remote access (SSH, off by
+  default; root can never log in over it), Network, **Bluetooth**, **Hotspot**, Sound, Displays, Trash, About
+  ("Save system report"). Starting Settings again brings the open window to the front.
+- **Bluetooth (experimental):** on/off, "Search for devices", pair / connect / disconnect / forget, pairing
+  questions as dialogs. Says "No Bluetooth adapter found" when there is none. Bluetooth **sound** (headphones,
+  speakers) does not work yet: the sound system has no Bluetooth part.
+- **Wi-Fi hotspot (experimental):** shares the cable connection over the Wi-Fi adapter: name, password (8–63
+  characters), on/off. Turning it on disconnects this PC from its Wi-Fi network (it says so first); turning it
+  off reconnects. Off again after a restart. Says "Needs a Wi-Fi adapter" when there is none.
+- **Desktop:** thin "show desktop" strip at the right end of the taskbar; power menu by keyboard (arrows,
+  Enter, Escape; "Lock" is selected when it opens); clicks no longer swallowed by a leftover menu sheet after
+  plugging the Wi-Fi adapter in (Win+Escape also clears it); system partitions hidden from the USB-drive pop-ups;
+  Wi-Fi regulatory database added; new users no longer see an old "System updated" notice.
+
+## Please confirm on the real PC
+
+1. **Clicks after plugging the Wi-Fi adapter in/out**: plug, wait, unplug, plug again — clicks must keep working
+   (if not: Win+Escape, then Settings > About > Save system report).
+2. **FAT-fs message gone**: after a start, `dmesg | grep -i fat` should show no "Volume was not properly
+   unmounted" for the system's boot partition.
+3. **Bluetooth**: Settings > Bluetooth: switch on, Search, pair a mouse/keyboard or phone, connect, disconnect,
+   forget; untick "Switch Bluetooth on at every start", restart, check it stays off. (Never tested with real
+   Bluetooth hardware.)
+4. **Hotspot**: with the cable plugged in, Settings > Hotspot: set name + password, switch on, join from a phone,
+   open a web page on the phone; switch off and check the PC rejoins its Wi-Fi. The TX20U Plus driver may not
+   support hotspot mode — then the page says so and nothing changes. (Tested only with virtual Wi-Fi radios.)
+5. **Remote access from another computer**: Settings > Remote access on, then from the other computer
+   `ssh yourlogin@<address shown>`; switch off again.
+
+---
+
 # GoboRefined 0.8.1 — first update (bug fixes)
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).

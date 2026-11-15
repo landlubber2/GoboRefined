@@ -418,6 +418,9 @@ notice() { # notice KIND key=value ...: one notice for the desktop (spin/updates
       echo "id=$(date +%s)-$kind"
       echo "kind=$kind"
       echo "date=$(date '+%F %R')"
+      # 0.8.2: the people who had an account when this happened; accounts made later never
+      # see the notice (spin/updates.lua)
+      echo "users=,$(awk -F: '$3 >= 1000 && $3 < 60000 { printf "%s,", $1 }' /System/Settings/passwd 2>/dev/null)"
       for kv in "$@"; do echo "$kv"; done
    } > "$STATE/notice.new"
    chmod 644 "$STATE/notice.new"

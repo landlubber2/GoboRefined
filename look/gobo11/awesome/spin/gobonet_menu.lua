@@ -95,6 +95,11 @@ function gobonet.carrier(ifname)
    return s and s:match("[01]")
 end
 
+-- 0.8.2: the Wi-Fi hotspot (Settings > Hotspot, gobo-settings-helper) owns the adapter while
+-- this file exists: no scans, no autoconnect, no network list (they would stop the hotspot)
+gobonet.hotspot_state = "/Data/Variable/run/gobo-hotspot/state"
+function gobonet.hotspot_on() return exists(gobonet.hotspot_state) end
+
 local function read_wifi_level()
    local fd = io.open("/proc/net/wireless", "r")
    if fd then
@@ -278,6 +283,7 @@ function gobonet.new()
 
    -- Bring a (new) Wi-Fi interface up and fill the scan cache in the background
    local function wake(ifname)
+      if gobonet.hotspot_on() then return end
       spawn.easy_async_with_shell(gobonet.backend .. " interface-up " .. q(ifname) .. " >/dev/null 2>&1; "
          .. gobonet.backend .. " full-scan " .. q(ifname) .. " >/dev/null 2>&1", function() end)
    end
@@ -323,7 +329,7 @@ function gobonet.new()
          end
          -- A long time elapsed between updates probably means
          -- the computer went asleep. Let's try to autoconnect.
-         if last_update - prev_update > 10 and (wlan_interface or wired_interface) then
+         if last_update - prev_update > 10 and (wlan_interface or wired_interface) and not gobonet.hotspot_on() then
             is_connecting = autoconnect()
          end
       else
@@ -334,6 +340,14 @@ function gobonet.new()
 
    -- The menu entries (also used by the lab test without showing a menu)
    function widget:entries(auto_popped)
+      if gobonet.hotspot_on() then
+         local entries = { { " Wi-Fi is a hotspot now: Settings > Hotspot ", function()
+            awful.spawn({ "gobo-settings", "hotspot" }) end } }
+         if wired_interface then
+            table.insert(entries, 1, { " Wired network ("..wired_interface..") ", nil, beautiful.wired_up_icon })
+         end
+         return entries
+      end
       local iwconfig = pread("iwconfig 2>/dev/null")
       local my_essid = iwconfig:match('ESSID:"([^\n]*)"%s*\n')
       local scan = ""

@@ -1,6 +1,35 @@
 #!/bin/sh
 # gobo-settings — the GoboRefined Settings app (Lua + lgi + GTK 3; files in
 # /Programs/GoboSpin/Current/share/gobo-settings). "gobo-settings PAGE" opens a page directly
-# (appearance, accounts, updates, remote, network, sound, displays, trash, about).
+# (appearance, accounts, updates, remote, network, bluetooth, hotspot, sound, displays, trash, about).
+#
+# 0.8.2: one window per user. If Settings is already open on this desktop, the desktop (Awesome)
+# brings that window to the front instead, and a PAGE argument is handed to it through
+# ~/.cache/gobo-settings.page (main.lua watches that file). The desktop session has no D-Bus
+# session bus, so GApplication's single-instance check is not available.
 export NO_AT_BRIDGE=1   # no accessibility bus here: GTK would warn and wait
+case "${1:-}" in
+   ""|[a-z]*) ;;
+   *) echo "usage: gobo-settings [PAGE]" >&2; exit 2 ;;
+esac
+if [ -n "${DISPLAY:-}" ] && command -v awesome-client > /dev/null 2>&1
+then
+   found=$(timeout 3 awesome-client '
+      for _, c in ipairs(client.get()) do
+         if c.class == "Gobo-settings" or c.instance == "gobo-settings" then
+            c:jump_to(false)
+            return "found-settings-window"
+         end
+      end
+      return "none"' 2>/dev/null)
+   case "$found" in
+      *found-settings-window*)
+         if [ -n "${1:-}" ]
+         then
+            mkdir -p "$HOME/.cache"
+            printf '%s\n' "$1" > "$HOME/.cache/gobo-settings.page"
+         fi
+         exit 0 ;;
+   esac
+fi
 exec lua /Programs/GoboSpin/Current/share/gobo-settings/main.lua "$@"

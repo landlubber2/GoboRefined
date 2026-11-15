@@ -3,9 +3,9 @@
 -- closes it.
 --
 -- 0.8.2: the menu can be used from the keyboard (power button, Win key path): Left/Right/Up/Down
--- (and Tab) move a visible selection, none until the first arrow key so that Enter alone never
--- shuts down; Enter (or Space) runs the selected entry; Escape closes. Mouse and selection are
--- one: hovering an entry selects it.
+-- (and Tab) move a visible selection, which starts on "Lock" (harmless; Enter alone never shuts
+-- down); Enter (or Space) runs the selected entry; Escape closes. Mouse and selection are one:
+-- hovering an entry selects it.
 
 local awful = require("awful")
 local wibox = require("wibox")
@@ -147,6 +147,9 @@ function power.show()
    popup.y = s.geometry.y + math.floor((s.geometry.height - popup.height) / 2)
    backdrop.show_on(s)
    popup.visible = true
+   -- 0.8.2 part 2: "Lock" (harmless) is selected when the menu opens, so the selection is
+   -- visible from the start and the first arrow key moves from there; Enter alone locks
+   select(1)
    grabber = awful.keygrabber.run(function(_, key, event)
       if event ~= "press" then return end
       local n = #buttons

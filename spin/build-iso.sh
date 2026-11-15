@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild the GoboRefined ISO (unofficial spin of GoboLinux 017.01).
-# Runs INSIDE the build VM (snapshot "iso-build-env-8b": 8a + L3afpad; hot-attach the stock ISO after boot), as root:
+# Runs INSIDE the build VM (snapshot "iso-build-env-8c": 8a + L3afpad + Dnsmasq; hot-attach the stock ISO after boot), as root:
 #
 #   wget -qO /Data/Build/build-iso.sh http://10.0.2.2:8766/build-iso.sh && bash /Data/Build/build-iso.sh
 #
@@ -36,7 +36,7 @@ set -e
 B=/Data/Build
 R=$B/rootfs
 HOST=http://10.0.2.2:8766
-VERSION=${VERSION:-0.8.1}
+VERSION=${VERSION:-0.8.2}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
 # stay GOBOLINUX_LIVE_INSTALLER: the live boot looks for the medium by it.
@@ -68,7 +68,7 @@ openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - ab/update-signing
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq"
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -123,7 +123,10 @@ for prog in $EXTRA
 do chroot $R SymlinkProgram $prog | tail -n 1
 done
 chroot $R SymlinkProgram GoboSpin | tail -n 1
-[ -e $R/System/Index/lib/firmware/regulatory.db.p7s ] || { echo "regulatory.db not linked into lib/firmware"; exit 1; }
+chroot $R test -e /System/Index/lib/firmware/regulatory.db.p7s || { echo "regulatory.db not linked into lib/firmware"; exit 1; }
+# 0.8.2: the hotspot (Settings > Hotspot) needs dnsmasq; Bluetooth uses the stock BlueZ 5.54
+chroot $R sh -c "command -v dnsmasq" > /dev/null || { echo "dnsmasq not linked"; exit 1; }
+chroot $R test -e /System/Index/bin/bluetoothctl || { echo "bluetoothctl missing"; exit 1; }
 echo "== Wi-Fi driver (RTL8852AU) into the kernel's updates directory, module index"
 for prog in $MODULES
 do

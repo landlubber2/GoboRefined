@@ -1255,3 +1255,83 @@ Developed on the installed system (snapshot `iso-0.8.1-updated-efi`). Not built;
 
 Snapshots added: `iso-build-env-8b` (powered off). The VM is restored to `iso-0.8.1-updated-efi` and powered
 off (all dev work on the installed system was discarded; everything is in the repo). Nothing deleted.
+
+## 0.8.2 part 2: Bluetooth, hotspot, small fixes, build (2026-11-15, work notes)
+
+- **Found on the image:** BlueZ 5.54 (`bluetoothd`, `bluetoothctl`), started at boot by the stock BootUp line
+  `Bluetooth Start` (unblocks rfkill, `power on`); system D-Bus running; bluez D-Bus policy lets every user talk to
+  `org.bluez`. Kernel: `CONFIG_BT=m`, `BT_HCIBTUSB=m`, `BT_RTL=m`, `BT_HCIVHCI=m`. **No PulseAudio Bluetooth module**
+  (PulseAudio 13 without module-bluetooth): no Bluetooth audio. Hotspot pieces: wpa_supplicant 2.9 **with AP mode**
+  (`AP-ENABLED` in the binary), iptables 1.8.4 legacy + NAT/MASQUERADE modules, **no DHCP server** (no dnsmasq,
+  busybox, dhcpd), no `iw`/hostapd. Kernel has `MAC80211_HWSIM=m` (virtual Wi-Fi radios: used for the lab test).
+- **Built:** Dnsmasq 2.91 (`spin/build-programs.sh dnsmasq`, plain make, 1 min; `/Programs/Dnsmasq/2.91`, 0.27 MB tgz
+  `spin/programs/Dnsmasq--2.91--x86_64.tgz`). Build VM snapshot **`iso-build-env-8c`** = 8b + Dnsmasq (powered off).
+  BlueZ was not built (already there).
+- **Helper sub-commands (new):** `bluetooth-service start|stop`, `bluetooth-boot on|off`, `boot-bluetooth` (root
+  only; new BootUp line from gobo-make-system, after the boot-ssh one), `hotspot-set` (name + password on stdin;
+  password 8-63 printable ASCII; `wpa_passphrase` reads it on stdin; only ssid hex + derived PSK stored in
+  `/Data/Variable/lib/gobo-settings/hotspot.conf`, 600), `hotspot on|off`. Hotspot = wpa_supplicant `mode=2`
+  WPA2-PSK/CCMP on channel 6, `10.42.0.1/24`, dnsmasq (DHCP .10-.250 + DNS, runs as nobody), iptables chains
+  `GOBO_HOTSPOT` (nat, MASQUERADE out of every other interface) + `GOBO_HOTSPOT_FWD`, ip_forward saved/restored.
+  State in `/Data/Variable/run/gobo-hotspot` (tmpfs: off after a restart). Start stops GoboNet client mode on the
+  adapter (`gobonet_backend disconnect`, `killall wpa_supplicant`, `dhcpcd -x`); a failed start (no AP mode) undoes
+  everything. The page runs `gobonet autoconnect` as the user after "off" (known networks come back).
+- **Look:** `spin/gobonet_menu.lua` leaves the adapter alone while `/Data/Variable/run/gobo-hotspot/state` exists (no
+  wake/scan/autoconnect; the menu shows "Wi-Fi is a hotspot now: Settings > Hotspot", which opens that page).
+- **Lab test of the hotspot with mac80211_hwsim (build VM, 2 virtual radios):** helper on wlan0 -> AP up in < 1 s;
+  wpa_supplicant client on wlan1 associated (WPA2-PSK, CCMP) and got 10.42.0.42 from dnsmasq; lease visible on the page
+  ("1 device has joined"); off removes chains, processes, address, restores ip_forward 0. GUI: switch -> confirmation ->
+  askpass -> "On" (screenshot `0.8.2-hotspot-on-simulated.png`, with the network menu entry). NAT to the internet
+  could not be checked (client and AP in the same network namespace; no `iw` to move a radio). Refusals: no
+  adapter, short password, wrong arguments.
+- **Bluetooth page:** long-running `bluetoothctl` as agent (prompts "Confirm passkey"/"Enter PIN code" -> dialogs) +
+  short `bluetoothctl show/devices/info` runs for the list; checked: pipe handling with lgi (`read_bytes_async`),
+  parsing on sample output, "No Bluetooth adapter found", adapter appearing (hci_vhci virtual controller ->
+  "The Bluetooth service does not see the adapter yet": a vhci controller without an emulator never initialises),
+  helper start/stop/boot flag. **Not testable here:** power on/off, search, pair, connect, forget — no controller.
+- **C3 one window:** `gobo-settings` asks Awesome for an existing window (class Gobo-settings) and raises it; a PAGE
+  argument goes through `~/.cache/gobo-settings.page` (Gio file monitor in main.lua). No session D-Bus, so no
+  GApplication. Checked in the build VM: second start -> 1 process, page switched to About.
+- **C2 power menu:** "Lock" is pre-selected when the menu opens (Enter alone locks). input-test `power-keys` now
+  checks the default (1) and 1 -> 2 -> 3 -> 4 -> 3.
+- **C1 notice:** gobo-update's notice gets `users=,login,...,` (accounts with uid 1000-59999 when it was written);
+  `spin/updates.lua` stays silent for anyone not listed (and marks it seen).
+- **C4 GTK file chooser: skipped.** The sidebar names (proc, sys, config, pts, shm, efivars, ESP) are exactly the
+  fstab entries; a GIO volume-monitor listing hung in the lab (no gvfs/session bus), so `x-gvfs-hide` could not be
+  checked quickly. Not changed.
+- **Build fix:** part 1's check `[ -e $R/System/Index/lib/firmware/regulatory.db.p7s ]` failed in the first 0.8.2
+  run (absolute GoboLinux links resolve against the build VM, which has no GoboSpin: the old lesson). The checks
+  now run inside the chroot (`chroot $R test -e ...`, `command -v dnsmasq`). The failed run stopped before anything
+  was packed; it left proc mounted in the rootfs (unmounted by hand) and the key was deleted by the trap (piped again).
+
+### 0.8.2 result
+
+**`dist/GoboRefined-0.8.2.update`** (2,734,637,056 bytes, sha256 `228c5d7fab6746dfb8b92676207d3926a4a4c1d1ceaef7278d162f56b43c5500`)
+and **`dist/GoboRefined-0.8.2.iso`** (2,867,724,288 bytes, sha256 `9e3e55afa0547738a9d92f9b97a82cb5fd6150ded460d595169a6fad8b356e87`);
+`.sha256` files next to them; same values in the build VM, on the host (`sha256sum -c`) and in the test VM after
+copying. One packing build from `iso-build-env-8c` (the run before stopped at the link check, see above).
+
+| Update test (snapshot `iso-0.8.1-updated-efi` -> 0.8.2) | Result |
+|---|---|
+| test wallpaper put at `~/.config/goborefined/wallpaper` as lab before the update (0.8.1 has no chooser; same file the Settings page writes) | - |
+| `gobo-update --yes` with the file (root-owned copy, sha256 checked in the VM) | pass, 45 s, into slot B |
+| restart -> version | slot B 0.8.2 running/default; "slot b (0.8.2) started fine" |
+| first-boot step | apply.sh for lab and root, look-version 0.8.2, light mode kept, **wallpaper kept** (`0.8.2-updated-wallpaper-light.png`), notice `users=,lab,` -> "System updated" shown to lab |
+| new BootUp line boot-bluetooth, dnsmasq in PATH, bluetoothd running, sudoers lines | present |
+| Settings: every page renders (11 pages, opened through the launcher = one process) | pass; `0.8.2-settings-bluetooth-no-adapter.png`, `0.8.2-settings-hotspot-no-adapter.png` |
+| `vm/settings-test.sh` | 35/35 (24 old + 11 Bluetooth/hotspot) |
+| greeter login as the new standard user `tester` | desktop, **no "System updated" notice** (seen-file written silently; `0.8.2-new-user-no-notice.png`); sudo refused (settings-test); removed with home |
+| remote access on -> host `ssh lab@` (password via a host askpass script reading lab-answers.env, never printed) | pass ("LOGGED-IN-AS=lab"); root key login refused (Permission denied); off from the root console -> "off stopped" (a `sudo -n` off from inside the ssh session did not run: no cached sudo ticket; lab artefact) |
+| show-desktop strip, power menu by keyboard | input-test `show-desktop`, `power-keys` (default "Lock" selected, `0.8.2-power-menu-default-lock.png`) |
+| `vm/input-test.sh` | 49/50 in the full run: `power-keys` failed while a leftover window held focus (same artefact as part 1); re-run alone 4/4 pass |
+| `vm/net-test.sh` | 32/32 |
+| `--rollback` -> 0.8.1 -> `--rollback` -> 0.8.2 | pass (`--status` after each boot) |
+| fresh UEFI install from the 0.8.2 ISO (`--answers --yes`, test64) | pass, greeter login as lab to the desktop (strip visible) |
+
+End state: snapshot **`iso-0.8.2-updated-efi`** (powered off; slot B 0.8.2, slot A 0.8.1; lab light mode with the
+orange test wallpaper; a test hotspot name "Lab Hotspot" is stored on the data partition; remote access off).
+The fresh install was made after it and discarded by restoring it. VM powered off, DVD empty. Build VM snapshot
+`iso-build-env-8c` (rebuild 0.8.2 from it). Nothing deleted.
+
+Downloads (0.8.2 part 2): dnsmasq 2.91, https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz (sha256
+`f622682848b33677adb2b6ad08264618a2ae0a01da486a93fd8cd91186b3d153`; upstream GPG signature not checked), GPL-2.0 or GPL-3.0.

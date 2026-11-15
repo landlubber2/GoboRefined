@@ -21,8 +21,7 @@ local C = require("common")
 
 local PAGES = {
    "appearance", "accounts", "updates", "remote", "network",
-   -- 0.8.2 part 2 (placeholders, NOT implemented yet): "bluetooth" and "hotspot" go here,
-   -- as pages/bluetooth.lua and pages/hotspot.lua (stubs with the page skeleton are there).
+   "bluetooth", "hotspot",   -- 0.8.2 part 2, experimental
    "sound", "displays", "trash", "about",
 }
 
@@ -92,9 +91,28 @@ window.on_key_press_event = function(_, event)
 end
 
 window:show_all()
-local start = 1
-for i, page in ipairs(pages) do
-   if page.id == arg[1] then start = i end
+local function select_page(id)
+   for i, page in ipairs(pages) do
+      if page.id == id then sidebar:select_row(sidebar:get_row_at_index(i - 1)) return true end
+   end
+   return false
 end
-sidebar:select_row(sidebar:get_row_at_index(start - 1))
+if not select_page(arg[1]) then sidebar:select_row(sidebar:get_row_at_index(0)) end
+
+-- 0.8.2: a second "gobo-settings PAGE" raises this window (the launcher asks the desktop) and
+-- writes PAGE into this file; switch to it
+local page_file = C.HOME .. "/.cache/gobo-settings.page"
+os.remove(page_file)
+local page_monitor = C.Gio.File.new_for_path(page_file):monitor_file(C.Gio.FileMonitorFlags.NONE, nil)
+if page_monitor then
+   page_monitor.on_changed = function(_, _, _, event)
+      if event ~= "CHANGES_DONE_HINT" and event ~= "CREATED" then return end
+      local id = C.trim(C.read(page_file) or "")
+      if id ~= "" then
+         os.remove(page_file)
+         select_page(id)
+         window:present()
+      end
+   end
+end
 Gtk.main()

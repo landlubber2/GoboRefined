@@ -260,7 +260,7 @@ Part 1 (desktop + Settings app core):
    Bluetooth/Hotspot (HANDOFF, 0.8.2 part 1).**
 
 Part 2 (needs hardware the VM lacks — shipped as experimental until the owner confirms):
-7. Bluetooth (on/off, pair, connect) in the Settings app.
-8. Wi-Fi hotspot in the Settings app.
+7. Bluetooth (on/off, pair, connect) in the Settings app. **Done as experimental page (stock BlueZ 5.54; no controller in the VM: pairing untested; no Bluetooth audio).**
+8. Wi-Fi hotspot in the Settings app. **Done as experimental page (wpa_supplicant AP mode + Dnsmasq 2.91 + iptables NAT; tested with virtual radios mac80211_hwsim; real adapter untested).**
 
-Then: build 0.8.2 (ISO + update file), update test 0.8.1 → 0.8.2 in the VM.
+Then: build 0.8.2 (ISO + update file), update test 0.8.1 → 0.8.2 in the VM. **Done (HANDOFF, 0.8.2 part 2). Also: new users get no old update notice, power menu starts on "Lock", Settings opens only one window; GTK file-chooser side pane (proc, sys, ESP...) still not fixed.**
