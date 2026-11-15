@@ -8,8 +8,7 @@ GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboL
 | `GoboRefined-0.8.update` | 2,734,075,904 bytes (2.7 GB) | `7b02b424b6a8f77759104ff87a5b1004bad4fd2f0ab93bbb03daf072ff41249b` |
 
 Check them against the `.sha256` files before use (Windows: `certutil -hashfile GoboRefined-0.8.iso SHA256`).
-The ISO needs a **USB stick of 4 GB or larger**. Older files (0.5, 0.6, 0.8-dev1, 0.8-dev2) are kept next to it;
-the dev files were test builds and are not needed.
+The ISO needs a **USB stick of 4 GB or larger**. `GoboRefined-0.6.iso` is kept next to it as a fallback.
 
 ## Before you start: a reinstall is needed
 
