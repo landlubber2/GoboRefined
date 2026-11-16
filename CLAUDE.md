@@ -2,28 +2,30 @@
 
 ## Project
 
-This workspace prepares a future effort to **revamp and modernize GoboLinux** — specifically to modernize look and make the system more functional. The concrete direction is **intentionally undecided**.
+**GoboRefined**: an unofficial, modernized spin of GoboLinux 017.01 for the owner's daily use — desktop look,
+menu installer, A/B system updates with rollback, a Settings app, and a build that works from this
+repository alone. Releases are tagged `iso-<version>`.
 
-## Before you propose changes
+## Read first, in this order
 
-1. Read `HANDOFF.md` (what was prepared vs left open).
-2. Read `docs/context.md` (facts and links only).
-3. Read `docs/goals.md` (placeholders; do not invent a fake roadmap).
-4. If `upstream/` has clones, explore those before inventing a new distro design.
-5. If a VM exists later, prefer observing the running system over guessing UX pain.
+1. `docs/orchestrator-guide.md` — how to run the work: the routine, the hard rules, how to brief and review
+   workers, how to report to the owner. **Follow it.**
+2. `docs/roadmap.md` — what is decided, done and open (newest sections at the end).
+3. `HANDOFF.md` — lab notes; read the newest sections before touching the VM.
+4. For A/B and update work: `docs/ab-design.md`. For building: `BUILDING.md`.
 
-## Rules of engagement
+## Hard rules (details in the guide)
 
-- Do **not** assume there is a single “proper” way to modernize GoboLinux.
-- Prefer exploring upstream code and docs over speculative redesign.
-- Treat look modernization and functionality as open questions (website? docs? installer? desktop? tooling?).
-- Upstream is in limited maintenance; be respectful — contributions over feature-request spam.
-- Stage 2 (VM) may still be undone; check `vm/README.md`.
+- Nothing is pushed, published or posted anywhere without the owner's explicit yes for that specific thing.
+- Never delete snapshots, ISOs, update files or disks without the owner approving the exact list.
+- Never print, copy or commit the lab password, the update-signing private key or the lab SSH private key.
+- Never type passwords into logins; never snapshot a running VM; one worker uses the VM at a time.
+- Report honestly: "tested in the VM" is not "works on the PC"; say what was not tested.
+- The owner's usage budget is small: avoid loops, build each release once.
+- Be respectful to upstream GoboLinux: contributions and well-checked bug reports, posted by the owner.
 
-## Useful entry points
+## Entry points
 
-- Site: https://gobolinux.org
-- Wiki: https://wiki.gobolinux.org
-- GitHub org: https://github.com/gobolinux
-- Release: 017.01
-- Clone helper: `scripts/clone-upstream.sh`
+- Upstream: https://gobolinux.org · https://github.com/gobolinux · release 017.01
+- Build: `build/build.sh` (see `BUILDING.md`) · lab helpers in `vm/`
+- Tests: `vm/input-test.sh`, `vm/net-test.sh`, `vm/settings-test.sh`
