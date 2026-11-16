@@ -1,3 +1,61 @@
+# GoboRefined 0.8.4 — laptop sound firmware, Bluetooth pairing, newer firmware for all hardware
+
+GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
+
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.4.update` | 2,683,650,048 bytes (2.7 GB) | `4aebc0d8f6b6c5264bf8ab487fe4b1d835baa9f8b23f0fbeb15172f15b791be5` |
+| `GoboRefined-0.8.4.iso` | 2,816,737,280 bytes (2.8 GB) | `97ccc5d89f8add6a7ab20a4c956bb235c34ad65f6827f9c820fbba0569c7a1dc` |
+
+## How to update (from 0.8.3, 0.8.2 or 0.8.1)
+
+Copy `GoboRefined-0.8.4.update` onto the PC, then **Settings > Updates > Install update from file...** (or in a
+terminal `sudo gobo-update /path/to/GoboRefined-0.8.4.update`) and restart. Going back:
+`sudo gobo-update --rollback`. Files, accounts, light/dark and the wallpaper stay.
+
+## What is new
+
+- **Laptop sound (Intel):** the Sound Open Firmware for current Intel laptops (sof-bin 2026.09.2) replaces the
+  2020 version that had no Tiger Lake files ("SOF firmware and/or topology file not found", only "Dummy Output").
+- **Newer firmware for all hardware:** the linux-firmware collection of 2026-10-19 (Wi-Fi, Bluetooth, graphics,
+  sound, ...) replaces the one of 2025-03-09. Nothing the old set had is lost; firmware for phone/ARM chips and
+  server network cards is left out. The image did not grow.
+- **Graphics:** Intel and AMD graphics use the X server's modesetting driver (as current distributions do).
+  NVIDIA is unchanged.
+- **Touchpads:** tap to click (one finger = click, two = right click) and two-finger scrolling.
+- **Bluetooth pairing works from anywhere:** when a phone, keyboard or speaker wants to pair, a "Bluetooth pairing"
+  window appears (check that both screens show the same number and press Pair, or type a PIN). Paired devices are
+  trusted, so they reconnect by themselves. The computer shows up on other devices under its own name (not
+  "BlueZ 5.54"). The taskbar Bluetooth menu is new: on/off, connect/disconnect paired devices, "Bluetooth
+  settings...". In Settings, devices without a name are tucked away under "Other devices without a name".
+  Bluetooth **sound** (speakers, headphones) still does not work: they pair, but play nothing.
+- **Accounts:** removing a person and adding the same login again works now.
+- **USB sticks:** helper partitions (Ventoy's VTOYEFI, EFI partitions) no longer pop up as drives; the stick's
+  main partition still opens.
+
+## Please check on the laptop
+
+1. **Sound output:** play something (e.g. a YouTube video). Settings > Sound should list the built-in speakers,
+   not "Dummy Output".
+2. **Headphone jack:** plug headphones in: sound should move to them, and back to the speakers when unplugged.
+3. **Microphone:** in Settings > Sound (Input devices), speak: the level bar should move.
+4. **Pair the phone:** Settings > Bluetooth > Search for devices, put the phone into pairing mode, press Pair:
+   both show a number, press Pair on both. Also try starting the pairing from the phone.
+5. **Pair the speaker:** it should pair without questions (sound over Bluetooth is not expected yet).
+6. **Touchpad:** tap to click, two-finger scroll.
+7. **The phone's Bluetooth list** shows the computer under its name.
+
+If sound still fails, run these in a terminal and send the output (or use Settings > About > Save system report):
+
+```
+sudo dmesg | grep -i sof
+aplay -l
+pactl list cards short
+```
+
+If the speaker works but the headphone jack or microphone does not, that is a known limit of the sound
+configuration data on this base (alsa-lib 1.2.2): please report which part fails.
+
 # GoboRefined 0.8.3 — hotfix for Intel laptop graphics
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).

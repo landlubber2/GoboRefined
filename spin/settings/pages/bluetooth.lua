@@ -1,10 +1,10 @@
 -- Bluetooth (0.8.2, experimental). BlueZ 5.54 is part of 017.01: bluetoothd starts at boot (stock
 -- task "Bluetooth Start", which also powers the adapter on) and the D-Bus policy lets every user
 -- talk to it, so this page drives `bluetoothctl` as the user:
---   * one long-running bluetoothctl (stdin/stdout pipes) is the pairing agent and runs the
---     commands (power, scan, pair, trust, connect, disconnect, remove); its event lines
---     ([NEW]/[CHG]/[DEL]) trigger a refresh, its agent prompts ("Confirm passkey ... (yes/no):",
---     "Enter PIN code:") become dialogs;
+--   * one long-running bluetoothctl (stdin/stdout pipes) runs the commands (power, scan, pair,
+--     trust, connect, disconnect, remove); its event lines ([NEW]/[CHG]/[DEL]) trigger a refresh.
+--     0.8.4: it runs WITHOUT an agent; the session's pairing agent (gobo-bt-agent, started by
+--     ~/.xinitrc) shows every pairing question, wherever pairing was started;
 --   * the list itself comes from short runs (bluetoothctl show / devices / info MAC).
 -- Root (gobo-settings-helper, administrators): bluetooth-service start|stop (start also lifts an
 -- rfkill soft block), bluetooth-boot on|off (stay off after a restart).
@@ -25,6 +25,8 @@ function P.build(C)
    local search_button, service_button
    local list = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6 }
    local boot_check = Gtk.CheckButton { label = "Switch Bluetooth on at every start" }
+   local name_label = C.text("", "dim-label")
+   local others_open = false
    local setting, searching = false, false
    local refresh, schedule_refresh
 
@@ -59,25 +61,11 @@ function P.build(C)
       local ok = pcall(function() ctl.input:write_all(cmd .. "\n", nil) ctl.input:flush(nil) end)
       return ok
    end
-   local function answer_prompt(text)
-      local passkey = text:match("[Cc]onfirm passkey (%d+)")
-      if passkey then
-         send(C.confirm("Pairing: does the other device show the number " .. passkey .. "?", "Yes, pair") and "yes" or "no")
-      elseif text:match("[Aa]uthorize service") or text:match("[Rr]equest authorization") or text:match("%(yes/no%)") then
-         send(C.confirm("A Bluetooth device asks to connect:\n" .. text:gsub("%[agent%]%s*", ""), "Allow") and "yes" or "no")
-      elseif text:match("[Ee]nter PIN code") or text:match("[Ee]nter passkey") then
-         local v = C.form("Bluetooth pairing", {
-            { key = "pin", label = text:match("passkey") and "Passkey (number)" or "PIN code (often 0000)" } }, "Pair",
-            function(v)
-               if not v.pin:match("^[%w]+$") or #v.pin > 16 then return "Letters and digits only, at most 16." end
-            end)
-         send(v and v.pin or "")
-      end
-   end
    local function handle_line(l)
       if l == "" then return end
-      -- bluetoothctl registers its agent once it reaches bluetoothd; make it the default one then
-      if l:match("^Agent registered") then send("default-agent") return end
+      -- 0.8.4: this bluetoothctl runs without an agent (--agent off: "Failed to register agent");
+      -- the session's gobo-bt-agent answers every pairing question
+      if l:match("register agent") or l:match("^Agent ") then return end
       if l:match("^%[NEW%]") or l:match("^%[CHG%]") or l:match("^%[DEL%]") then
          if l:match("Discovering: no") then searching = false end
          schedule_refresh()
@@ -104,7 +92,7 @@ function P.build(C)
       if ctl.proc then return end
       local launcher = Gio.SubprocessLauncher.new({ "STDIN_PIPE", "STDOUT_PIPE", "STDERR_MERGE" })
       launcher:setenv("LC_ALL", "C", true)
-      local proc = launcher:spawnv({ "bluetoothctl" })
+      local proc = launcher:spawnv({ "bluetoothctl", "--agent", "off" })
       if not proc then return end
       ctl.proc, ctl.input = proc, proc:get_stdin_pipe()
       local out = proc:get_stdout_pipe()
@@ -124,12 +112,6 @@ function P.build(C)
                local line = clean(buf:sub(1, i - 1))
                buf = buf:sub(i + 1)
                handle_line(line)
-            end
-            -- agent questions are prompts without a newline
-            local tail = clean(buf)
-            if tail:match("%(yes/no%):?%s*$") or tail:match("Enter PIN code:%s*$") or tail:match("Enter passkey.-:%s*$") then
-               buf = ""
-               answer_prompt(tail)
             end
             more()
          end)
@@ -183,14 +165,20 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
          local info = "\n" .. piece
          if mac and mac:match(MAC) then
             local name = info:match("\n%s*Alias: ([^\n]+)") or info:match("\n%s*Name: ([^\n]+)") or mac
-            table.insert(devices, { mac = mac, name = C.trim(name), paired = info:match("Paired: yes") ~= nil,
-               connected = info:match("Connected: yes") ~= nil, icon = C.trim(info:match("Icon: ([^\n]+)") or "") })
+            name = C.trim(name)
+            -- 0.8.4: a device without a name has its address as alias ("39-C6-4E-7B-4D-AB")
+            local nameless = not info:match("\n%s*Name: ") or name:upper():gsub("-", ":") == mac:upper()
+            table.insert(devices, { mac = mac, name = name, paired = info:match("Paired: yes") ~= nil,
+               connected = info:match("Connected: yes") ~= nil, icon = C.trim(info:match("Icon: ([^\n]+)") or ""),
+               nameless = nameless })
          end
       end
       table.sort(devices, function(a, b)
          if a.paired ~= b.paired then return a.paired end
+         if a.nameless ~= b.nameless then return b.nameless end
          return a.name:lower() < b.name:lower()
       end)
+      local alias = out:match("\n%s*Alias: ([^\n]+)")
       setting = true
       sw.active = powered and not no_ctrl
       sw.state = sw.active
@@ -206,11 +194,30 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
       elseif status.label == "" or status.label:match("^Bluetooth is") or status.label:match("^Checking") then
          status.label = searching and "Searching... (devices must be in pairing mode)" or "Bluetooth is on."
       end
+      if alias and not no_ctrl then
+         name_label.label = "Other devices see this computer as \"" .. C.trim(alias) .. "\"."
+      else
+         name_label.label = ""
+      end
       if powered then
-         if #devices == 0 then
-            list:pack_start(C.text(searching and "No devices found yet." or "No devices yet: press \"Search for devices\" and put the device into pairing mode.", "dim-label"), false, false, 0)
+         -- named and paired devices first; unpaired devices without a name (mostly nearby
+         -- phones and beacons that only show an address) in a closed "Other devices" section
+         local others = {}
+         for _, d in ipairs(devices) do
+            if d.nameless and not d.paired then table.insert(others, d)
+            else list:pack_start(device_row(d), false, false, 0) end
          end
-         for _, d in ipairs(devices) do list:pack_start(device_row(d), false, false, 0) end
+         if #devices == #others then
+            list:pack_start(C.text(searching and "No devices with a name found yet." or "No devices yet: press \"Search for devices\" and put the device into pairing mode.", "dim-label"), false, false, 0)
+         end
+         if #others > 0 then
+            local inner = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6, margin_top = 6 }
+            for _, d in ipairs(others) do inner:pack_start(device_row(d), false, false, 0) end
+            local exp = Gtk.Expander { label = "Other devices without a name (" .. #others .. ")", expanded = others_open }
+            exp.on_activate = function(e) others_open = not e.expanded end
+            exp:add(inner)
+            list:pack_start(exp, false, false, 0)
+         end
       end
       list:show_all()
    end
@@ -236,7 +243,7 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
          return
       end
       service_button.visible = false
-      note.label = "Headphones and speakers can be paired, but sound over Bluetooth is not available yet (PulseAudio's Bluetooth module is not on the system)."
+      note.label = "When a device asks for a code or a confirmation, a \"Bluetooth pairing\" window appears; pairing can also be started on the phone. Paired devices are trusted and may reconnect by themselves.\n\nHeadphones and speakers can be paired, but sound over Bluetooth is not available yet (PulseAudio's Bluetooth module is not on the system)."
       start_ctl()
       refreshing = true
       C.run({ "sh", "-c", QUERY }, "", function(_, out)
@@ -304,6 +311,7 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
    line:pack_start(Gtk.Label { label = "Bluetooth", xalign = 0 }, false, false, 0)
    box:pack_start(line, false, false, 0)
    box:pack_start(status, false, false, 0)
+   box:pack_start(name_label, false, false, 0)
    box:pack_start(C.row(search_button, service_button, C.button("Refresh", function() refresh() end)), false, false, 0)
    box:pack_start(C.heading("Devices"), false, false, 0)
    box:pack_start(list, false, false, 0)

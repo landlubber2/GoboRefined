@@ -32,6 +32,7 @@ typeline() { "$VB" controlvm "$VM" keyboardputstring "$1"; keys enter; }
 setup() {
    S 'cat > /tmp/input-test.lua; chmod 644 /tmp/input-test.lua' < "$here/input-test.lua"
    L 'return dofile("/tmp/input-test.lua")' > /dev/null
+   L 'return T.close_strays()' > /dev/null   # 0.8.4: start without leftover windows
    L 'if not T.find("inputtest") then require("awful").spawn("urxvt -name inputtest -geometry 80x20+20+20") end
       if not T.find("zenity") then require("awful").spawn("zenity --entry --title=gtktest --text=gtk") end
       return 1' > /dev/null
@@ -41,6 +42,10 @@ setup() {
 
 # release everything before the next scenario (Win+Escape safety net when it exists)
 reset() {
+   # 0.8.4: windows a scenario opened by accident (Settings, ...) would keep the focus: close them
+   local strays
+   strays=$(L 'return T.close_strays and T.close_strays() or ""' | sed 's/^ *string //; s/"//g')
+   [ -n "$strays" ] && echo "     (closed stray windows: $strays)" && pause 1
    # (0.5 and older bound Win+Escape to "previous desktop": only press it where it is the safety net)
    if L 'return tostring(spin_popups ~= nil)' | grep -q true; then keys win esc; pause 1; fi
    L 'for _, t in ipairs(screen.primary.tags) do if #t:clients() > 0 then t:view_only() break end end
@@ -115,7 +120,8 @@ scenario() {
    plain)               run plain 'return 1' ;;
    menu-click-client)   run menu-click-client 'return T.click_pos("start")' ;;
    menu-click-desktop)  run menu-click-desktop 'return T.click_pos("start")' 'T.click_desktop() return 1' ;;
-   menu-click-gtk)      run menu-click-gtk 'return T.click_pos("start")' 'return T.click_client("zenity")' ;;
+   menu-click-gtk)      # 0.8.4: click the GTK window where the open menu does not cover it
+                        run menu-click-gtk 'return T.click_pos("start")' 'return T.click_client_free("zenity")' ;;
    menu-click-taskbar)  run menu-click-taskbar 'return T.click_pos("start")' 'local x, y = T.pos("start") T.click(x + 177, y) return 1' ;;
    menu-escape)         run menu-escape 'return T.click_pos("start")' '@k esc' ;;
    menu-then-search)    run menu-then-search 'return T.click_pos("start")' 'return T.click_pos("start", 3)' 'T.click_desktop() return 1' ;;

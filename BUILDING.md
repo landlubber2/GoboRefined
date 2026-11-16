@@ -13,7 +13,8 @@ checked against a pinned sha256 (`build/sources.manifest`). One script does the 
   The from-scratch build of 2026-11-15 ended with 7.1 GB used (sources 0.4 GB, build root 1.5 GB,
   output 5.3 GB); while the image is made, the unpacked system tree (8.1 GB) and the packed images exist
   at the same time, so expect a peak of roughly 20 GB (estimated from those sizes, not measured).
-- **Internet access** for the downloads (about 2.8 GB including the stock ISO, 0.4 GB without it).
+- **Internet access** for the downloads (about 3.5 GB including the stock ISO, 1.1 GB without it; 0.8.4 added
+  linux-firmware, 0.67 GB, and sof-bin, 17 MB).
 - **Time:** about 80 minutes on 2 virtual CPUs and 4 GB RAM in VirtualBox (2026-11-15): downloads a few
   minutes, compiling the programs about 20 minutes (CopyQ 8 min, the Wi-Fi driver 6 min), making the image
   about 55 minutes (packing the live image and the update file, reading the stock image from the DVD).
@@ -94,7 +95,8 @@ public half is in its image.
 Every file is listed in **`build/sources.manifest`** with version, URL, sha256 and licence: the
 stock ISO, GNU xorriso (only to write the ISO; not in the image), xrandr, Inter, JetBrains Mono,
 Papirus icons, Menu-Cache, LibFM, PCManFM, PaVuControl, LxRandr, LXDM, Udevil, USB-ModeSwitch, the
-RTL8852AU Wi-Fi driver, ONLYOFFICE Desktop Editors (official binary), CopyQ, L3afpad and dnsmasq.
+RTL8852AU Wi-Fi driver, ONLYOFFICE Desktop Editors (official binary), CopyQ, L3afpad, dnsmasq, the
+linux-firmware collection (kernel.org) and Sound Open Firmware (sof-bin).
 A file whose sha256 differs is refused. Patches we apply are in `spin/patches/`; licences and
 redistribution notes are in `docs/third-party.md`.
 

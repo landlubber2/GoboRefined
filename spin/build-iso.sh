@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.8.2]
+#   VERSION        [0.8.4]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.8.3}
+VERSION=${VERSION:-0.8.4}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -59,7 +59,7 @@ cp -r "$REPO/spin/ab" ab
 cp -r "$REPO/spin/firmware" firmware
 cp -r "$REPO/spin/settings" settings
 bash -n gobo-install
-bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass
+bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent
 for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
@@ -72,7 +72,7 @@ grep -q "PRIVATE KEY" "$PUBKEY" && { echo "$PUBKEY holds a private key"; exit 1;
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq Linux-Firmware SOF-Firmware"
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -80,6 +80,18 @@ for prog in $EXTRA $MODULES
 do
    [ -d "$PROGRAMS_FROM/Programs/$prog" ] || { echo "program $prog not built (no $PROGRAMS_FROM/Programs/$prog)"; exit 1; }
    rm -rf $R/Programs/$prog && cp -a "$PROGRAMS_FROM/Programs/$prog" $R/Programs/
+done
+# 0.8.4: these two replace stock programs of the same name; the build root still has the stock
+# version next to the new one (20250309-GIT, 1.4.2): keep only the new version (Current)
+for prog in Linux-Firmware SOF-Firmware
+do
+   cur=$(readlink $R/Programs/$prog/Current)
+   [ -n "$cur" ] && [ -d "$R/Programs/$prog/$cur" ] || { echo "$prog: no Current version"; exit 1; }
+   for d in $R/Programs/$prog/*/
+   do
+      d=${d%/}
+      case "$(basename "$d")" in "$cur"|Settings|Current) ;; *) echo "dropping stock $prog $(basename "$d")"; rm -rf "$d" ;; esac
+   done
 done
 # Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm in the
 # checkout, so a theme change does not depend on the copy built into /Programs/LXDM.
@@ -108,20 +120,20 @@ install -m 644 ab/generated-caches ab/grub.cfg.in $P/1.0/share/gobo-update/
 # the public key updates for this image must be signed with (the project's, or the builder's own)
 install -m 644 "$PUBKEY" $P/1.0/share/gobo-update/update-signing.pub.pem
 install -m 644 ab/80-gobo-internal.rules $P/1.0/lib/udev/rules.d/
-# 0.8.3: Intel graphics on the modesetting driver (gobo-make-system copies it into
+# 0.8.3: Intel graphics on the modesetting driver, 0.8.4: also xe, amdgpu, radeon (gobo-make-system copies it into
 # /System/Settings/X11/xorg.conf.d of every system tree; the live image gets it below)
 mkdir -p $P/1.0/share/gobo-xorg
-install -m 644 ab/20-intel-modesetting.conf $P/1.0/share/gobo-xorg/
+install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $P/1.0/share/gobo-xorg/
 mkdir -p $R/System/Settings/X11/xorg.conf.d
-install -m 644 ab/20-intel-modesetting.conf $R/System/Settings/X11/xorg.conf.d/
+install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $R/System/Settings/X11/xorg.conf.d/
 # 0.8.2: Wi-Fi regulatory database (wireless-regdb, ISC; spin/firmware/wireless-regdb/SOURCE):
 # cfg80211 loads regulatory.db(.p7s) from /lib/firmware (= /System/Index/lib/firmware)
 mkdir -p $P/1.0/lib/firmware
 install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
 # 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
-install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report $P/1.0/bin/
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent $P/1.0/bin/
 mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
-install -m 644 settings/main.lua settings/common.lua $P/1.0/share/gobo-settings/
+install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent
 install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/
 install -m 644 settings/gobo-settings.desktop $P/1.0/share/applications/
 mkdir -p $P/1.0/share/doc
@@ -134,6 +146,13 @@ ln -sfn 1.0 $P/Current
 # never a private key in the image
 grep -rqs -e "PRIVATE KEY" $P && { echo "a private key ended up in GoboSpin"; exit 1; }
 mount -t proc proc $R/proc
+# 0.8.4: Linux-Firmware 20261019 and SOF-Firmware 2026.09.2 replaced the stock versions above
+# (20250309-GIT, 1.4.2); drop the index links that still point at the old versions so
+# SymlinkProgram links the new trees (and no dangling link is left behind)
+# (list first, then delete: deleting while find walks an overlay makes it report vanished entries)
+find $R/System/Index/lib/firmware \( -lname '/Programs/SOF-Firmware/*' -o -lname '/Programs/Linux-Firmware/*' \) -print0 > $B/old-firmware-links
+xargs -0 -r rm -f < $B/old-firmware-links
+find $R/System/Index/lib/firmware -mindepth 1 -depth -type d -empty -print0 | xargs -0 -r rmdir 2>/dev/null || true
 for prog in $EXTRA
 do chroot $R SymlinkProgram $prog | tail -n 1
 done
@@ -142,6 +161,17 @@ chroot $R test -e /System/Index/lib/firmware/regulatory.db.p7s || { echo "regula
 # 0.8.2: the hotspot (Settings > Hotspot) needs dnsmasq; Bluetooth uses the stock BlueZ 5.54
 chroot $R sh -c "command -v dnsmasq" > /dev/null || { echo "dnsmasq not linked"; exit 1; }
 chroot $R test -e /System/Index/bin/bluetoothctl || { echo "bluetoothctl missing"; exit 1; }
+# 0.8.4: Intel SOF firmware reachable where the kernel looks (/lib/firmware/intel/...)
+for f in sof/sof-tgl.ri sof-tplg/sof-hda-generic-2ch.tplg sof-ipc4/tgl/sof-tgl.ri sof-ipc4-tplg sof-ace-tplg
+do chroot $R test -e /lib/firmware/intel/$f || { echo "SOF firmware: /lib/firmware/intel/$f missing"; exit 1; }
+done
+# 0.8.4: the new firmware collection is linked (Intel AX210 Wi-Fi/Bluetooth as samples), and no
+# link in lib/firmware points at a program version that is gone
+for f in iwlwifi-ty-a0-gf-a0-89.ucode.zst intel/ibt-0041-0041.sfi.zst
+do chroot $R test -e /lib/firmware/$f || { echo "linux-firmware: /lib/firmware/$f missing"; exit 1; }
+done
+dangling=$(chroot $R find /System/Index/lib/firmware -xtype l | head -n 5)
+[ -z "$dangling" ] || { echo "dangling firmware links: $dangling"; exit 1; }
 echo "== Wi-Fi driver (RTL8852AU) into the kernel's updates directory, module index"
 for prog in $MODULES
 do

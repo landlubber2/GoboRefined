@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-15. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8.3** (`dist/GoboRefined-0.8.3.iso` + `.update`), the first release built from the repository alone with `build/build.sh` (see the last section and `BUILDING.md`). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-16. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8.4** (`dist/GoboRefined-0.8.4.iso` + `.update`; laptop sound firmware, Bluetooth pairing agent, linux-firmware 20261019, see the last section), built from the repository alone with `build/build.sh` (see `BUILDING.md`). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -1458,3 +1458,120 @@ Snapshots added: `repo-build-wip` (taken by the coordinator after a hard power-o
 **`repo-build-proof`** (the finished build environment, powered off), **`iso-0.8.3-updated-efi`** (current,
 powered off: the 0.8.2 install updated to 0.8.3; slot A 0.8.3, slot B 0.8.2). The fresh UEFI install of 0.8.3
 was made on top of `repo-build-proof` (firmware switched to EFI) and discarded by the restore. Nothing deleted.
+
+## GoboRefined 0.8.4: laptop fixes + general hardware pieces (2026-11-16)
+
+From the owner's test of 0.8.3 on a ThinkPad (Intel Tiger Lake, Intel AX210). Developed on the installed system
+(snapshot `iso-0.8.3-updated-efi`, files installed by hand), built once with `build/build.sh` in the
+`repo-build-proof` environment, signed with the project key.
+
+### What changed (files)
+
+- **Firmware** (`spin/build-programs.sh` steps `linux-firmware`, `sof-firmware`; `build/sources.manifest`;
+  `spin/build-iso.sh`): linux-firmware **20261019** (kernel.org, installed with its `copy-firmware.sh --zstd`)
+  replaces the stock 20250309-GIT; Sound Open Firmware **sof-bin 2026.09.2** replaces the stock SOF 1.4.2 (no
+  Tiger Lake files; the laptop's `intel/sof/sof-tgl.ri` + `intel/sof-tplg/sof-hda-generic-2ch.tplg` were missing).
+  Both trees of sof-bin are installed (IPC3 `intel/sof`, `intel/sof-tplg`; IPC4 `intel/sof-ipc4`,
+  `sof-ipc4-lib`, `sof-ipc4-tplg`, `sof-ace-tplg`), relative links kept, tools left out. Kernel 6.12.16 has
+  `CONFIG_FW_LOADER_COMPRESS_ZSTD=y` and `SND_SOC_SOF_IPC4=y`, TGL defaults to IPC3 (the laptop's log asked for
+  `intel/sof/...`). linux-firmware left out: `qcom`, `mellanox`, `mrvl/prestera`, `netronome`, `qed`,
+  `liquidio`, `dpaa2` (476 MB of ARM-SoC / switch / server-NIC firmware); `intel/sof*` and `regulatory.db`
+  removed from it (sof-bin and wireless-regdb provide them); 176 stock files that upstream dropped are copied
+  from the stock 20250309 set, so the image loses no firmware. build-iso keeps only the new version of both
+  programs, deletes the old index links before SymlinkProgram, and checks `/lib/firmware` (SOF files, AX210
+  Wi-Fi/BT samples, no dangling links). Sizes (installed): Linux-Firmware 503 MB (stock 564 MB), SOF-Firmware
+  57 MB (stock 4.7 MB): about the same as before in total.
+- **Sound user space unchanged**: alsa-lib 1.2.2 + alsa-ucm-conf 1.2.2 (stock; has `sof-hda-dsp`). A current
+  alsa-ucm-conf needs a newer alsa-lib: not dropped in (docs/roadmap.md).
+- **Graphics**: `spin/ab/20-intel-modesetting.conf` → `spin/ab/20-gobo-modesetting.conf`: modesetting for kernel
+  drivers i915, xe, amdgpu, radeon; nouveau untouched. Our snippet is read from `/System/Settings/X11/xorg.conf.d`
+  before the stock `10-amdgpu.conf`/`10-radeon.conf` in `/System/Index/share/X11/xorg.conf.d` (Xorg tries the
+  drivers of matching OutputClass sections in the order read). Not testable in VirtualBox.
+- **Touchpads**: no libinput on the image (driver or library); touchpads use synaptics 1.9.1. New
+  `spin/ab/30-gobo-touchpad.conf`: tap to click (1/2/3 fingers = left/right/middle), two-finger scrolling, only
+  for devices on the synaptics driver. gobo-make-system now copies every `share/gobo-xorg/*.conf`.
+- **Bluetooth**: `spin/settings/bt-agent.lua` + launcher `gobo-bt-agent` (GoboSpin bin; started by `~/.xinitrc`,
+  one per user via `flock` on `~/.cache/gobo-bt-agent.lock`, stopped by LXDM `PostLogout`): one long-running
+  `bluetoothctl --agent KeyboardDisplay`, made default agent each time it registers (also after bluetoothd
+  restarts); prompts → GTK dialogs (confirm number, accept pairing, authorize service, PIN, passkey; "type this
+  code" notices; "Request canceled" closes the dialog without answering); `Paired: yes` → `trust`. Lab hooks:
+  `GOBO_BT_AGENT_CTL` (fake bluetoothctl), `GOBO_BT_AGENT_LOG`. Settings page: its bluetoothctl runs with
+  `--agent off`, shows "Other devices see this computer as ...", sorts named devices first and puts unpaired
+  nameless ones (alias = address) into a closed "Other devices without a name (N)" expander. Taskbar: upstream's
+  `gobo.awesome.bluetooth` replaced by `look/gobo11/awesome/spin/bluetooth.lua` (icon while an adapter exists, also
+  hot-plugged; menu: on/off, connect/disconnect paired devices, "Bluetooth settings..."). Name: new helper
+  sub-command `boot-bluetooth-name` (root only, BootUp line inserted **before** "Bluetooth Start" by
+  gobo-make-system) writes `/System/Settings/bluetooth/main.conf` with `Name = <host name>` (marker line; a
+  main.conf someone else wrote is left alone).
+- **Accounts**: `remove-user` also removes the user's own group (same name, gid 1000-59999, no members, nobody's
+  primary group); `vm/settings-test.sh` +5 checks (40 now).
+- **USB**: `80-gobo-internal.rules` + `VTOYEFI` label and EFI system partition type (GPT
+  `c12a7328-...`, MBR `0xef`); xinitrc devmon `--ignore-label VTOYEFI`.
+- **input-test**: `T.click_client_free` (clicks a spot of the window not covered by a menu; full-screen click
+  sheets ignored), `T.close_strays` (closes every normal/dialog window except the test's urxvt and zenity) in
+  `setup` and in every `reset`, with a note "(closed stray windows: ...)". No product bug behind
+  `menu-click-gtk`: the menu covered the middle of the zenity window and the click hit "Settings".
+- Item 6 (keyboard layout / time zone pages): skipped.
+
+### Tests (VM)
+
+| Test | Result |
+|---|---|
+| Firmware placement on the dev system (build steps run by hand, build-iso's link steps) | `/lib/firmware/intel/sof/sof-tgl.ri`, `intel/sof-tplg/sof-hda-generic-2ch.tplg`, `intel/sof-ipc4/tgl/sof-tgl.ri`, `intel/sof-ace-tplg/...`, AX210 `iwlwifi-ty-a0-gf-a0-89.ucode.zst`, `intel/ibt-0041-0041.sfi.zst`, `regulatory.db` (GoboSpin) present; no dangling links |
+| Agent with a fake bluetoothctl (`GOBO_BT_AGENT_CTL`): confirm number, PIN 0000, accept pairing, passkey notice, trust after `Paired: yes`, "Request canceled" | all answers as expected (`0.8.4-bluetooth-pairing-confirm.png`) |
+| Agent with the real bluetoothd, no adapter | registers, "Default agent request successful"; re-registers after bluetoothd restart; second start exits (flock) |
+| **Real pairing between two virtual controllers** (`btvirt -l2` from BlueZ **5.86**'s emulator, built in the dev VM; 5.54's btvirt fails with kernel 6.12: "Opcode 0x2074 failed") | pairing started from controller A (bluetoothctl `--agent off`), our agent showed "Pairing with gobolab. Does it show the number 000000?", Pair → "Pairing successful", agent trusted the device (`0.8.4-bluetooth-pairing-virtual-controllers.png`) |
+| Taskbar menu + Settings page with the virtual controllers | icon appears, menu "Bluetooth is on: switch off / Connect gobolab / Bluetooth settings..." (`0.8.4-bluetooth-taskbar-menu.png`); page shows the paired device and "Other devices see this computer as "gobolab"" (`0.8.4-settings-bluetooth-virtual.png`) |
+| `boot-bluetooth-name` + bluetoothd restart | controllers named `gobolab`; second run changes nothing; refused for users |
+| USB rule (loop devices with MBR VTOYEFI 0xef + VENTOY 0x07) | VTOYEFI `UDISKS_SYSTEM_INTERNAL=1`, VENTOY not marked; the GPT ESP case was set up but checked before the rule was installed (the type string is the value udev reported: `c12a7328-...`) |
+| Build (`repo-build-proof`, `build/build.sh`, project key) | all 21 program steps rebuilt (the header comment of build-programs.sh changed, which is part of every step's hash), image; 37 min in total; "project key: yes" |
+| **Update test**: `iso-0.8.3-updated-efi` + `gobo-update --yes` with the 0.8.4 file (sha256 checked in the VM) | pass, 48 s into slot B, "8.1G used, 6.8G free in slot B" |
+| restart → version | slot B 0.8.4 running/default, "slot b (0.8.4) started fine"; look-version 0.8.4; "System updated" notice (`0.8.4-updated-desktop.png`) |
+| firmware in the running system | the files above present; `/Programs/Linux-Firmware` = 20261019 only (503 MB), SOF-Firmware 2026.09.2 only (57 MB); 0 dangling links |
+| X | starts; `xorg.conf.d`: `00-keyboard.conf`, `20-gobo-modesetting.conf`, `30-gobo-touchpad.conf` (old Intel file gone); VirtualBox still "Matched vmware as autoconfigured driver 0" |
+| Bluetooth agent in the session without an adapter | `gobo-bt-agent` + `bluetoothctl --agent KeyboardDisplay` running as lab; no icon, no dialog; BootUp line before "Bluetooth Start", `main.conf` Name = gobolab |
+| Settings pages (12 page switches through the page file, one process) | render, no Lua errors |
+| `vm/settings-test.sh` | **40/40** (+ removal; no leftover groups) |
+| `vm/net-test.sh` | **32/32** |
+| `vm/input-test.sh` (full) | **50/50** (menu-click-gtk passes; the Settings window left open by the page check was closed by `setup`) |
+| `--rollback` → 0.8.3 → `--rollback` → 0.8.4 | pass (Linux-Firmware 20250309-GIT in 0.8.3, 20261019 in 0.8.4) |
+| fresh install from the 0.8.4 ISO | **not done** (budget) |
+
+### Files
+
+`dist/GoboRefined-0.8.4.update` (2,683,650,048 bytes, sha256 `4aebc0d8f6b6c5264bf8ab487fe4b1d835baa9f8b23f0fbeb15172f15b791be5`),
+`dist/GoboRefined-0.8.4.iso` (2,816,737,280 bytes, sha256 `97ccc5d89f8add6a7ab20a4c956bb235c34ad65f6827f9c820fbba0569c7a1dc`),
+`.sha256` files next to them; same values in the build VM and on the host (`sha256sum -c`) and in the test VM.
+Both are 51 MB **smaller** than 0.8.3 (the left-out firmware trees outweigh SOF and the newer firmware).
+Installed: Linux-Firmware 503 MB (was 564), SOF-Firmware 57 MB (was 4.7): about -9 MB.
+
+### Only the laptop can confirm
+
+Sound (speakers, headphone switching, internal microphone with UCM 1.2.2), Bluetooth with the AX210 (phone
+numeric comparison, speaker "just works", phone-initiated pairing, the name seen on the phone), touchpad tapping,
+modesetting on Intel/AMD hardware, Wi-Fi/Bluetooth firmware loading from the new collection.
+
+### Findings, not fixed
+
+- With two adapters, the agent's bluetoothctl only reports devices of its default controller, so devices paired
+  on the second adapter are not trusted automatically (seen with the two virtual controllers; laptops have one).
+- The image's copy of `gobo-settings-helper` has an older wording of one comment line (edited after the source
+  tarball was made); no code difference.
+- The upstream Bluetooth widget file is no longer used (`look/reference/gobo-widgets/bluetooth.lua` kept as reference).
+
+### Downloads (0.8.4)
+
+- linux-firmware 20261019, https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-20261019.tar.xz,
+  sha256 `a10d1ab5baf2c74ba92e8c7cf313e691696c26bddfa6df00db795e48d70cd4ca` (matches kernel.org's sha256sums.asc), WHENCE licences.
+- sof-bin 2026.09.2, https://github.com/thesofproject/sof-bin/releases/download/v2026.09.2/sof-bin-2026.09.2.tar.gz,
+  sha256 `5f7bc30b2b5c1e6b0da55a33fc44e2b7f56ae9b06952edcde614f51ef6b943e1`, BSD-3-Clause.
+- Lab only, not shipped: BlueZ 5.54 (`68cdab9e63e8832b130d5979dc8c96fdb087b31278f342874d992af3e56656dc`) and
+  BlueZ 5.86 (`99f144540c6070591e4c53bcb977eb42664c62b7b36cb35a29cf72ded339621d`) from
+  https://mirrors.edge.kernel.org/pub/linux/bluetooth/, GPL-2.0-or-later, to build `btvirt` (dev VM, discarded).
+
+### VM state
+
+Snapshots added: **`repo-build-proof-2`** (build environment after the 0.8.4 build: sources incl. linux-firmware and
+sof-bin, programs, outputs of 0.8.3 and 0.8.4, checkout in `/goborefined`; powered off) and
+**`iso-0.8.4-updated-efi`** (current, powered off: slot B 0.8.4, slot A 0.8.3). Next release build: as in the
+0.8.3 notes, from `repo-build-proof-2`. Nothing deleted.

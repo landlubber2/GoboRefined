@@ -9,7 +9,8 @@
 #
 # Steps, in this order (later ones need earlier ones):
 #   xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
-#   lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq
+#   lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware
+#   sof-firmware
 # (menu-cache builds LibFM "extra only" first, so libfm and pcmanfm must follow it.)
 #
 # Environment:
@@ -422,6 +423,74 @@ l3afpad)
    ./autogen.sh
    ./configure --prefix=/Programs/L3afpad/0.8.18.1.11
    finish L3afpad 0.8.18.1.11 "L3afpad: simple GTK 3 text editor (Leafpad fork)."
+   ;;
+linux-firmware)
+   # 0.8.4: current firmware collection from kernel.org (017.01 ships linux-firmware 20250309):
+   # newer Wi-Fi, Bluetooth, GPU and audio firmware for recent laptops. Installed the way its own
+   # "make install-zst" does (copy-firmware.sh --zstd: the 6.12 kernel loads .zst firmware), into
+   # /Programs/Linux-Firmware/20261019/lib/firmware; build-iso.sh replaces the stock version with it.
+   # Left out (not for x86_64 PCs, 476 MB): qcom (Qualcomm phone/ARM SoCs), mellanox (Spectrum
+   # switch ASICs), mrvl/prestera (Marvell switches), netronome, qed, liquidio (server NICs),
+   # dpaa2 (NXP ARM networking). Files of the stock 20250309 set that upstream has since dropped
+   # are kept (copied from the stock image), so nothing the image had goes missing.
+   V=20261019 P=/Programs/Linux-Firmware/20261019 OLD=/Programs/Linux-Firmware/20250309-GIT/lib/firmware
+   need linux-firmware-$V.tar.xz
+   rm -rf $WORK/linux-firmware-$V $P && tar xf $SRC/linux-firmware-$V.tar.xz -C $WORK
+   cd $WORK/linux-firmware-$V
+   mkdir -p $P/lib/firmware $P/share/doc/linux-firmware
+   sh ./copy-firmware.sh --zstd $P/lib/firmware > $WORK/copy-firmware.log 2>&1 ||
+      { tail -n 20 $WORK/copy-firmware.log; exit 1; }
+   cp -a WHENCE README.md LICENSE* LICENSES $P/share/doc/linux-firmware/ 2>/dev/null ||
+      cp -a WHENCE LICEN* $P/share/doc/linux-firmware/
+   F=$P/lib/firmware
+   rm -rf $F/qcom $F/mellanox $F/mrvl/prestera $F/netronome $F/qed $F/liquidio $F/dpaa2
+   # links that pointed into the trees left out
+   find $F -xtype l -delete
+   # Sound Open Firmware comes from sof-bin (step sof-firmware), the regulatory database from
+   # wireless-regdb (GoboSpin): never two versions of the same file
+   rm -rf $F/intel/sof $F/intel/sof-tplg $F/intel/sof-ipc4 $F/intel/sof-ipc4-lib $F/intel/sof-ipc4-tplg $F/intel/sof-ace-tplg
+   rm -f $F/regulatory.db $F/regulatory.db.p7s $F/regulatory.db.zst $F/regulatory.db.p7s.zst
+   if [ -d $OLD ]
+   then
+      kept=0
+      while IFS= read -r f
+      do
+         [ -e "$F/$f" ] || [ -e "$F/$f.zst" ] || [ -e "$F/${f%.zst}" ] || [ -L "$F/$f" ] || { mkdir -p "$F/$(dirname "$f")"; cp -a "$OLD/$f" "$F/$f"; kept=$((kept + 1)); }
+      done < <(cd $OLD && find . \( -type f -o -type l \) ! -path './qcom/*' ! -path './mellanox/*' ! -path './mrvl/prestera/*' \
+                  ! -path './netronome/*' ! -path './qed/*' ! -path './liquidio/*' ! -path './dpaa2/*' ! -path './intel/sof*' | sed 's#^\./##')
+      echo "kept $kept files of the stock 20250309 set that upstream dropped"
+      find $F -xtype l -delete
+   fi
+   chown -R root:root $P
+   resources Linux-Firmware $V "Firmware for devices supported by the Linux kernel (linux-firmware from kernel.org)" \
+      "Various redistributable licences (see share/doc/linux-firmware/WHENCE)" "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git"
+   du -sh $P
+   ;;
+sof-firmware)
+   # 0.8.4: Sound Open Firmware for Intel laptops (Tiger Lake and newer need it for the built-in
+   # speakers/microphones; 017.01 ships SOF 1.4.2 from 2020, which has no Tiger Lake firmware).
+   # Official release tarball of thesofproject/sof-bin, installed the way its install.sh does
+   # (every sof* tree under lib/firmware/intel, relative links kept: IPC3 "sof"/"sof-tplg" and
+   # IPC4 "sof-ipc4"/"sof-ipc4-lib"/"sof-ipc4-tplg"/"sof-ace-tplg"); the debugging tools are
+   # left out. Data only. Replaces the stock SOF-Firmware 1.4.2 in the image (build-iso.sh).
+   V=2026.09.2 P=/Programs/SOF-Firmware/2026.09.2
+   need sof-bin-$V.tar.gz
+   rm -rf $WORK/sof-bin-$V $P && tar xzf $SRC/sof-bin-$V.tar.gz -C $WORK
+   mkdir -p $P/lib/firmware/intel $P/share/doc/sof-firmware
+   for d in $WORK/sof-bin-$V/sof*
+   do cp -a $d $P/lib/firmware/intel/
+   done
+   for f in LICENCE.Intel LICENCE.NXP Notice.NXP README.Intel README.md manifest.txt
+   do install -m 644 $WORK/sof-bin-$V/$f $P/share/doc/sof-firmware/
+   done
+   # what Tiger Lake laptops with an HDA codec load (kernel 6.12: IPC3 by default)
+   for f in sof/sof-tgl.ri sof-tplg/sof-hda-generic-2ch.tplg sof-ipc4/tgl/sof-tgl.ri sof-ace-tplg
+   do [ -e $P/lib/firmware/intel/$f ] || { echo "sof-bin: $f missing"; exit 1; }
+   done
+   chown -R root:root $P
+   resources SOF-Firmware $V "Sound Open Firmware (Intel audio DSP firmware and topologies)" \
+      "BSD-3-Clause (Intel/NXP firmware release licence, see share/doc/sof-firmware)" "https://github.com/thesofproject/sof-bin"
+   du -sh $P
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

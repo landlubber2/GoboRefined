@@ -146,6 +146,12 @@ grep -q 'gobo-settings-helper boot-bluetooth' "$bootup" || cat >> "$bootup" <<'B
 # good in Settings > Bluetooth (the stock "Bluetooth Start" above always powers it on).
 Exec "Applying the Bluetooth setting..." /System/Index/bin/gobo-settings-helper boot-bluetooth
 BOOTUP
+# 0.8.4: the computer's Bluetooth name is its host name (main.conf, written before bluetoothd starts)
+if ! grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup"
+then
+   sed -i 's|^\(Exec "Starting Bluetooth daemon\.\.\."\)|Exec "Setting the Bluetooth name..."           /System/Index/bin/gobo-settings-helper boot-bluetooth-name\n\1|' "$bootup"
+   grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup" || die "could not add the Bluetooth name step to BootUp"
+fi
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 
@@ -190,13 +196,14 @@ then
 fi
 
 # 0.8.3: Intel graphics use the kernel modesetting driver (Xorg picked the old "intel" DDX on a
-# Tiger Lake laptop: only a thin strip of the desktop showed). Matches i915 devices only.
-xorg_snippet="$T/Programs/GoboSpin/Current/share/gobo-xorg/20-intel-modesetting.conf"
-if [ -f "$xorg_snippet" ]
-then
+# Tiger Lake laptop: only a thin strip of the desktop showed). 0.8.4: i915, xe, amdgpu, radeon (not nouveau).
+# 0.8.4: + touchpad tap to click (30-gobo-touchpad.conf). Every snippet in share/gobo-xorg is copied.
+for xorg_snippet in "$T"/Programs/GoboSpin/Current/share/gobo-xorg/*.conf
+do
+   [ -f "$xorg_snippet" ] || continue
    mkdir -p "$T/System/Settings/X11/xorg.conf.d"
-   install -m 644 "$xorg_snippet" "$T/System/Settings/X11/xorg.conf.d/20-intel-modesetting.conf"
-fi
+   install -m 644 "$xorg_snippet" "$T/System/Settings/X11/xorg.conf.d/$(basename "$xorg_snippet")"
+done
 
 # 0.8.1: short press of the power button (acpid had no rule at all): power menu on the
 # desktop, clean shutdown at the login screen or a text console (GoboSpin's gobo-power-button).

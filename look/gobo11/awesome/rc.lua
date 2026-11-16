@@ -27,7 +27,7 @@ local desktops = require("spin.desktops")
 local screenshot = require("spin.screenshot")
 local cliphist = require("spin.cliphist")
 local desktop_icons = require("spin.desktop_icons")   -- 0.6: ~/Desktop icons (PCManFM), Trash clean-up
-local bluetooth = require("gobo.awesome.bluetooth")
+local bluetooth = require("spin.bluetooth")   -- 0.8.4: our menu (upstream widget paired without an agent)
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
 local icon_theme = require("menubar.icon_theme")
@@ -512,7 +512,7 @@ awful.screen.connect_for_each_screen(function(s)
    local right_layout = wibox.layout.fixed.horizontal()
    if s == screen.primary then
       right_layout:add(status_icon(wibox.widget.systray()))
-      right_layout:add(status_icon(bluetooth.new()))
+      right_layout:add(status_icon(bluetooth.new({ icon_on = icon_theme():find_icon_path("bluetooth-active", 48) or find_icon("bluetooth"), icon_off = icon_theme():find_icon_path("bluetooth-disabled", 48) or find_icon("bluetooth") })))
       spin_debug.usb = usb.new({ icon = icon_theme():find_icon_path("drive-removable-media-usb", 48) or find_icon("drive-removable-media"), file_manager = file_manager })
       right_layout:add(status_icon(spin_debug.usb))
       -- our own icon (real state, drawn in the theme); GoboNet's widget runs hidden for its menu

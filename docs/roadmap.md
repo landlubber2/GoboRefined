@@ -274,6 +274,61 @@ Then: build 0.8.2 (ISO + update file), update test 0.8.1 → 0.8.2 in the VM. **
 ### 0.8.3 — hotfix (2026-11-15)
 
 Intel laptop graphics (ThinkPad, Tiger Lake Xe): Xorg picked the old "intel" driver and showed only a strip of
-the desktop; Intel graphics now use the modesetting driver (`spin/ab/20-intel-modesetting.conf`). First
+the desktop; Intel graphics now use the modesetting driver (`spin/ab/20-intel-modesetting.conf`, since 0.8.4 `20-gobo-modesetting.conf`). First
 release built from the repository alone (`build/build.sh`). Built, update-tested from 0.8.2 in the VM; real
 Intel laptop to confirm.
+
+### 0.8.4 — fixes from the owner's laptop test (ThinkPad, Tiger Lake, Intel AX210), 2026-11-16
+
+1. Laptop sound: Sound Open Firmware (sof-bin 2026.09.2, IPC3 and IPC4 trees) replaces the stock SOF 1.4.2,
+   which had no Tiger Lake firmware. User space unchanged: alsa-lib 1.2.2 with its matching alsa-ucm-conf
+   1.2.2 (already has a `sof-hda-dsp` profile); a current alsa-ucm-conf needs a newer alsa-lib (see below).
+   Folded in (owner, 2026-11-16): **firmware collection** linux-firmware 20261019 (zstd) replaces 20250309;
+   **graphics default** modesetting for i915, xe, amdgpu, radeon (`spin/ab/20-gobo-modesetting.conf`; nouveau
+   untouched); **touchpads** tap to click on the synaptics driver (`spin/ab/30-gobo-touchpad.conf`).
+2. Bluetooth: a pairing agent in every desktop session (`gobo-bt-agent`), the taskbar menu replaced by ours
+   (on/off, paired devices, "Bluetooth settings..."), the computer's Bluetooth name = its host name, nameless
+   devices under "Other devices" in Settings.
+3. Accounts: removing a user also removes the user's own group.
+4. Lab: `vm/input-test.sh menu-click-gtk` clicks where the menu does not cover the window; stray windows
+   are closed between scenarios.
+5. USB sticks: Ventoy's VTOYEFI and EFI system partitions are not automounted.
+6. Keyboard layout and time zone pages: skipped (budget).
+
+#### Bluetooth audio — what it would take (not started)
+
+PulseAudio 13 on the image is built without its Bluetooth modules, so speakers and headphones pair but
+play nothing. Needed: the SBC codec library (libsbc, ~1.4/2.0, LGPL) built first, then PulseAudio 13.0
+rebuilt with `--enable-bluez5` (needs BlueZ 5 headers + D-Bus, both on the image) so that
+`module-bluez5-discover`/`module-bluez5-device` and `module-bluetooth-policy` exist, plus a line in
+`default.pa` (`load-module module-bluetooth-discover`, normally there behind `.ifexists`). Replacing the
+stock PulseAudio program means retesting all sound. Alternative: a current PipeWire with its PulseAudio
+replacement — larger change (needs newer meson/glib), not for this base.
+
+#### Sound configuration data (ALSA UCM)
+
+alsa-lib on the image is 1.2.2 (2020) with alsa-ucm-conf 1.2.2. Current alsa-ucm-conf files declare newer "Syntax"
+versions and use features that alsa-lib 1.2.2 refuses (its message: "Incompatible syntax"), and each
+alsa-ucm-conf release states the alsa-lib version it needs, so a newer alsa-ucm-conf cannot simply be
+dropped in; it needs alsa-lib (and alsa-utils) updated together, which touches every program that plays
+sound. The stock 1.2.2 set already has `sof-hda-dsp` (speaker, headphones with jack detection, internal and
+headset microphone, HDMI), matching the card name the 6.12 SOF driver uses on HDA laptops. If it does not
+apply, PulseAudio falls back to its own profile probing (output works; speaker/headphone switching and the
+digital microphones may not). Laptop to confirm.
+
+## 0.8.5 — works on machines we have never seen (proposed, not started)
+
+- **Safe graphics that starts a desktop**: a boot menu entry / automatic fallback when X fails (e.g.
+  `nomodeset` + the fbdev/vesa driver, or modesetting without glamor), so an unknown GPU still gets a desktop
+  and a way to report it.
+- **Hardware check page** in Settings: what the system found (graphics driver in use, Wi-Fi/Bluetooth
+  adapter and whether its firmware loaded, sound card and profile, touchpad driver, missing firmware lines
+  from the kernel log) with a "save report" button.
+
+What 0.8.4 found missing on the image (not fixed there):
+- no `xf86-input-libinput` (touchpads use synaptics 1.9.1; no libinput library either) — modern distributions
+  use libinput for touchpads, tablets and touchscreens;
+- PulseAudio 13 without Bluetooth modules (no Bluetooth audio), alsa-lib/alsa-ucm-conf 1.2.2 (2020);
+- BlueZ 5.54 (2020): its host-name plugin needs systemd-hostnamed (absent), so the name is written into
+  main.conf at every start; works for pairing with the new agent;
+- Xorg DDX drivers from 2019 (intel 2.99.917, amdgpu/ati 19.1.0) — now bypassed with modesetting for Intel/AMD;

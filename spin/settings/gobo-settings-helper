@@ -23,6 +23,7 @@
 #   bluetooth-service start|stop     the Bluetooth daemon (start also lifts an rfkill soft block)
 #   bluetooth-boot on|off            Bluetooth switched on at every start (stock) or off
 #   boot-bluetooth                   (boot scripts) apply bluetooth-boot off
+#   boot-bluetooth-name              (boot scripts) Bluetooth name = host name (main.conf)
 #   hotspot-set                      hotspot name on stdin line 1, password on line 2
 #   hotspot on|off                   Wi-Fi hotspot (client Wi-Fi on that adapter is stopped)
 #   report                           root-only parts of the system report: last 400 kernel
@@ -308,7 +309,23 @@ case "$cmd" in
       else userdel "$1"
       fi
       ! grep -q "^$1:" "$PASSWD" || die "the account was not removed"
-      log "user removed: $1 ($2)" ;;
+      log "user removed: $1 ($2)"
+      # 0.8.4: 017.01's userdel leaves the user's private group behind, so adding the same login
+      # again failed ("already used by a group"). Remove it when it is the user's own group: same
+      # name as the login, gid 1000-59999, no members, nobody's primary group.
+      g=$(awk -F: -v n="$1" '$1 == n { print $3 ":" $4; exit }' "$GROUP")
+      if [ -n "$g" ]
+      then
+         gid=${g%%:*} members=${g#*:}
+         if [[ "$gid" =~ ^[0-9]+$ ]] && [ "$gid" -ge 1000 ] && [ "$gid" -lt 60000 ] && [ -z "$members" ] &&
+            ! awk -F: -v g="$gid" '$4 == g { found = 1 } END { exit !found }' "$PASSWD"
+         then
+            if groupdel "$1" 2>/dev/null && ! grep -q "^$1:" "$GROUP"
+            then log "group removed: $1 (gid $gid)"
+            else echo "gobo-settings-helper: note: the group $1 could not be removed" >&2
+            fi
+         fi
+      fi ;;
 
    set-admin)
       [ $# -eq 2 ] || die "$cmd: give login and yes|no"
@@ -414,6 +431,26 @@ case "$cmd" in
       if [ -e "$BT_OFF_AT_BOOT" ]
       then ( sleep 8; echo 'power off' | timeout 10 bluetoothctl > /dev/null 2>&1 ) < /dev/null > /dev/null 2>&1 &
       fi ;;
+
+   boot-bluetooth-name)
+      # (boot scripts, before "Bluetooth Start") 0.8.4: other devices see this computer under its
+      # host name instead of BlueZ's default "BlueZ 5.54": bluetoothd reads Name from main.conf
+      # (its hostname plugin needs systemd-hostnamed, absent here; so the name itself is written). A main.conf that
+      # GoboRefined did not write is left alone; a name set by hand (bluetoothctl system-alias)
+      # still wins, as BlueZ keeps it per adapter.
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "boot-bluetooth-name is for the boot scripts"
+      host=$(hostname 2>/dev/null)
+      [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$ ]] || exit 0
+      conf=/System/Settings/bluetooth/main.conf
+      marker="# Written by GoboRefined (gobo-settings-helper boot-bluetooth-name) at every start."
+      if [ -e "$conf" ] && ! grep -qxF "$marker" "$conf"; then exit 0; fi
+      want=$(printf '%s\n[General]\nName = %s\n' "$marker" "$host")
+      [ -e "$conf" ] && [ "$(cat "$conf")" = "$want" ] && exit 0
+      mkdir -p /System/Settings/bluetooth
+      tmp=$(mktemp /System/Settings/bluetooth/.main.conf.XXXXXX) || die "cannot write $conf"
+      printf '%s\n' "$want" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$conf" || { rm -f "$tmp"; die "cannot write $conf"; }
+      log "bluetooth name: $host" ;;
 
    hotspot-set)
       # name on stdin line 1 (1-32 bytes), password on line 2 (8-63 printable ASCII characters)

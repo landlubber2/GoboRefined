@@ -56,6 +56,48 @@ function T.click_client(class)
    return "clicked " .. class
 end
 
+-- 0.8.4: click a client where no popup (menu) covers it, so the click is meant for the window and
+-- not for an entry of an open menu (menu-click-gtk used to hit the dots menu's "Settings" entry).
+-- Full-screen click sheets (popups.backdrop) and the taskbar are not counted as covering.
+function T.click_client_free(class)
+   local c = T.find(class)
+   if not c then return "no client " .. class end
+   local sg = screen.primary.geometry
+   local covers = {}
+   for _, d in ipairs(root.drawins()) do
+      if d.visible and d.width < sg.width * 0.9 then table.insert(covers, { x = d.x, y = d.y, w = d.width, h = d.height }) end
+   end
+   local g = c:geometry()
+   for fy = 5, 1, -1 do
+      for fx = 1, 5 do
+         local x = g.x + math.floor(g.width * fx / 6)
+         local y = g.y + 30 + math.floor((g.height - 30) * fy / 6)
+         local free = true
+         for _, r in ipairs(covers) do
+            if x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h then free = false break end
+         end
+         if free then T.click(x, y) return string.format("clicked %s at %d,%d", class, x, y) end
+      end
+   end
+   return "no free spot on " .. class
+end
+
+-- 0.8.4: close windows a scenario left open (e.g. Settings started by a stray click), so they do
+-- not keep the focus in later scenarios. Keeps the test's urxvt and zenity and desktop windows.
+function T.close_strays()
+   local closed = {}
+   for _, c in ipairs(client.get()) do
+      local cls = (c.class or ""):lower()
+      if c.type == "normal" or c.type == "dialog" then
+         if (c.instance or "") ~= "inputtest" and cls ~= "zenity" then
+            table.insert(closed, c.class or "?")
+            c:kill()
+         end
+      end
+   end
+   return table.concat(closed, ",")
+end
+
 -- centre of a taskbar widget exposed by rc.lua in _G.spin_debug (start, net, usb, desktops),
 -- found by scanning the primary screen's taskbar
 function T.pos(name)
