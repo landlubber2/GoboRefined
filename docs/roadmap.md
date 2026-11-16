@@ -353,3 +353,10 @@ brief moved to 0.8.6.
 3. Bluetooth "Visible to other devices" (Settings page + taskbar menu), automatic while the page is open, 3 minutes.
 4. Bluetooth sound: SBC 2.0 + PulseAudio 13.0's Bluetooth modules built for the stock PulseAudio; A2DP works
    between two virtual controllers. Headset microphone only HSP (no oFono). Plain-word connect errors untested.
+
+### 2026-11-16: 0.8.5 confirmed on the laptop; 0.9.1 started
+
+The owner reports 0.8.5 "works excellently" on the ThinkPad (sound and Bluetooth). The repository is pushed
+to GitHub by the owner (`origin`, in sync at c9d8950). Worker started for
+`docs/briefs/0.9.1-accounts-security.md` with the default answers; base snapshots `iso-0.8.5-updated-efi`
+and `repo-build-proof-3`.
