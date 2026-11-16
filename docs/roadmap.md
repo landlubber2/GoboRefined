@@ -332,3 +332,13 @@ What 0.8.4 found missing on the image (not fixed there):
 - BlueZ 5.54 (2020): its host-name plugin needs systemd-hostnamed (absent), so the name is written into
   main.conf at every start; works for pairing with the new agent;
 - Xorg DDX drivers from 2019 (intel 2.99.917, amdgpu/ati 19.1.0) — now bypassed with modesetting for Intel/AMD;
+
+### 0.8.5 — decided 2026-11-16 (laptop test of 0.8.4)
+
+Confirmed on the laptop with 0.8.4: graphics fine; the sound card now exists (firmware fix worked);
+Bluetooth pairing works once the adapter is discoverable.
+Still wrong: PulseAudio keeps the sound card on profile "off" (`pactl set-card-profile 0 HiFi` fixes it by
+hand); no "visible to other devices" switch; a Bluetooth speaker cannot connect (no Bluetooth audio).
+Brief: `docs/briefs/0.8.5-sound-bluetooth.md` (automatic profile choice + a device/mode menu in Settings →
+Sound, discoverable switch, Bluetooth audio folded in from the former 0.9.2 brief). The "unknown hardware"
+brief moved to 0.8.6.

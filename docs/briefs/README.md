@@ -32,9 +32,9 @@ The session should then launch one background worker whose whole prompt is:
 
 | File | Result | Depends on |
 |---|---|---|
-| `0.8.5-unknown-hardware.md` | safe mode that starts a desktop; hardware check in Settings | 0.8.4 |
+| `0.8.5-sound-bluetooth.md` | laptop sound profile, Bluetooth visibility, Bluetooth sound | 0.8.4 (started 2026-11-16) |
+| `0.8.6-unknown-hardware.md` | safe mode that starts a desktop; hardware check in Settings | 0.8.5 |
 | `0.9.1-accounts-security.md` | "Simple" accounts for a child or grandparent, security hardening, current kernel and browser | 0.8.4 (0.8.5 if done) |
-| `0.9.2-bluetooth-audio.md` | Bluetooth speakers and headphones play sound | 0.8.4 confirmed on the laptop |
 | `0.9.5-apps.md` | code editor, Conda prompt, picture and video programs, small utilities | 0.9.1 |
 | `publish-prep.md` | everything ready for publishing, nothing published | any release |
 | `upstream-bugs-recheck.md` | bug report drafts re-checked against upstream, ready for the owner to post | none; mostly no VM |
