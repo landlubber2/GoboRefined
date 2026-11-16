@@ -36,5 +36,6 @@ The session should then launch one background worker whose whole prompt is:
 | `0.8.6-unknown-hardware.md` | safe mode that starts a desktop; hardware check in Settings | 0.8.5 |
 | `0.9.1-accounts-security.md` | "Simple" accounts for a child or grandparent, security hardening, current kernel and browser | 0.8.4 (0.8.5 if done) |
 | `0.9.5-apps.md` | code editor, Conda prompt, picture and video programs, small utilities | 0.9.1 |
+| `0.9.8-device-manager.md` | Device Manager: devices by category, driver state, "find a driver" suggestions | 0.8.6 (hardware check) preferably |
 | `publish-prep.md` | everything ready for publishing, nothing published | any release |
 | `upstream-bugs-recheck.md` | bug report drafts re-checked against upstream, ready for the owner to post | none; mostly no VM |
