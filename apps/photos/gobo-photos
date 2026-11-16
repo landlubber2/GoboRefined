@@ -1,0 +1,17 @@
+#!/bin/sh
+# Photos for GoboRefined: pictures and videos in one simple window.  gobo-photos [FILE]
+export NO_AT_BRIDGE=1
+# At the first start: become this person's program for pictures and videos in the file manager,
+# but only for the kinds of files that have no program yet (never overriding a choice).
+mark="${XDG_CONFIG_HOME:-$HOME/.config}/gobo-photos.registered"
+if [ -n "$HOME" ] && [ ! -e "$mark" ] && command -v gio > /dev/null 2>&1
+then
+   mkdir -p "${mark%/*}" && : > "$mark"
+   (
+      for t in $(sed -n 's/^MimeType=//p' /Programs/Photos/Current/share/applications/gobo-photos.desktop | tr ';' ' ')
+      do
+         gio mime "$t" 2> /dev/null | grep -q '^Default application' || gio mime "$t" gobo-photos.desktop > /dev/null 2>&1
+      done
+   ) &
+fi
+exec lua /Programs/Photos/Current/share/gobo-photos/photos.lua "$@"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Photos
+GenericName=Picture and video viewer
+Comment=Look at pictures and play videos
+Icon=image-viewer
+Exec=gobo-photos %f
+Terminal=false
+Categories=Graphics;Viewer;AudioVideo;Player;
+Keywords=photo;picture;image;video;movie;jpg;png;mp4;
+MimeType=image/jpeg;image/png;image/gif;image/bmp;image/tiff;image/svg+xml;image/x-icon;video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/x-ms-wmv;video/x-flv;video/3gpp;video/ogg;video/mp2t;
