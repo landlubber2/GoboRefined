@@ -4,6 +4,8 @@
 --   * the icon shows while the computer has a Bluetooth adapter (also one plugged in later);
 --   * the menu: Bluetooth on/off, the paired devices (click: connect / disconnect),
 --     "Bluetooth settings..." (Settings > Bluetooth: search, pair, forget).
+--   * 0.8.5: "Visible to other devices": discoverable for 3 minutes (BlueZ DiscoverableTimeout,
+--     then hidden again by BlueZ), so a phone can find and pair with this computer.
 -- Pairing questions are answered in the dialogs of the session's agent (gobo-bt-agent).
 local awful = require("awful")
 local wibox = require("wibox")
@@ -32,6 +34,7 @@ local function parse(out)
    local st = { daemon = not out:match("NODAEMON"), devices = {} }
    st.controller = out:match("Controller %x%x:") ~= nil
    st.powered = out:match("Powered: yes") ~= nil
+   st.discoverable = out:match("Discoverable: yes") ~= nil
    for piece in (out:match("==DEVICES(.*)$") or ""):gmatch("==DEV ([^=]*)") do
       local mac = piece:match("^(%S+)")
       local info = "\n" .. piece
@@ -104,6 +107,17 @@ function bluetooth.new(args)
          table.insert(items, { "Bluetooth is on: switch off", function()
             run({ "timeout", "10", "bluetoothctl", "power", "off" }, nil, "Could not switch Bluetooth off.")
          end })
+         if state.discoverable then
+            table.insert(items, { "Visible to other devices: hide now", function()
+               run({ "timeout", "10", "bluetoothctl", "discoverable", "off" }, "Hidden from other devices.",
+                   "Could not hide this computer.")
+            end })
+         else
+            table.insert(items, { "Make visible to other devices (3 min)", function()
+               run({ "sh", "-c", "timeout 10 bluetoothctl discoverable-timeout 180 > /dev/null && timeout 10 bluetoothctl discoverable on" },
+                   "Visible to other devices for 3 minutes: pair from the phone now.", "Could not make this computer visible.")
+            end })
+         end
          for _, d in ipairs(state.devices) do
             if d.connected then
                table.insert(items, { "Disconnect " .. d.name, function()
@@ -136,7 +150,8 @@ function bluetooth.new(args)
       if not state.daemon then return "Bluetooth" end
       local n = 0
       for _, d in ipairs(state.devices) do if d.connected then n = n + 1 end end
-      return "Bluetooth: " .. (state.powered and "on" or "off") .. (n > 0 and (", " .. n .. " connected") or "")
+      return "Bluetooth: " .. (state.powered and "on" or "off") .. (state.powered and state.discoverable and ", visible" or "")
+         .. (n > 0 and (", " .. n .. " connected") or "")
    end })
 
    gears.timer({ timeout = 5, autostart = true, call_now = true, callback = function() refresh() end })

@@ -10,4 +10,6 @@ pkill -u "$USER" -x xsecurelock
 pkill -u "$USER" -x devmon
 # Bluetooth pairing agent (0.8.4, from ~/.xinitrc) and its bluetoothctl
 pkill -u "$USER" -f "[g]obo-settings/bt-agent.lua"
+# Sound card watcher (0.8.5, from ~/.xinitrc): its "pactl subscribe" would keep PulseAudio running
+pkill -u "$USER" -f "[g]obo-settings/sound-profile.lua"
 exit 0

@@ -1,0 +1,28 @@
+Card #3
+	Name: alsa_card.usb-Generic_USB_Audio-00
+	Driver: module-alsa-card.c
+	Owner Module: 25
+	Properties:
+		device.description = "USB Audio"
+	Profiles:
+		output:analog-stereo+input:mono-fallback: Analog Stereo Output + Mono Input (sinks: 1, sources: 1, priority: 6501, available: no)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 6500, available: yes)
+		input:mono-fallback: Mono Input (sinks: 0, sources: 1, priority: 1, available: no)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: off
+	Ports:
+		analog-output: Analog Output (priority: 9900, latency offset: 0 usec)
+			Part of profile(s): output:analog-stereo+input:mono-fallback, output:analog-stereo
+Card #4
+	Name: bluez_card.00_11_22_33_44_55
+	Driver: module-bluez5-device.c
+	Owner Module: 30
+	Properties:
+		device.description = "Test Speaker"
+	Profiles:
+		a2dp_sink: High Fidelity Playback (A2DP Sink) (sinks: 1, sources: 0, priority: 10, available: yes)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: off
+	Ports:
+		speaker-output: Speaker (priority: 0, latency offset: 0 usec)
+			Part of profile(s): a2dp_sink

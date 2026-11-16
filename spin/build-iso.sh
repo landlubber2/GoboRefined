@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.8.4]
+#   VERSION        [0.8.5]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.8.4}
+VERSION=${VERSION:-0.8.5}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -59,7 +59,7 @@ cp -r "$REPO/spin/ab" ab
 cp -r "$REPO/spin/firmware" firmware
 cp -r "$REPO/spin/settings" settings
 bash -n gobo-install
-bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent
+bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent && sh -n settings/gobo-sound-profile
 for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
@@ -72,7 +72,7 @@ grep -q "PRIVATE KEY" "$PUBKEY" && { echo "$PUBKEY holds a private key"; exit 1;
 
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
-       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq Linux-Firmware SOF-Firmware"
+       Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq Linux-Firmware SOF-Firmware SBC"   # 0.8.5: + SBC (Bluetooth audio codec)
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 KREL=6.12.16-Gobo
@@ -92,6 +92,26 @@ do
       d=${d%/}
       case "$(basename "$d")" in "$cur"|Settings|Current) ;; *) echo "dropping stock $prog $(basename "$d")"; rm -rf "$d" ;; esac
    done
+done
+# 0.8.5: Bluetooth audio. PulseAudio 13.0's Bluetooth modules (build step pulseaudio-bluetooth) go
+# next to the stock modules; default.pa (both copies: ProfileInstall installs the Defaults one)
+# loads module-bluetooth-policy and module-bluetooth-discover (spin/ab/pulse-bluetooth.pa)
+PAMOD=$R/Programs/PulseAudio/13.0/lib/pulse-13.0/modules
+[ -d "$PAMOD" ] || { echo "no stock PulseAudio 13.0 modules folder"; exit 1; }
+for f in libbluez5-util module-bluez5-discover module-bluez5-device module-bluetooth-discover module-bluetooth-policy
+do
+   src="$PROGRAMS_FROM/Programs/PulseAudio-Bluetooth/13.0/lib/pulse-13.0/modules/$f.so"
+   [ -f "$src" ] || { echo "PulseAudio Bluetooth module $f not built"; exit 1; }
+   install -m 755 "$src" $PAMOD/
+done
+for pa in $R/Programs/PulseAudio/Settings/pulse/default.pa $R/Programs/PulseAudio/13.0/Resources/Defaults/Settings/pulse/default.pa
+do
+   [ -f $pa ] || { echo "missing $pa"; exit 1; }
+   grep -q 'module-bluetooth-discover' $pa && continue
+   awk -v ins="$REPO/spin/ab/pulse-bluetooth.pa" '/^### Automatically connect sink and source if JACK server is present/ && !done { while ((getline l < ins) > 0) print l; done = 1 } { print } END { if (!done) exit 1 }' $pa > $pa.new ||
+      { echo "default.pa: JACK block not found in $pa"; exit 1; }
+   mv $pa.new $pa
+   grep -q '^load-module module-bluetooth-discover' $pa || { echo "default.pa not changed: $pa"; exit 1; }
 done
 # Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm in the
 # checkout, so a theme change does not depend on the copy built into /Programs/LXDM.
@@ -131,9 +151,9 @@ install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $R/System/Se
 mkdir -p $P/1.0/lib/firmware
 install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
 # 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
-install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent $P/1.0/bin/
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile $P/1.0/bin/
 mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
-install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent
+install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher
 install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/
 install -m 644 settings/gobo-settings.desktop $P/1.0/share/applications/
 mkdir -p $P/1.0/share/doc
@@ -161,6 +181,10 @@ chroot $R test -e /System/Index/lib/firmware/regulatory.db.p7s || { echo "regula
 # 0.8.2: the hotspot (Settings > Hotspot) needs dnsmasq; Bluetooth uses the stock BlueZ 5.54
 chroot $R sh -c "command -v dnsmasq" > /dev/null || { echo "dnsmasq not linked"; exit 1; }
 chroot $R test -e /System/Index/bin/bluetoothctl || { echo "bluetoothctl missing"; exit 1; }
+# 0.8.5: Bluetooth audio pieces reachable where PulseAudio looks
+chroot $R test -e /usr/lib/pulse-13.0/modules/module-bluez5-device.so || { echo "PulseAudio Bluetooth modules not reachable"; exit 1; }
+chroot $R sh -c "ldd /usr/lib/pulse-13.0/modules/module-bluez5-device.so /usr/lib/pulse-13.0/modules/libbluez5-util.so | grep -q 'not found'" &&
+   { echo "PulseAudio Bluetooth modules: a library is missing"; exit 1; }
 # 0.8.4: Intel SOF firmware reachable where the kernel looks (/lib/firmware/intel/...)
 for f in sof/sof-tgl.ri sof-tplg/sof-hda-generic-2ch.tplg sof-ipc4/tgl/sof-tgl.ri sof-ipc4-tplg sof-ace-tplg
 do chroot $R test -e /lib/firmware/intel/$f || { echo "SOF firmware: /lib/firmware/intel/$f missing"; exit 1; }

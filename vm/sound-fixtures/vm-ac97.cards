@@ -1,0 +1,46 @@
+Card #0
+	Name: alsa_card.pci-0000_00_05.0
+	Driver: module-alsa-card.c
+	Owner Module: 6
+	Properties:
+		alsa.card = "0"
+		alsa.card_name = "Intel 82801AA-ICH"
+		alsa.long_card_name = "Intel 82801AA-ICH with STAC9700,83,84 at irq 21"
+		alsa.driver_name = "snd_intel8x0"
+		device.bus_path = "pci-0000:00:05.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:05.0/sound/card0"
+		device.bus = "pci"
+		device.vendor.id = "8086"
+		device.vendor.name = "Intel Corporation"
+		device.product.id = "2415"
+		device.product.name = "82801AA AC'97 Audio Controller"
+		device.form_factor = "internal"
+		device.string = "0"
+		device.description = "Built-in Audio"
+		module-udev-detect.discovered = "1"
+		device.icon_name = "audio-card-pci"
+	Profiles:
+		input:analog-stereo: Analog Stereo Input (sinks: 0, sources: 1, priority: 65, available: yes)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 6500, available: yes)
+		output:analog-stereo+input:analog-stereo: Analog Stereo Duplex (sinks: 1, sources: 1, priority: 6565, available: yes)
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+	Active Profile: output:analog-stereo+input:analog-stereo
+	Ports:
+		analog-input-mic;input-microphone-1: Microphone / Microphone 1 (priority: 8720, latency offset: 0 usec)
+			Properties:
+				device.icon_name = "audio-input-microphone"
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-input-mic;input-microphone-2: Microphone / Microphone 2 (priority: 8719, latency offset: 0 usec)
+			Properties:
+				device.icon_name = "audio-input-microphone"
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-input-linein: Line In (priority: 8100, latency offset: 0 usec)
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-input-aux: Analog Input (priority: 8000, latency offset: 0 usec)
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-input-video: Video (priority: 7000, latency offset: 0 usec)
+			Part of profile(s): input:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-output;output-amplifier-on: Analog Output / Amplifier (priority: 9910, latency offset: 0 usec)
+			Part of profile(s): output:analog-stereo, output:analog-stereo+input:analog-stereo
+		analog-output;output-amplifier-off: Analog Output / No Amplifier (priority: 9900, latency offset: 0 usec)
+			Part of profile(s): output:analog-stereo, output:analog-stereo+input:analog-stereo

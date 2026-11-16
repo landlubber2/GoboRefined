@@ -96,7 +96,8 @@ Every file is listed in **`build/sources.manifest`** with version, URL, sha256 a
 stock ISO, GNU xorriso (only to write the ISO; not in the image), xrandr, Inter, JetBrains Mono,
 Papirus icons, Menu-Cache, LibFM, PCManFM, PaVuControl, LxRandr, LXDM, Udevil, USB-ModeSwitch, the
 RTL8852AU Wi-Fi driver, ONLYOFFICE Desktop Editors (official binary), CopyQ, L3afpad, dnsmasq, the
-linux-firmware collection (kernel.org) and Sound Open Firmware (sof-bin).
+linux-firmware collection (kernel.org), Sound Open Firmware (sof-bin), the SBC codec library and the
+PulseAudio 13.0 source (only its Bluetooth modules are built and added to the stock PulseAudio).
 A file whose sha256 differs is refused. Patches we apply are in `spin/patches/`; licences and
 redistribution notes are in `docs/third-party.md`.
 

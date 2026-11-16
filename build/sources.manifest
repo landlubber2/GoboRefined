@@ -36,6 +36,8 @@ l3afpad         0.8.18.1.11   l3afpad-0.8.18.1.11.tar.gz                   86f37
 dnsmasq         2.91          dnsmasq-2.91.tar.xz                          f622682848b33677adb2b6ad08264618a2ae0a01da486a93fd8cd91186b3d153  GPL-2.0-or-GPL-3.0   https://thekelleys.org.uk/dnsmasq/dnsmasq-2.91.tar.xz
 linux-firmware  20261019      linux-firmware-20261019.tar.xz               a10d1ab5baf2c74ba92e8c7cf313e691696c26bddfa6df00db795e48d70cd4ca  LicenseRef-linux-firmware  https://mirrors.edge.kernel.org/pub/linux/kernel/firmware/linux-firmware-20261019.tar.xz
 sof-firmware    2026.09.2     sof-bin-2026.09.2.tar.gz                     5f7bc30b2b5c1e6b0da55a33fc44e2b7f56ae9b06952edcde614f51ef6b943e1  BSD-3-Clause         https://github.com/thesofproject/sof-bin/releases/download/v2026.09.2/sof-bin-2026.09.2.tar.gz
+sbc             2.0           sbc-2.0.tar.xz                               8f12368e1dbbf55e14536520473cfb338c84b392939cc9b64298360fd4a07992  LGPL-2.1-or-later    https://mirrors.edge.kernel.org/pub/linux/bluetooth/sbc-2.0.tar.xz
+pulseaudio-bluetooth 13.0     pulseaudio-13.0.tar.xz                       961b23ca1acfd28f2bc87414c27bb40e12436efcf2158d29721b1e89f3f28057  LGPL-2.1-or-later    https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-13.0.tar.xz
 
 # Not downloaded by the build (already in the repository, listed for completeness):
 #   wireless-regdb 2026.09.03  spin/firmware/wireless-regdb/  ISC

@@ -17,6 +17,9 @@ xsetroot -solid '#0b1630' -cursor_name left_ptr
 
 # Launch PulseAudio daemon
 [ -e /bin/pulseaudio ] && /bin/pulseaudio --start
+# 0.8.5: a sound card PulseAudio leaves on profile "off" (Intel SOF laptops) is switched on;
+# cards the user set in Settings > Sound are left alone; Bluetooth speakers become the output
+[ -x /System/Index/bin/gobo-sound-profile ] && gobo-sound-profile > /dev/null 2>&1 &
 
 # Extend the desktop across every connected display
 sh ~/.config/awesome/displays.sh

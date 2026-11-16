@@ -1,0 +1,11 @@
+### GoboRefined 0.8.5: Bluetooth audio (the Bluetooth modules built for this PulseAudio 13.0).
+### policy: switches a headset between music (A2DP) and calls (HSP) as programs need it;
+### discover: finds Bluetooth speakers and headphones through BlueZ.
+.ifexists module-bluetooth-policy.so
+load-module module-bluetooth-policy
+.endif
+
+.ifexists module-bluetooth-discover.so
+load-module module-bluetooth-discover
+.endif
+

@@ -1,3 +1,56 @@
+# GoboRefined 0.8.5 — laptop sound switched on, Bluetooth visibility, Bluetooth speakers and headphones
+
+GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).
+
+| File | Size | sha256 |
+|---|---|---|
+| `GoboRefined-0.8.5.update` | 2,683,908,096 bytes (2.7 GB) | `7b221b273700f7eeff508f3ed6d9b18ac889d11266510fe87cd0ce1ec37c4039` |
+| `GoboRefined-0.8.5.iso` | 2,816,999,424 bytes (2.8 GB) | `e48b5d8fc6a75f20ffaf9897b437340e45754a2253cafce90fefb7c12b2d93c4` |
+
+## How to update (from 0.8.4, 0.8.3, 0.8.2 or 0.8.1)
+
+Copy `GoboRefined-0.8.5.update` onto the PC, then **Settings > Updates > Install update from file...** (or in a
+terminal `sudo gobo-update /path/to/GoboRefined-0.8.5.update`) and restart. Going back:
+`sudo gobo-update --rollback`. Files, accounts, light/dark and the wallpaper stay.
+
+## What is new
+
+- **Sound plays after login without a command.** On the ThinkPad, PulseAudio left the sound card switched "off"
+  (only "Dummy Output"). A small helper now switches any card left "off" to its best mode and makes it the output,
+  for every card name, also cards plugged in later. Machines where sound already works are not touched, and a
+  card you set yourself (see below) is left as you set it. Cause, for the record: PulseAudio 13 ties the laptop's
+  built-in digital microphone to the headset jack, so with nothing plugged in it thinks the "HiFi" mode is unusable.
+- **Settings > Sound** has real content now: the output (speakers, headphones, HDMI, Bluetooth; click to switch,
+  what is playing moves along), the microphone, and per sound card a **Mode** chooser listing all its modes
+  ("(not detected)" only means PulseAudio could not check it; such a mode often works). The full sound control is
+  still one button away.
+- **Taskbar speaker icon: right click** lists the outputs to switch between, plus Mute and "Sound settings...".
+- **Bluetooth: "Visible to other devices"** switch in Settings > Bluetooth and in the taskbar Bluetooth menu. The
+  computer is visible automatically while Settings > Bluetooth is open and for 3 minutes after "Search for
+  devices"; it hides again by itself 3 minutes later.
+- **Bluetooth speakers and headphones play sound** (new, experimental): pair, then Connect. A connected speaker
+  becomes the output at once ("Connected — playing sound here"); when it disconnects, sound returns to the
+  speakers. Headset microphones only in the old "headset" mode (HSP); hands-free calls in better quality are not
+  supported.
+
+## Please check on the laptop
+
+1. **Sound after login:** log in and play something; no `pactl` command needed. Settings > Sound shows the
+   built-in speakers as the output and "Built-in Audio" with Mode "Play HiFi quality Music (not detected)".
+2. **Headphones:** plug them in: sound should move to them; unplug: back to the speakers.
+3. **Microphone:** Settings > Sound > Input: record something (e.g. a voice recorder website) with the built-in
+   microphone.
+4. **Mode chooser:** set the card to "Off" and back to the HiFi mode; after "Off" and a new login it should stay
+   off (your choice is kept).
+5. **Phone pairing:** open Settings > Bluetooth (the "Visible to other devices" switch is on), find the laptop on
+   the phone and pair: the number dialog appears on the laptop.
+6. **Bluetooth speaker or headphones:** pair, press Connect, play something: sound comes from the speaker and the
+   page says "Connected — playing sound here". Switch the speaker off: sound returns to the laptop speakers.
+7. **If Bluetooth sound fails**, run these in a terminal and send the output (and the file `gobo-report` writes):
+   `pactl list short modules | grep -i blue`, `pactl list short sinks`, `bluetoothctl info <address>` (the address
+   is shown in Settings > Bluetooth), `gobo-report`. Also helpful: `cat ~/.cache/gobo-sound-profile.log`.
+
+
 # GoboRefined 0.8.4 — laptop sound firmware, Bluetooth pairing, newer firmware for all hardware
 
 GoboRefined is an **unofficial** spin of GoboLinux 017.01 (not made by the GoboLinux developers).

@@ -1,0 +1,11 @@
+#!/bin/sh
+# gobo-sound-profile — switches on sound cards PulseAudio left "off" (GoboRefined 0.8.5).
+# Started by ~/.xinitrc after PulseAudio; one per user (a second start exits at once). See
+# /Programs/GoboSpin/Current/share/gobo-settings/sound-profile.lua for the rule and the options
+# (--once, --dry-run). Log: ~/.cache/gobo-sound-profile.log
+[ -n "${HOME:-}" ] && [ -d "$HOME" ] || exit 1
+mkdir -p "$HOME/.cache" || exit 1
+case "${1:-}" in
+   "") exec flock -n "$HOME/.cache/gobo-sound-profile.lock" lua /Programs/GoboSpin/Current/share/gobo-settings/sound-profile.lua ;;
+   *)  exec lua /Programs/GoboSpin/Current/share/gobo-settings/sound-profile.lua "$@" ;;
+esac

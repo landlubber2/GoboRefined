@@ -38,7 +38,8 @@ STOCK_VERSION=017.01
 STOCK_ISO_SIZE=2433744896          # bytes of GoboLinux-017.01-x86_64.iso
 KREL=6.12.16-Gobo
 STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
-       lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware"
+       lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
+       sbc pulseaudio-bluetooth"
 
 say() { echo "== $*"; }
 die() { echo "build.sh: ERROR: $*" >&2; exit 1; }
@@ -368,7 +369,7 @@ build_image() {
    [[ "$v" =~ ^[0-9A-Za-z.-]+$ ]] || die "bad VERSION '$v'"
    say "image GoboRefined $v (spin/build-iso.sh)"
    mount_buildroot
-   [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] && [ -e "$STATE/step-sof-firmware.done" ] ||
+   [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] && [ -e "$STATE/step-pulseaudio-bluetooth.done" ] ||
       die "the programs are not built yet (run: build.sh programs)"
    # a fresh copy-on-write layer over the stock image every time
    mountpoint -q "$IMG/rootfs" && umount -R "$IMG/rootfs"

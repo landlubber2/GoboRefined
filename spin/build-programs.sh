@@ -492,6 +492,54 @@ sof-firmware)
       "BSD-3-Clause (Intel/NXP firmware release licence, see share/doc/sof-firmware)" "https://github.com/thesofproject/sof-bin"
    du -sh $P
    ;;
+sbc)
+   # 0.8.5: the SBC codec library (Bluetooth A2DP audio), needed by PulseAudio's Bluetooth modules.
+   # (Steps added in 0.8.5, after sof-firmware: sbc pulseaudio-bluetooth; the list in the header
+   # is left as it was because the header is part of every step's hash in build/build.sh.)
+   unpack sbc-2.0.tar.xz
+   gobo_configure SBC 2.0 --disable-tester
+   finish SBC 2.0 "SBC (Bluetooth low-complexity subband codec) library."
+   ;;
+pulseaudio-bluetooth)
+   # 0.8.5: the Bluetooth modules of PulseAudio 13.0. The stock PulseAudio 13.0 (UseFlags "bluez")
+   # was built without them because the SBC library was missing. Same version and the same layout
+   # as the stock program (prefix /usr = /System/Index, modules in /usr/lib/pulse-13.0/modules,
+   # the same RPATH); only the Bluetooth modules are built and kept. They go into
+   # /Programs/PulseAudio-Bluetooth/13.0 (not linked with SymlinkProgram: /System/Index/lib/pulse-13.0
+   # is a link to the stock program); build-iso.sh copies them next to the stock modules.
+   unpack pulseaudio-13.0.tar.xz
+   CFLAGS="$CF" ./configure --prefix=/usr --sysconfdir=/System/Settings --localstatedir=/Data/Variable \
+      --enable-bluez5 --enable-bluez5-native-headset --disable-bluez5-ofono-headset > $WORK/pa-configure.out
+   grep -E 'Enable BlueZ 5|native headset|Enable D-Bus' $WORK/pa-configure.out
+   grep -q 'Enable BlueZ 5: *yes' $WORK/pa-configure.out || { echo "configure did not enable BlueZ 5"; exit 1; }
+   BT="libbluez5-util.la module-bluez5-discover.la module-bluez5-device.la module-bluetooth-discover.la module-bluetooth-policy.la"
+   # (the ORC header is a generated source; make builds it only for "all", so first)
+   make -C src pulsecore/svolume-orc-gen.h
+   make -C src -j2 $BT
+   D=$WORK/pa-dest P=/Programs/PulseAudio-Bluetooth/13.0
+   rm -rf $D $P
+   make -C src install-modlibexecLTLIBRARIES DESTDIR=$D modlibexec_LTLIBRARIES="$BT"
+   mkdir -p $P/lib/pulse-13.0/modules $P/share/doc/pulseaudio-bluetooth
+   for m in $BT
+   do
+      f=$D/usr/lib/pulse-13.0/modules/${m%.la}.so
+      [ -f $f ] || { echo "missing $f"; exit 1; }
+      install -m 755 $f $P/lib/pulse-13.0/modules/
+   done
+   # the stock modules' search path (RPATH there; gcc 14's linker writes it as RUNPATH):
+   # libbluez5-util.so is found next to the modules; libsbc linked
+   readelf -d $P/lib/pulse-13.0/modules/module-bluez5-device.so | grep -q 'path: \[/usr/lib/pulseaudio:/usr/lib/pulse-13.0/modules\]' ||
+      { echo "unexpected RPATH"; readelf -d $P/lib/pulse-13.0/modules/module-bluez5-device.so; exit 1; }
+   readelf -d $P/lib/pulse-13.0/modules/libbluez5-util.so | grep -q 'libsbc.so.1' || { echo "libbluez5-util without libsbc"; exit 1; }
+   install -m 644 LICENSE LGPL $P/share/doc/pulseaudio-bluetooth/
+   mkdir -p $P/Resources
+   echo x86_64 > $P/Resources/Architecture
+   printf 'PulseAudio 13.0\nSBC 2.0\n' > $P/Resources/Dependencies
+   printf '[Name] PulseAudio-Bluetooth\n[Summary] %s\n[License] LGPL-2.1-or-later\n[Homepage] https://www.freedesktop.org/wiki/Software/PulseAudio/\n' \
+      "Bluetooth modules (A2DP, HSP) of PulseAudio 13.0, built for the stock PulseAudio" > $P/Resources/Description
+   ln -sfn 13.0 /Programs/PulseAudio-Bluetooth/Current
+   ls -l $P/lib/pulse-13.0/modules
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"

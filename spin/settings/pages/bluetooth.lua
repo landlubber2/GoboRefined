@@ -8,18 +8,52 @@
 --   * the list itself comes from short runs (bluetoothctl show / devices / info MAC).
 -- Root (gobo-settings-helper, administrators): bluetooth-service start|stop (start also lifts an
 -- rfkill soft block), bluetooth-boot on|off (stay off after a restart).
--- Bluetooth audio is not on the image (PulseAudio 13 has no module-bluetooth here).
+-- 0.8.5: "Visible to other devices" (discoverable): on while this page is shown (renewed every
+-- 2.5 minutes) and for 3 minutes after "Search for devices"; BlueZ hides the computer again by
+-- itself 3 minutes later (DiscoverableTimeout 180), so it is never left visible. Switching it off
+-- here stops the automatic visibility until the page is opened again.
+-- 0.8.5: Bluetooth audio (PulseAudio 13.0's Bluetooth modules): speakers and headphones connect
+-- with "Connect"; a connected one shows whether sound plays there; BlueZ's error is said in plain words.
 local P = { id = "bluetooth", title = "Bluetooth", icon = "bluetooth" }
 
 local OFF_AT_BOOT = "/Data/Variable/lib/gobo-settings/bluetooth-off-at-boot"
 local MAC = "^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$"
+local VISIBLE_SECONDS = 180
+local AUDIO_MODULE = "/System/Index/lib/pulse-13.0/modules/module-bluez5-device.so"
+
+-- BlueZ's reasons ("Failed to connect: org.bluez.Error.Failed Host is down") in plain words
+local REASONS = {
+   { "Host is down", "the device did not answer. Is it switched on, nearby, and not connected to another phone or computer?" },
+   { "Page Timeout", "the device did not answer. Is it switched on and nearby?" },
+   { "Connection refused", "the device refused. Put it into pairing mode, or forget it here and pair it again." },
+   { "Protocol not available", "this computer has no sound service for the device (PulseAudio's Bluetooth support is not running: log out and in again)." },
+   { "profile%-unavailable", "this computer has no sound service for the device (PulseAudio's Bluetooth support is not running: log out and in again)." },
+   { "Input/output error", "the connection broke off. Try again closer to the device." },
+   { "Software caused connection abort", "the connection was dropped. Try again." },
+   { "Connection timed out", "the device did not answer in time. Try again." },
+   { "AuthenticationFailed", "pairing was refused (wrong code, or cancelled on the device)." },
+   { "AuthenticationCanceled", "pairing was cancelled." },
+   { "AuthenticationRejected", "the device rejected pairing." },
+   { "AlreadyExists", "it is already paired." },
+   { "InProgress", "it is busy (connecting or pairing already). Wait a moment." },
+   { "Blocked", "Bluetooth is blocked (rfkill): use the switch again, an administrator can lift the block" },
+   { "NotReady", "Bluetooth is off" },
+   { "DoesNotExist", "the device is not known any more. Search for it again." },
+}
+local function plain(why)
+   for _, r in ipairs(REASONS) do
+      if why:match(r[1]) then return r[2] end
+   end
+   return (why:gsub("^org%.bluez%.Error%.", ""))
+end
 
 function P.build(C)
    local Gtk, GLib, Gio = C.Gtk, C.GLib, C.Gio
    local outer, box = C.page("Bluetooth", "Connect mice, keyboards, phones and other devices without a cable.")
-   box:pack_start(C.text("Experimental: not yet tested on real hardware.", "dim-label"), false, false, 0)
+   box:pack_start(C.text("Experimental: pairing is confirmed on one laptop; sound over Bluetooth (new in 0.8.5) is not yet tested on real hardware.", "dim-label"), false, false, 0)
 
    local sw = Gtk.Switch { valign = Gtk.Align.CENTER }
+   local vis_sw = Gtk.Switch { valign = Gtk.Align.CENTER }
    local status = C.text("")
    local note = C.text("", "dim-label")
    local search_button, service_button
@@ -29,6 +63,11 @@ function P.build(C)
    local others_open = false
    local setting, searching = false, false
    local refresh, schedule_refresh
+   local audio_ok = C.exists(AUDIO_MODULE)
+   local default_sink
+   local audio_wait = 0
+   -- visibility: shown = this page is on screen; hidden_by_user = switched off here this visit
+   local shown, hidden_by_user, powered_now = false, false, false
 
    local function adapter_present()
       return C.pread("ls -1 /sys/class/bluetooth 2>/dev/null"):match("hci%d") ~= nil
@@ -75,10 +114,8 @@ function P.build(C)
       if pk then status.label = "Type " .. pk .. " on the device (keyboard: then press Enter)." return end
       local what, why = l:match("^Failed to (.-): (.*)$")
       if what then
-         local reason = why:gsub("^org%.bluez%.Error%.", "")
-         if reason == "Blocked" then reason = "Bluetooth is blocked (rfkill): use the switch again, an administrator can lift the block" end
-         if reason == "NotReady" then reason = "Bluetooth is off" end
-         status.label = "Could not " .. what .. ": " .. reason .. "."
+         local reason = plain(why)
+         status.label = "Could not " .. what .. ": " .. reason:gsub("%.$", "") .. "."
          if what:match("discovery") then searching = false end
          schedule_refresh()
       elseif l:match("Pairing successful") then status.label = "Paired." schedule_refresh()
@@ -119,9 +156,20 @@ function P.build(C)
       more()
    end
 
+   -- discoverable for VISIBLE_SECONDS (BlueZ switches it off by itself afterwards); sending it
+   -- again restarts the time
+   local last_visible = 0
+   local function make_visible()
+      start_ctl()
+      last_visible = os.time()
+      send("discoverable-timeout " .. VISIBLE_SECONDS)
+      send("discoverable on")
+   end
+
    -- state from short runs ------------------------------------------------------------
    local QUERY = [[t() { timeout 6 bluetoothctl "$@" 2>/dev/null; }
-t show; echo "==DEVICES"
+t show; echo "==PULSE"; LC_ALL=C timeout 4 pactl info 2>/dev/null | grep '^Default Sink'
+LC_ALL=C timeout 4 pactl list short sinks 2>/dev/null | cut -f2 | sed 's/^/SINK /'; echo "==DEVICES"
 for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -u); do echo "==DEV $m"; t info "$m"; done]]
 
    local function device_row(d)
@@ -129,7 +177,14 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
       row:pack_start(Gtk.Image { icon_name = (d.icon ~= "" and d.icon) or "bluetooth", pixel_size = 24 }, false, false, 0)
       local label = Gtk.Box { orientation = Gtk.Orientation.VERTICAL }
       label:pack_start(C.text(d.name, "gobo-value"), false, false, 0)
-      label:pack_start(C.text((d.connected and "Connected" or d.paired and "Paired, not connected" or "Not paired") .. "   " .. d.mac, "dim-label"), false, false, 0)
+      local state = d.connected and "Connected" or d.paired and "Paired, not connected" or "Not paired"
+      if d.connected and d.audio and audio_ok then
+         -- PulseAudio names the device's output bluez_sink.<address with _>
+         if d.sink and d.sink == default_sink then state = "Connected — playing sound here"
+         elseif d.sink then state = "Connected — sound output ready (choose it in Settings > Sound)"
+         else state = "Connected — no sound output yet (connecting the audio part...)" end
+      end
+      label:pack_start(C.text(state .. "   " .. d.mac, "dim-label"), false, false, 0)
       row:pack_start(label, true, true, 0)
       local function act(text, cmds)
          return C.button(text, function()
@@ -159,6 +214,11 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
    local function show_state(out)
       local powered = out:match("Powered: yes") ~= nil
       local no_ctrl = out:match("No default controller") ~= nil or not out:match("Controller %x%x:")
+      local discoverable = out:match("Discoverable: yes") ~= nil
+      local pulse = out:match("==PULSE(.-)==DEVICES") or ""
+      default_sink = pulse:match("Default Sink: (%S+)")
+      local sinks = {}
+      for s in pulse:gmatch("SINK (%S+)") do sinks[s] = true end
       local devices = {}
       for piece in (out:match("==DEVICES(.*)$") or ""):gmatch("==DEV ([^=]*)") do
          local mac = piece:match("^(%S+)")
@@ -168,9 +228,17 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
             name = C.trim(name)
             -- 0.8.4: a device without a name has its address as alias ("39-C6-4E-7B-4D-AB")
             local nameless = not info:match("\n%s*Name: ") or name:upper():gsub("-", ":") == mac:upper()
+            local icon = C.trim(info:match("Icon: ([^\n]+)") or "")
+            -- an audio device: speaker/headphones (A2DP "Audio Sink", headset profiles) or its icon
+            local audio = info:match("UUID: Audio Sink") ~= nil or info:match("UUID: Headset") ~= nil
+               or info:match("UUID: Handsfree") ~= nil or icon:match("^audio") ~= nil
+            local sink
+            for s in pairs(sinks) do
+               if s:match("^bluez_sink%.") and s:upper():find(mac:upper():gsub(":", "_"), 1, true) then sink = s end
+            end
             table.insert(devices, { mac = mac, name = name, paired = info:match("Paired: yes") ~= nil,
-               connected = info:match("Connected: yes") ~= nil, icon = C.trim(info:match("Icon: ([^\n]+)") or ""),
-               nameless = nameless })
+               connected = info:match("Connected: yes") ~= nil, icon = icon,
+               nameless = nameless, audio = audio, sink = sink })
          end
       end
       table.sort(devices, function(a, b)
@@ -184,6 +252,15 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
       sw.state = sw.active
       setting = false
       sw.sensitive = true
+      powered_now = powered and not no_ctrl
+      setting = true
+      vis_sw.active = discoverable and powered_now
+      vis_sw.state = vis_sw.active
+      setting = false
+      vis_sw.sensitive = powered_now
+      if powered_now and shown and not hidden_by_user and not discoverable and os.time() - last_visible > 20 then
+         make_visible()
+      end
       search_button.sensitive = powered
       search_button.label = searching and "Stop searching" or "Search for devices"
       C.clear(list)
@@ -220,6 +297,18 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
          end
       end
       list:show_all()
+      -- PulseAudio makes the device's output a moment after BlueZ reports "Connected": look
+      -- again a few times (at most 10, every 2 s) until it is there
+      local waiting = false
+      for _, d in ipairs(devices) do
+         if d.connected and d.audio and audio_ok and not d.sink then waiting = true end
+      end
+      if waiting and audio_wait < 10 then
+         audio_wait = audio_wait + 1
+         GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, function() schedule_refresh(); return false end)
+      elseif not waiting then
+         audio_wait = 0
+      end
    end
 
    local refreshing, again = false, false
@@ -243,7 +332,9 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
          return
       end
       service_button.visible = false
-      note.label = "When a device asks for a code or a confirmation, a \"Bluetooth pairing\" window appears; pairing can also be started on the phone. Paired devices are trusted and may reconnect by themselves.\n\nHeadphones and speakers can be paired, but sound over Bluetooth is not available yet (PulseAudio's Bluetooth module is not on the system)."
+      note.label = "When a device asks for a code or a confirmation, a \"Bluetooth pairing\" window appears; pairing can also be started on the phone while this computer is visible. Paired devices are trusted and may reconnect by themselves.\n\n"
+         .. (audio_ok and "Speakers and headphones: pair, then Connect; sound then plays there and returns to this computer's speakers when they disconnect (Settings > Sound chooses the output). Headset microphones work only in the old \"headset\" mode (HSP), not for calls in high quality."
+             or "Headphones and speakers can be paired, but sound over Bluetooth is not available (PulseAudio's Bluetooth module is not on the system).")
       start_ctl()
       refreshing = true
       C.run({ "sh", "-c", QUERY }, "", function(_, out)
@@ -276,12 +367,38 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
       return true
    end
 
+   vis_sw.on_state_set = function(_, want)
+      if setting then return false end
+      start_ctl()
+      if want then
+         hidden_by_user = false
+         make_visible()
+      else
+         hidden_by_user = true
+         send("discoverable off")
+      end
+      schedule_refresh()
+      return true
+   end
+   -- while the page is on screen: visible, renewed before BlueZ's 3 minutes run out
+   outer.on_map = function()
+      shown, hidden_by_user = true, false
+      if powered_now then make_visible() end
+      schedule_refresh()
+   end
+   outer.on_unmap = function() shown = false end
+   GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 150, function()
+      if shown and powered_now and not hidden_by_user then make_visible() end
+      return true
+   end)
+
    search_button = C.button("Search for devices", function()
       start_ctl()
       if searching then
          send("scan off"); searching = false
       else
          searching = true
+         if not hidden_by_user then make_visible() end
          status.label = "Searching... (devices must be in pairing mode)"
          send("scan on")
          GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 40, function()
@@ -310,6 +427,11 @@ for m in $(t devices | grep -o 'Device [0-9A-F:]\{17\}' | cut -d' ' -f2 | sort -
    line:pack_start(sw, false, false, 0)
    line:pack_start(Gtk.Label { label = "Bluetooth", xalign = 0 }, false, false, 0)
    box:pack_start(line, false, false, 0)
+   local vis_line = Gtk.Box { orientation = Gtk.Orientation.HORIZONTAL, spacing = 12 }
+   vis_line:pack_start(vis_sw, false, false, 0)
+   vis_line:pack_start(Gtk.Label { label = "Visible to other devices", xalign = 0 }, false, false, 0)
+   vis_line:pack_start(C.text("(phones can find this computer; on while this page is open and for 3 minutes after a search)", "dim-label"), false, false, 0)
+   box:pack_start(vis_line, false, false, 0)
    box:pack_start(status, false, false, 0)
    box:pack_start(name_label, false, false, 0)
    box:pack_start(C.row(search_button, service_button, C.button("Refresh", function() refresh() end)), false, false, 0)

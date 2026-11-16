@@ -176,12 +176,35 @@ function status.volume(mixer)
       refresh("pactl set-sink-mute " .. state.sink .. " " .. (state.mute and "no" or "yes"))
    end
 
+   -- 0.8.5: right click = a menu of the outputs (speakers, headphones, HDMI, Bluetooth) to switch
+   -- between (what is playing moves along), mute, and Settings > Sound
+   local menu
+   local function output_menu()
+      if menu and menu.wibox.visible then menu:hide() menu = nil return end
+      local text = pread("LC_ALL=C pactl info 2>/dev/null; LC_ALL=C pactl list sinks 2>/dev/null")
+      local default = text:match("Default Sink: (%S+)")
+      local items = {}
+      for name, desc in text:gmatch("\n\tName: (%S+)\n\tDescription: ([^\n]+)") do
+         if name ~= "auto_null" then
+            table.insert(items, { (name == default and "● " or "    ") .. desc, function()
+               local q = "'" .. name:gsub("'", "") .. "'"
+               awful.spawn.with_shell("pactl set-default-sink " .. q .. " && for i in $(pactl list short sink-inputs | cut -f1); do pactl move-sink-input $i " .. q .. "; done")
+            end })
+         end
+      end
+      if #items == 0 then table.insert(items, { "No sound output", function() end }) end
+      table.insert(items, { state.mute and "Unmute" or "Mute", function() widget:toggle_mute() end })
+      table.insert(items, { "Sound settings...", function() awful.spawn({ "gobo-settings", "sound" }) end })
+      menu = awful.menu({ items = items, theme = { width = 300 } })
+      menu:show()
+   end
+
    widget:buttons(awful.util.table.join(
       awful.button({}, 1, function()
          awful.spawn(mixer or "urxvt -title ncpamixer -geometry 90x18 -e ncpamixer")
       end),
       awful.button({}, 2, function() widget:toggle_mute() end),
-      awful.button({}, 3, function() widget:toggle_mute() end),
+      awful.button({}, 3, function() output_menu() end),
       awful.button({}, 4, function() widget:set_volume(5, "+") end),
       awful.button({}, 5, function() widget:set_volume(5, "-") end)
    ))

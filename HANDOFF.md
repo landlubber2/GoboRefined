@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-16. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8.4** (`dist/GoboRefined-0.8.4.iso` + `.update`; laptop sound firmware, Bluetooth pairing agent, linux-firmware 20261019, see the last section), built from the repository alone with `build/build.sh` (see `BUILDING.md`). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
+Updated 2026-11-16. The spin is now called **GoboRefined** (an unofficial spin of GoboLinux 017.01); current: **0.8.5** (`dist/GoboRefined-0.8.5.iso` + `.update`; sound card switched on automatically, Settings > Sound devices and modes, Bluetooth visibility, Bluetooth audio; see the last section), built from the repository alone with `build/build.sh` (see `BUILDING.md`). Direction: **modernized spin, path of least resistance** (see `docs/goals.md`).
 
 ## Where things stand
 
@@ -1575,3 +1575,152 @@ Snapshots added: **`repo-build-proof-2`** (build environment after the 0.8.4 bui
 sof-bin, programs, outputs of 0.8.3 and 0.8.4, checkout in `/goborefined`; powered off) and
 **`iso-0.8.4-updated-efi`** (current, powered off: slot B 0.8.4, slot A 0.8.3). Next release build: as in the
 0.8.3 notes, from `repo-build-proof-2`. Nothing deleted.
+
+## GoboRefined 0.8.5: laptop sound profile, Bluetooth visibility, Bluetooth sound (2026-11-16)
+
+Brief `docs/briefs/0.8.5-sound-bluetooth.md`. Developed on the installed system (snapshot `iso-0.8.4-updated-efi`,
+files installed by hand), built once with `build/build.sh` in `repo-build-proof-2`.
+
+### Item 1: sound card left "off"
+
+- **Why PulseAudio 13 marks "HiFi" unavailable (1c, reading only):** `module-alsa-card.c` (report_jack_state, line
+  ~497) marks a profile unavailable when *all* its input ports (or all its output ports) are unavailable. In
+  `alsa-ucm.c` (`ucm_get_jack`, PulseAudio 13) a UCM device **without a JackControl** falls back to an ALSA jack
+  named like the device: the sof-hda-dsp UCM 1.2.2 device "Mic" (Digital Microphone, no JackControl) is bound to the
+  codec's "Mic Jack" (the external/headset mic jack). With nothing plugged in, every input port is "not available"
+  -> HiFi "available: no" -> at card creation PulseAudio picks the only available profile, "off". So the digital
+  microphone is reported unplugged although it works, and plugging in a headset would probably make HiFi
+  available. Later PulseAudio versions dropped the device-name fallback (which version: not checked). Not rebuilt.
+- **`gobo-sound-profile`** (GoboSpin bin, sh launcher, flock per user; logic `share/gobo-settings/sound-profile.lua`,
+  parsing and the rule in `pactl.lua`, plain Lua 5.3): started by `~/.xinitrc` after `pulseaudio --start`, then
+  reads `pactl subscribe` (new cards, card changes, new sinks). Rule: a card on "off" gets the highest-priority
+  profile marked available, or, when none is, the highest priority of all (profiles with sinks+sources > 0); then,
+  if the default sink is `auto_null`, one of that card's sinks (not HDMI if there is another) becomes the default.
+  Left alone: cards on any other profile; `bluez_card.*`; cards with only HDMI/DisplayPort profiles (graphics card
+  audio such as NVIDIA: keeps the desktop PC unchanged); cards listed in `~/.config/goborefined/sound-cards`
+  (TAB-separated card and profile; written by Settings > Sound "Mode", and by the watcher when a card is switched
+  to "off" while it runs, unless a jack changed in the same event). A new `bluez_sink.*` becomes the default and
+  the playing streams move to it (item 3). Options `--once`, `--dry-run`, `--fixture FILE [--choices FILE]`. Log
+  `~/.cache/gobo-sound-profile.log` (restarted at 64 KB). LXDM `PostLogout` stops it (its `pactl subscribe` would
+  keep PulseAudio alive), so the `lxdm` build step runs again.
+- **Settings > Sound** (`pages/sound.lua`): Output (sinks, default marked; choosing one moves the playing streams),
+  Input (sources without monitors), "Sound cards" with a Mode chooser per card (all profiles by description,
+  "(not detected)" for unavailable ones, still selectable; a choice runs `pactl set-card-profile` and goes into the
+  choices file), the pavucontrol button. Kept current by its own `pactl subscribe` (stopped when the window closes).
+- **Tests:** `vm/sound-test.sh` (fixtures `vm/sound-fixtures/`: the laptop's SOF card from the owner's report,
+  desktop HDA + NVIDIA HDMI, user chose off, USB card with mixed availability + Bluetooth card, the VM's own card
+  captured): **23/23** on the dev system. It includes the VM's real card re-created by PulseAudio with
+  `profile=off` (module-alsa-card argument: the laptop's situation) -> switched on by the watcher, default output
+  back on the card; a user "off" remembered and respected; a null sink named `bluez_sink.*` becomes the default and
+  the default falls back when it goes. GUI: page renders, a second output appears live, clicking it switched the
+  default and moved a playing stream; Mode "Off" -> card off + remembered; back to Duplex
+  (`0.8.5-settings-sound.png`, `0.8.5-settings-sound-mode-chooser.png`). "(not detected)" could not be shown in the
+  VM (its card has no unavailable profile).
+
+### Item 2: Bluetooth visibility
+
+- Settings > Bluetooth: switch "Visible to other devices". While the page is on screen (GTK map/unmap) the adapter
+  is made discoverable (`discoverable-timeout 180`, `discoverable on`), sent again every 150 s; "Search for devices"
+  also makes it visible; switching it off stops the automatic visibility for this visit of the page. Leaving the
+  page does not hide it at once: BlueZ hides it after 3 minutes, so it is never left visible. Taskbar menu:
+  "Make visible to other devices (3 min)" / "Visible to other devices: hide now"; the tooltip says "visible".
+- Lab (two virtual controllers, `btvirt -l2` from BlueZ 5.86 built in the dev VM as in 0.8.4): page opened ->
+  `Discoverable: yes`, timeout 0xb4; the peer controller finds "gobolab"; switch off -> the peer no longer finds it;
+  on again -> pairing started **from the peer** reached our agent dialog ("Does it show the number 000000?",
+  `0.8.5-bluetooth-phone-initiated-pairing.png`) -> "Pairing successful". Page left at 14:44:23 -> not discoverable
+  at 14:47:52 (BlueZ timeout). Page kept open from 14:48:00: still discoverable at 14:51:31 (the 150 s re-send
+  restarts the time).
+
+### Item 3: Bluetooth sound
+
+- Reading: the stock PulseAudio 13.0 ("13.0-rebootstrapped", GoboLinux 017 recipe, prefix /usr, UseFlags
+  "bluez avahi jack dbus") has no `module-bluez5-*` / `module-bluetooth-*` because no SBC library was on the build
+  machine. BlueZ 5.54 headers and libbluetooth and D-Bus are on the image; no libsbc.
+- **Built** (new steps at the end of `spin/build-programs.sh`, added to STEPS in `build/build.sh`): `sbc` (SBC 2.0,
+  `/Programs/SBC/2.0`, linked, in build-iso's EXTRA list) and `pulseaudio-bluetooth` (PulseAudio 13.0 configured like
+  the stock one plus `--enable-bluez5 --enable-bluez5-native-headset --disable-bluez5-ofono-headset`; only
+  `libbluez5-util`, `module-bluez5-discover`, `module-bluez5-device`, `module-bluetooth-discover` and
+  `module-bluetooth-policy` are built (ORC header first) and kept in `/Programs/PulseAudio-Bluetooth/13.0`, not
+  linked). `build-iso.sh` copies the five `.so` next to the stock modules in
+  `/Programs/PulseAudio/13.0/lib/pulse-13.0/modules` and inserts `spin/ab/pulse-bluetooth.pa` (policy + discover
+  behind `.ifexists`) into both copies of `default.pa` (Settings and Resources/Defaults, because of ProfileInstall).
+  The step list in the header of build-programs.sh was left unchanged on purpose: it is part of every step's hash.
+- Dev system: the modules load when PulseAudio starts; wired sound unchanged (sound-test). With the virtual
+  controllers PulseAudio registers its endpoints (the adapter lists Audio Source, Audio Sink, Headset AG).
+  **A2DP between the two virtual controllers works:** connect -> `bluez_card.*` and
+  `bluez_sink.00_AA_01_00_00_00.a2dp_sink` RUNNING, the watcher made it the default output, a playing stream moved
+  to it (SBC encoding running); Disconnect on the page -> default back to the VM card; Connect on the page -> sink
+  again and "Connected — playing sound here" (`0.8.5-bluetooth-audio-virtual.png`). Lab artefact: both
+  controllers belong to the same PulseAudio, so the other side also appears as a `bluez_source` with a loopback.
+- Settings > Bluetooth: the "no sound over Bluetooth" sentence is replaced when `module-bluez5-device.so` exists;
+  audio devices (Audio Sink/Headset UUIDs or an audio icon) show "Connected — playing sound here" / "sound output
+  ready" / "no sound output yet" (looked at again every 2 s, at most 10 times, until PulseAudio's sink appears);
+  BlueZ errors are said in plain words (table in the page). The failure texts could **not** be produced in the lab:
+  btvirt never answers a connect to a powered-off peer, so the page stays on "Connect: ..." until bluetoothctl
+  gives up. Headset microphone: HSP only (native backend, no oFono for HFP), untested.
+
+### Item 4: taskbar volume menu
+
+- Right click on the speaker icon: the outputs (default marked; choosing one moves the playing streams),
+  Mute/Unmute, "Sound settings...". Middle click still mutes, left click opens pavucontrol
+  (`0.8.5-taskbar-sound-outputs.png`).
+
+### 0.8.5 build and release test
+
+- Build: `repo-build-proof-2` + `build/build.sh` (project key in /dev/shm, deleted afterwards). Rebuilt only `lxdm`
+  (PostLogout changed, 9 s), `sbc` (9 s), `pulseaudio-bluetooth` (78 s); image; **20 min 31 s** in total; "project
+  key: yes". 459 programs (0.8.4: 458; + SBC). Added to the image: SBC 0.5 MB, the five PulseAudio modules 0.3 MB,
+  Lua files a few KB: under 1 MB. Update file +258 KB, ISO +262 KB compared with 0.8.4.
+- **Files:** `dist/GoboRefined-0.8.5.update` (2,683,908,096 bytes, sha256
+  `7b221b273700f7eeff508f3ed6d9b18ac889d11266510fe87cd0ce1ec37c4039`), `dist/GoboRefined-0.8.5.iso`
+  (2,816,999,424 bytes, sha256 `e48b5d8fc6a75f20ffaf9897b437340e45754a2253cafce90fefb7c12b2d93c4`), `.sha256` files
+  next to them; same values in the build VM, on the host (`sha256sum -c`) and in the test VM.
+
+| Test (snapshot `iso-0.8.4-updated-efi` -> 0.8.5) | Result |
+|---|---|
+| `gobo-update --yes` with the file (root-owned copy, sha256 checked in the VM) | pass, 63 s into slot A, "8.1G used, 6.8G free in slot A" |
+| restart -> version | slot A 0.8.5 running/default, "slot a (0.8.5) started fine"; look-version 0.8.5; "System updated ... (was 0.8.4)" notice (`0.8.5-updated-desktop.png`) |
+| light mode, wallpaper | kept (mode light, same wallpaper sha256) |
+| session | `gobo-sound-profile` and `gobo-bt-agent` running; VM card "left alone"; `module-bluetooth-policy`, `-discover`, `bluez5-discover` loaded; both default.pa copies have the lines; 5 module files in `/System/Index/lib/pulse-13.0/modules`; PulseAudio start (`pulseaudio --start`) 28 ms |
+| Settings, every page (12 switches through the page file, one process) | render, no Lua errors |
+| `vm/sound-test.sh` | **23/23** |
+| `vm/settings-test.sh` | **40/40** (+ removal) |
+| `vm/net-test.sh` | **32/32** |
+| `vm/input-test.sh` (full) | **50/50** |
+| `--rollback` -> 0.8.4 -> `--rollback` -> 0.8.5 | pass (0 Bluetooth modules in 0.8.4, present in 0.8.5) |
+| fresh install from the 0.8.5 ISO | **not done** (optional in the brief; budget) |
+
+Slot space: the 0.8.5 system uses 8.1 GB: 6.8 GB free in the VM's 16 GiB slot (df: 16G size), about 3.5 GB
+free in a 12 GiB slot (estimate from the same use).
+
+### Only the laptop (or a real Bluetooth device) can confirm
+
+The HiFi profile chosen automatically and sound after login; headphone switching and the digital microphone with
+UCM 1.2.2 (the jack confusion above may also hide the microphone from programs until something is plugged in);
+"(not detected)" display; phone-initiated pairing with the AX210 while visible; A2DP to a real speaker/headphones
+(SBC only, no AAC/aptX/LDAC), fallback to speakers when it switches off; headset microphone (HSP only); the
+plain-word connect errors.
+
+### Findings, not fixed
+
+- With the session's `pactl subscribe` client, PulseAudio never idles out; the watcher is stopped by LXDM's
+  PostLogout (as the agent). A session started without LXDM (startx on a console) leaves it until PulseAudio dies.
+- `bluetoothctl info` of the peer showed "Trusted: no" after a pairing started by the peer (two controllers: the
+  agent only sees its default controller, known from 0.8.4).
+- The update file copied into the test VM stays in `/Data/Variable/tmp` of snapshot `iso-0.8.5-updated-efi`.
+
+### Downloads (0.8.5)
+
+- SBC 2.0, https://mirrors.edge.kernel.org/pub/linux/bluetooth/sbc-2.0.tar.xz, sha256
+  `8f12368e1dbbf55e14536520473cfb338c84b392939cc9b64298360fd4a07992` (matches kernel.org sha256sums.asc), LGPL-2.1-or-later.
+- PulseAudio 13.0, https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-13.0.tar.xz, sha256
+  `961b23ca1acfd28f2bc87414c27bb40e12436efcf2158d29721b1e89f3f28057` (matches the published `.sha256`), LGPL-2.1-or-later.
+- Lab only, not shipped: BlueZ 5.86 again (`99f144540c6070591e4c53bcb977eb42664c62b7b36cb35a29cf72ded339621d`) to
+  build `btvirt` in the dev VM (discarded).
+
+### VM state
+
+Snapshots added: **`repo-build-proof-3`** (build environment after the 0.8.5 build, with the SBC and PulseAudio
+sources; powered off) and **`iso-0.8.5-updated-efi`** (current, powered off: slot A 0.8.5, slot B 0.8.4). The dev
+work on `iso-0.8.4-updated-efi` was discarded by restoring. Nothing deleted (on the build disk the 0.8.3-era
+checkout copy `/goborefined.old` was replaced by the 0.8.4 checkout).

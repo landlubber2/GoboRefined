@@ -342,3 +342,14 @@ hand); no "visible to other devices" switch; a Bluetooth speaker cannot connect 
 Brief: `docs/briefs/0.8.5-sound-bluetooth.md` (automatic profile choice + a device/mode menu in Settings →
 Sound, discoverable switch, Bluetooth audio folded in from the former 0.9.2 brief). The "unknown hardware"
 brief moved to 0.8.6.
+
+### 0.8.5 — done (2026-11-16, tested in the VM; the laptop is the test)
+
+1. Sound card left "off": `gobo-sound-profile` (session) switches such a card to its best profile and makes it
+   the output; user choices are respected. Cause found: PulseAudio 13 binds the UCM digital microphone to the
+   "Mic Jack", so the HiFi profile looks unavailable (HANDOFF.md 0.8.5).
+2. Settings > Sound: output, input, and a Mode chooser per card; taskbar speaker icon: right click lists the
+   outputs (item 4 of the brief).
+3. Bluetooth "Visible to other devices" (Settings page + taskbar menu), automatic while the page is open, 3 minutes.
+4. Bluetooth sound: SBC 2.0 + PulseAudio 13.0's Bluetooth modules built for the stock PulseAudio; A2DP works
+   between two virtual controllers. Headset microphone only HSP (no oFono). Plain-word connect errors untested.
