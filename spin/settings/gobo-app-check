@@ -1,0 +1,130 @@
+#!/bin/bash
+# gobo-app-check FILE — is this GoboLinux program package right for this system?
+#
+# The package format is GoboLinux's own (made by "CreatePackage", installed by "InstallPackage"):
+#   Name--Version--x86_64.tar.bz2   (also --rN revisions; .tar.gz/.tar.xz/.tar.zst; arch "noarch")
+# holding one program directory Name/Version/ with bin/, lib/, share/ ... and Resources/
+# (Architecture, Dependencies, Description).
+#
+# Nothing in the package is run. Checks, each printed as "OK ...", "WARN ..." or "FAIL ...":
+#   1 the file name and that every entry stays inside Name/Version/ (no absolute paths, no "..")
+#   2 no setuid/setgid files, no device files
+#   3 architecture (file name and Resources/Architecture) is this computer's, or "noarch"
+#   4 every program in Resources/Dependencies is installed in a new enough version
+#   5 compiled files are 64-bit x86 programs, the libraries they need exist here or in the
+#     package, and they do not need a newer C library (glibc) than this system has
+# Last line: "RESULT compatible" (exit 0) or "RESULT not compatible" (exit 1). Exit 2: not a package.
+# Used by Settings > Apps before asking for the password, and again by gobo-settings-helper
+# app-install as root before installing.
+set -u
+export LC_ALL=C PATH=/System/Index/bin:/System/Index/sbin:/usr/bin:/bin
+unset IFS CDPATH
+f="${1:-}"
+bad() { echo "FAIL $*"; echo "RESULT not a package"; exit 2; }
+[ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ] || bad "cannot read the file"
+base=${f##*/}
+re='^([A-Za-z0-9][A-Za-z0-9+_.]*(-[A-Za-z0-9+_.]+)*)--([0-9A-Za-z][A-Za-z0-9+_.~]*(-[A-Za-z0-9+_.~]+)*)(--r[0-9]+)?--([A-Za-z0-9_]+)\.tar\.(bz2|gz|xz|zst)$'
+[[ "$base" =~ $re ]] || bad "the file name is not Name--Version--architecture.tar.bz2 (a GoboLinux package)"
+name=${BASH_REMATCH[1]} version=${BASH_REMATCH[3]} rev=${BASH_REMATCH[5]#--} arch=${BASH_REMATCH[6]}
+pv="$version${rev:+-$rev}"
+size=$(stat -c %s "$f")
+[ "$size" -le 4294967296 ] || bad "the file is larger than 4 GB"
+fails=0
+ok() { echo "OK $*"; }
+warn() { echo "WARN $*"; }
+fail() { echo "FAIL $*"; fails=$((fails + 1)); }
+
+echo "PACKAGE $name $pv $arch"
+list=$(tar -tvf "$f" 2>/dev/null) || bad "the archive cannot be read (damaged, or not a tar archive)"
+[ -n "$list" ] || bad "the archive is empty"
+# 1 paths
+outside=$(tar -tf "$f" 2>/dev/null | awk -v p="$name/" '
+   { if (substr($0, 1, 1) == "/" || $0 ~ /(^|\/)\.\.(\/|$)/ || (index($0, p) != 1 && $0 "/" != p)) { print; n++ } } n >= 3 { exit }')
+if [ -n "$outside" ]
+then fail "the archive has files outside the program's own folder $name/ (first: $(echo "$outside" | head -n 1))"
+else ok "all files are inside $name/"
+fi
+top=$(tar -tf "$f" 2>/dev/null | awk -F/ 'NF >= 2 && $2 != "" { print $2 }' | sort -u | grep -v -x -e Current -e Settings -e Variable)
+[ "$(echo "$top" | grep -c .)" = 1 ] || fail "expected one version folder inside $name/, found: $(echo $top)"
+dirv=$(echo "$top" | head -n 1)
+# 2 special files
+special=$(echo "$list" | awk '{ m = $1 } m ~ /^[bcp]/ || substr(m, 4, 1) ~ /[sS]/ || substr(m, 7, 1) ~ /[sS]/ { print $NF }' | head -n 3)
+if [ -n "$special" ]
+then fail "the package has files that would run with root rights or device files (first: $(echo "$special" | head -n 1))"
+else ok "no files with special rights"
+fi
+# 3 architecture
+my=$(uname -m)
+case "$arch" in
+   "$my"|noarch) ok "architecture $arch" ;;
+   *) fail "made for $arch computers; this one is $my" ;;
+esac
+[ "$fails" = 0 ] || { echo "RESULT not compatible"; exit 1; }
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gobo-app-check.XXXXXX") || bad "no temporary folder"
+trap 'chmod -R u+rwX "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+free=$(df -Pk "$tmp" | awk 'NR == 2 { print $4 }')
+[ "${free:-0}" -gt $((size / 1024 * 6)) ] || warn "little free space for a full check"
+tar -xf "$f" -C "$tmp" --no-same-owner --no-same-permissions 2>/dev/null || { fail "the archive could not be unpacked"; echo "RESULT not compatible"; exit 1; }
+P="$tmp/$name/$dirv"
+[ -d "$P" ] || { fail "no folder $name/$dirv in the archive"; echo "RESULT not compatible"; exit 1; }
+if [ -f "$P/Resources/Architecture" ]
+then a=$(head -n 1 "$P/Resources/Architecture" | tr -d ' \r')
+   case "$a" in "$my"|noarch|"") ;; *) fail "the package says it is for $a; this computer is $my" ;; esac
+fi
+[ -f "$P/Resources/Description" ] && echo "ABOUT $(grep -m1 -i '^\[Summary\]' "$P/Resources/Description" | sed 's/^\[[^]]*\] *//' | tr -d '\r' | cut -c1-200)"
+if [ -d "/Programs/$name/$dirv" ]
+then warn "$name $dirv is already installed; installing replaces nothing (it is refused)"; echo "INSTALLED same"
+elif [ -d "/Programs/$name" ]
+then echo "INSTALLED other $(ls "/Programs/$name" | grep -v -x -e Current -e Settings -e Variable | tr '\n' ' ')"
+fi
+# 4 dependencies
+if [ -f "$P/Resources/Dependencies" ]
+then
+   missing=0
+   while read -r dep op want _
+   do
+      case "$dep" in ""|"#"*) continue ;; esac
+      [[ "$dep" =~ ^[A-Za-z0-9][A-Za-z0-9+_.-]*$ ]] || continue
+      case "$op" in ">="|">"|"="|"==") ;; *) want="$op"; op=">=" ;; esac
+      case "$want" in "["*|"") want="" ;; esac
+      have=$(ls "/Programs/$dep" 2>/dev/null | grep -v -x -e Current -e Settings -e Variable | sort -V | tail -n 1)
+      if [ -z "$have" ]
+      then fail "needs the program $dep${want:+ $want}, which is not installed"; missing=$((missing + 1))
+      elif [ -n "$want" ] && [ "$(printf '%s\n%s\n' "${want%%-r[0-9]*}" "${have%%-r[0-9]*}" | sort -V | tail -n 1)" != "${have%%-r[0-9]*}" ]
+      then fail "needs $dep $want or newer; this system has $have"; missing=$((missing + 1))
+      fi
+   done < "$P/Resources/Dependencies"
+   [ "$missing" = 0 ] && ok "all programs it depends on are installed"
+else warn "the package does not list what it depends on"
+fi
+# 5 compiled files
+glibc=$(ls /Programs/Glibc 2>/dev/null | grep -v -x -e Current -e Settings -e Variable | sort -V | tail -n 1)
+known=$( { ldconfig -p 2>/dev/null | awk 'NR > 1 { print $1 }'; ls /System/Index/lib /System/Index/lib64 2>/dev/null; find "$tmp" \( -type f -o -type l \) -name '*.so*' -printf '%f\n'; } | sort -u)
+n=0 wrongcpu="" need_glibc="" nolib=""
+while IFS= read -r -d '' e
+do
+   [ "$(head -c 4 "$e" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 7f454c46 ] || continue
+   n=$((n + 1)); [ "$n" -le 600 ] || break
+   h=$(readelf -h "$e" 2>/dev/null)
+   case "$h" in *"Advanced Micro Devices X86-64"*) ;; *) wrongcpu="${wrongcpu:-${e#$P/}}"; continue ;; esac
+   for so in $(readelf -d "$e" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+   do echo "$known" | grep -q -x -F "$so" || nolib="$nolib $so"
+   done
+   v=$(readelf -V "$e" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1)
+   [ -n "$v" ] && need_glibc=$(printf '%s\n%s\n' "$need_glibc" "$v" | sort -V | tail -n 1)
+done < <(find "$P" -type f -size +3c -print0 2>/dev/null)
+if [ "$n" = 0 ]
+then ok "no compiled files (scripts or data only)"
+else
+   [ -z "$wrongcpu" ] || fail "has compiled files for another kind of processor (first: $wrongcpu)"
+   nolib=$(echo $nolib | tr ' ' '\n' | sort -u | tr '\n' ' ')
+   if [ -n "${nolib// /}" ]; then fail "needs libraries this system does not have: $nolib"; else ok "all libraries its $n compiled files need are here"; fi
+   if [ -n "$need_glibc" ] && [ -n "$glibc" ] && [ "$(printf '%s\n%s\n' "$need_glibc" "$glibc" | sort -V | tail -n 1)" != "$glibc" ]
+   then fail "was compiled for a newer system: needs the C library (glibc) $need_glibc, this system has $glibc"
+   elif [ -n "$need_glibc" ]; then ok "C library: needs $need_glibc, this system has $glibc"
+   fi
+fi
+ls "$P"/share/applications/*.desktop > /dev/null 2>&1 || ls "$P"/bin/* > /dev/null 2>&1 || warn "no menu entry and no commands in bin/: nothing to start after installing"
+if [ "$fails" = 0 ]; then echo "RESULT compatible"; exit 0; fi
+echo "RESULT not compatible"; exit 1

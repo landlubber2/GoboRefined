@@ -299,10 +299,24 @@ rtl8852au)
    # The kernel tree lacks include/config/kernel.release, so KERNELRELEASE is passed by hand,
    # and the driver's Makefile is used through kbuild directly (it needs TopDIR for that).
    # Source: GitHub's archive of commit 865ab0f (same files as a git checkout of that commit).
-   KREL=6.12.16-Gobo REV=865ab0f V=20240506 P=/Programs/RTL8852AU/20240506
+   # 0.9.1: against the kernel of the step "linux" (version in spin/kernel-version), which stays
+   # next to the build root's own stock kernel (/Programs/Linux/Current is not changed here).
+   KVER=$(head -n 1 $SPIN/kernel-version); KREL=$KVER-Gobo
+   REV=865ab0f V=20240506 P=/Programs/RTL8852AU/20240506
+   KM=/Programs/Linux/$KVER/lib/modules/$KREL
+   [ -f $KM/build/Module.symvers ] || { echo "kernel $KREL is not built (step linux)"; exit 1; }
    FULL=865ab0fa91471d595c283d2f3db323f7f15455f5
    unpack rtl8852au-$FULL.tar.gz rtl8852au-$FULL
-   make -j2 -C /lib/modules/$KREL/build M=$PWD KERNELRELEASE=$KREL TopDIR=$PWD CONFIG_RTL8852AU=m modules
+   # Newer 6.12.y kernels carry the 6.13 change that gives cfg80211's set_monitor_channel a
+   # "struct net_device *dev" argument; the driver (2024) does not know it. Add the (unused)
+   # argument when this kernel's header has it.
+   if grep -A1 '(\*set_monitor_channel)' $KM/build/include/net/cfg80211.h | grep -q 'struct net_device \*dev'; then
+      sed -i 's/^static int cfg80211_rtw_set_monitor_channel(struct wiphy \*wiphy$/&, struct net_device *dev/' os_dep/linux/ioctl_cfg80211.c
+      grep -q '^static int cfg80211_rtw_set_monitor_channel(struct wiphy \*wiphy, struct net_device \*dev$' os_dep/linux/ioctl_cfg80211.c \
+         || { echo "could not adapt set_monitor_channel to this kernel"; exit 1; }
+   fi
+   make -j2 LD=ld.bfd -C $KM/build M=$PWD KERNELRELEASE=$KREL TopDIR=$PWD CONFIG_RTL8852AU=m modules
+   [ "$(modinfo -F vermagic ./8852au.ko | cut -d' ' -f1)" = "$KREL" ] || { echo "8852au.ko is not for $KREL"; exit 1; }
    rm -rf $P && mkdir -p $P/lib/modules/$KREL/updates $P/Resources $P/doc
    install -m 644 8852au.ko $P/lib/modules/$KREL/updates/
    cp README.md $P/doc/
@@ -310,10 +324,182 @@ rtl8852au)
    ln -sfn $V /Programs/RTL8852AU/Current
    # /System/Index/lib/modules is a link into the Linux program, so SymlinkProgram cannot
    # merge modules: link the .ko into the kernel's "updates" directory instead.
-   mkdir -p /Programs/Linux/Current/lib/modules/$KREL/updates
-   ln -sfn /Programs/RTL8852AU/Current/lib/modules/$KREL/updates/8852au.ko \
-      /Programs/Linux/Current/lib/modules/$KREL/updates/8852au.ko
-   depmod -a $KREL
+   mkdir -p $KM/updates
+   ln -sfn /Programs/RTL8852AU/Current/lib/modules/$KREL/updates/8852au.ko $KM/updates/8852au.ko
+   depmod -b /Programs/Linux/$KVER $KREL
+   ;;
+linux)
+   # 0.9.1: the newest kernel of the 6.12 long-term series (the stock image has 6.12.16 from
+   # February 2025), built with the stock kernel's own configuration; "make olddefconfig" gives
+   # options that are new since 6.12.16 their default. Laid out like the stock Linux program:
+   # lib/modules/<release>, kernel and System.map under Resources/Unmanaged/System/Kernel/Boot,
+   # and a "build" tree with what compiling a driver against this kernel needs (headers, scripts,
+   # Module.symvers: not the whole source as the stock program has, which was 756 MB).
+   # The version is the one line of spin/kernel-version. /Programs/Linux/Current of the build
+   # root stays the stock kernel; spin/build-iso.sh switches the image over.
+   # The compile takes 1-2 hours on 2 processors. The tree is unpacked outside the scratch folder
+   # (/Data/Build/linux-<version>) so that a stopped or repeated run goes on where it was; it is
+   # removed at the end unless the file /Data/Build/keep-linux-tree exists.
+   KVER=$(head -n 1 $SPIN/kernel-version); KREL=$KVER-Gobo
+   OLDV=6.12.16 OLD=/Programs/Linux/6.12.16 P=/Programs/Linux/$KVER
+   [[ "$KVER" =~ ^6\.12\.[0-9]+$ ]] || { echo "spin/kernel-version: '$KVER' is not a 6.12.y version"; exit 1; }
+   [ "$KVER" != "$OLDV" ] || { echo "spin/kernel-version is the stock kernel"; exit 1; }
+   need linux-$KVER.tar.xz
+   T=/Data/Build/linux-$KVER
+   if [ ! -f $T/.gobo-unpacked ]
+   then
+      rm -rf $T
+      tar xf $SRC/linux-$KVER.tar.xz -C /Data/Build
+      : > $T/.gobo-unpacked
+   fi
+   cd $T
+   [ -f .config ] || cp $OLD/lib/modules/$OLDV-Gobo/build/.config .config
+   # (the image's "ld" is the gold linker, which cannot link a kernel: GNU ld by name)
+   make LD=ld.bfd olddefconfig > /Data/Build/linux-olddefconfig.log 2>&1 || { tail -n 20 /Data/Build/linux-olddefconfig.log; exit 1; }
+   [ "$(make -s LD=ld.bfd kernelrelease)" = "$KREL" ] || { echo "the kernel calls itself $(make -s LD=ld.bfd kernelrelease), expected $KREL"; exit 1; }
+   echo "compiling Linux $KREL with $(nproc) jobs (log: /Data/Build/linux-make.log in the build root)"
+   make LD=ld.bfd -j$(nproc) bzImage modules > /Data/Build/linux-make.log 2>&1 || { grep -B 5 -A 5 -m 3 'Error ' /Data/Build/linux-make.log; tail -n 30 /Data/Build/linux-make.log; exit 1; }
+   rm -rf $P && mkdir -p $P/Resources/Unmanaged/System/Kernel/Boot $P/doc/linux-$KVER
+   make -s LD=ld.bfd INSTALL_MOD_PATH=$P modules_install > /Data/Build/linux-modules-install.log 2>&1 || { tail -n 30 /Data/Build/linux-modules-install.log; exit 1; }
+   KM=$P/lib/modules/$KREL
+   [ -f $KM/modules.dep ] && [ -d $KM/kernel ] || { echo "modules_install left no modules in $KM"; exit 1; }
+   UB=$P/Resources/Unmanaged/System/Kernel/Boot
+   install -m 644 arch/x86/boot/bzImage $UB/kernel-$KREL
+   install -m 644 System.map $UB/System.map-$KREL
+   ln -s kernel-$KREL $UB/kernel
+   ln -s System.map-$KREL $UB/System.map
+   # the "build" tree: what compiling an out-of-tree module needs
+   rm -rf $KM/build $KM/source && mkdir -p $KM/build
+   b=$KM/build
+   install -m 644 .config Makefile Module.symvers System.map $b/
+   install -D -m 644 kernel/Makefile $b/kernel/Makefile
+   install -D -m 644 arch/x86/Makefile $b/arch/x86/Makefile
+   cp -a scripts $b/
+   install -D -m 755 tools/objtool/objtool $b/tools/objtool/objtool
+   cp -a include $b/
+   cp -a arch/x86/include $b/arch/x86/
+   install -D -m 644 arch/x86/kernel/asm-offsets.s $b/arch/x86/kernel/asm-offsets.s
+   find . -name 'Kconfig*' -not -path './Documentation/*' | while IFS= read -r f; do install -D -m 644 "$f" "$b/$f"; done
+   find $b -type f \( -name '*.o' -o -name '.*.cmd' -o -name '*.a' \) -delete
+   find -L $b -type l -delete 2>/dev/null || true
+   # never the key the modules were signed with (made for this build only)
+   rm -f $b/certs/signing_key.pem $b/certs/signing_key.x509
+   ln -s build $KM/source
+   chown -R root:root $P
+   # Resources: as the stock program, with this version's source
+   for f in Architecture Dependencies BuildDependencies Description UseFlags UnmanagedFiles
+   do if [ -f $OLD/Resources/$f ]; then cp $OLD/Resources/$f $P/Resources/$f; fi
+   done
+   echo "[File] https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KVER.tar.xz" > $P/Resources/PackageSource
+   if [ -d $OLD/bin ]; then cp -a $OLD/bin $P/bin; fi
+   install -m 644 COPYING README $P/doc/linux-$KVER/
+   # a marker for spin/build-iso.sh: this tree is complete
+   echo "$KREL" > $P/Resources/GoboRefinedKernel
+   du -sh $P $KM/kernel $KM/build
+   cd /
+   if [ ! -e /Data/Build/keep-linux-tree ]; then rm -rf $T; fi
+   ;;
+intel-microcode)
+   # 0.9.1: Intel's processor microcode updates (security and stability fixes the processor
+   # loads at every start). dracut puts them, with AMD's from linux-firmware, at the front of
+   # the initramfs ("early microcode"). Data only; Intel's licence allows redistribution.
+   V=20261110 P=/Programs/Intel-Microcode/20261110
+   D=Intel-Linux-Processor-Microcode-Data-Files-microcode-$V
+   unpack intel-microcode-$V.tar.gz $D
+   rm -rf $P && mkdir -p $P/lib/firmware/intel-ucode $P/share/doc/intel-microcode
+   install -m 644 intel-ucode/* $P/lib/firmware/intel-ucode/
+   install -m 644 license releasenote.md $P/share/doc/intel-microcode/
+   [ "$(ls $P/lib/firmware/intel-ucode | wc -l)" -ge 50 ] || { echo "intel-ucode: too few files"; exit 1; }
+   chown -R root:root $P
+   resources Intel-Microcode $V "Intel processor microcode updates (loaded early at every start)" \
+      "Intel microcode licence (redistributable; share/doc/intel-microcode/license)" "https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files"
+   du -sh $P
+   ;;
+firefox)
+   # 0.9.1: the current Firefox ESR (extended support release: security fixes without feature
+   # changes), Mozilla's official Linux x86_64 build, laid out like the stock Firefox 136.0
+   # program (package/ = the tarball, bin/firefox = the stock launcher, menu entry and icon).
+   # Its own updater is switched off (programs are read-only here; a new version comes with a
+   # system update). Profiles made by the stock 136.0 open in it (it is newer).
+   V=153.7.0esr P=/Programs/Firefox/153.7.0esr OLD=/Programs/Firefox/136.0_bin
+   need firefox-$V.tar.xz
+   [ -x $OLD/bin/firefox ] && [ -f $OLD/share/applications/firefox.desktop ] || { echo "the stock Firefox program looks different"; exit 1; }
+   rm -rf $P && mkdir -p $P/bin $P/Resources $P/share/applications $P/share/icons
+   tar xf $SRC/firefox-$V.tar.xz -C $P
+   mv $P/firefox $P/package
+   [ -x $P/package/firefox ] && [ -f $P/package/libxul.so ] || { echo "unexpected Firefox tarball layout"; exit 1; }
+   chown -R root:root $P
+   chmod -R go-w $P
+   mkdir -p $P/package/distribution
+   printf '%s\n' '{' '  "policies": {' '    "DisableAppUpdate": true' '  }' '}' > $P/package/distribution/policies.json
+   # Launcher. Left alone, the ESR build starts an empty profile of its own ("default-esr") next
+   # to the one the stock Firefox 136 used, and the bookmarks seem gone. So: one fixed profile,
+   # ~/.mozilla/firefox/goborefined-esr, made at the first start as a copy of the person's old
+   # default profile (bookmarks, passwords, history, add-ons). The old profile is not touched:
+   # after a rollback the old Firefox opens it as before (it refuses profiles of a newer version).
+   cat > $P/bin/firefox <<'LAUNCHER'
+#!/bin/bash
+# GoboRefined launcher for Firefox ESR (see spin/build-programs.sh, step firefox).
+pkgdir=$(readlink -f $(dirname $(which firefox))/../package)
+for a in "$@"
+do case "$a" in
+      -P|--P|-profile|--profile|-ProfileManager|--ProfileManager|-v|--version|-h|--help) exec "$pkgdir/firefox" "$@" ;;
+   esac
+done
+[ -n "$HOME" ] || exec "$pkgdir/firefox" "$@"
+base="$HOME/.mozilla/firefox"
+prof="$base/goborefined-esr"
+if [ ! -d "$prof" ]
+then
+   mkdir -p "$base"
+   old=
+   if [ -f "$base/profiles.ini" ]
+   then
+      # the profile marked Default=1 (the stock image's skeleton has one: gobolinux017.01.default)
+      rel=$(awk -F= '/^\[/ { if (d && p != "") { print p; exit } p = ""; d = 0 }
+                     $1 == "Path" { p = $2 } $1 == "Default" && $2 == "1" { d = 1 }
+                     END { if (d && p != "") print p }' "$base/profiles.ini" | head -n 1)
+      case "$rel" in
+         "") ;;
+         /*) old="$rel" ;;
+         *)  old="$base/$rel" ;;
+      esac
+   fi
+   [ -n "$old" ] && [ -f "$old/places.sqlite" ] || old=
+   tmp="$prof.new.$$"
+   rm -rf "$tmp"
+   if [ -n "$old" ] && cp -a "$old" "$tmp" 2>/dev/null
+   then rm -f "$tmp/lock" "$tmp/.parentlock"
+   else rm -rf "$tmp"; mkdir -p "$tmp"
+   fi
+   chmod 700 "$tmp"
+   mv "$tmp" "$prof" 2>/dev/null || rm -rf "$tmp"
+fi
+[ -d "$prof" ] || exec "$pkgdir/firefox" "$@"
+exec "$pkgdir/firefox" --profile "$prof" "$@"
+LAUNCHER
+   chmod 755 $P/bin/firefox
+   bash -n $P/bin/firefox
+   install -m 644 $OLD/share/applications/firefox.desktop $P/share/applications/firefox.desktop
+   # the ESR build names its windows "firefox-esr"
+   sed -i 's/^StartupWMClass=.*/StartupWMClass=firefox-esr/' $P/share/applications/firefox.desktop
+   install -m 644 $P/package/browser/chrome/icons/default/default128.png $P/share/icons/firefox.png
+   for f in Architecture Dependencies Description UseFlags Wrappers
+   do if [ -f $OLD/Resources/$f ]; then cp $OLD/Resources/$f $P/Resources/$f; fi
+   done
+   echo "[File] https://ftp.mozilla.org/pub/firefox/releases/$V/linux-x86_64/en-US/firefox-$V.tar.xz" > $P/Resources/PackageSource
+   ln -sfn $V /Programs/Firefox/Current
+   $P/package/firefox --version
+   ;;
+ca-bundle)
+   # 0.9.1: current certificate authorities (Mozilla's list as published by the curl project).
+   # Only a carrier: spin/build-iso.sh copies the file over the image's old bundle files.
+   V=2026-11-05 P=/Programs/CA-Bundle/2026-11-05
+   need cacert-$V.pem
+   rm -rf $P && mkdir -p $P/share/ca-bundle
+   install -m 644 $SRC/cacert-$V.pem $P/share/ca-bundle/ca-bundle.crt
+   [ "$(grep -c 'BEGIN CERTIFICATE' $P/share/ca-bundle/ca-bundle.crt)" -ge 100 ] || { echo "ca-bundle: too few certificates"; exit 1; }
+   resources CA-Bundle $V "Certificate authorities trusted for TLS (Mozilla's list, from curl.se)" "MPL-2.0" "https://curl.se/docs/caextract.html"
    ;;
 onlyoffice)
    # ONLYOFFICE Desktop Editors (AGPL-3.0), the official x64 binary tarball (needs only glibc 2.17;

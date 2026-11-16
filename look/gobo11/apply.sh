@@ -130,6 +130,40 @@ cat "$here/Xresources.append" >> "$home/.Xresources"
 if [ -f "$home/.config/awesome/mode" ] && [ "$(cat "$home/.config/awesome/mode")" = light ]
 then HOME="$home" sh "$home/.config/awesome/set-mode.sh" light
 fi
+# 0.9.1: Simple accounts (group "simple"): the file manager's side pane lists Home, Desktop, the
+# standard folders, USB drives and the Trash, not the file system (the spin's PCManFM refuses other
+# places for them anyway). Marker ~/.config/goborefined/simple-layout: undone when the account
+# becomes standard or administrator again (bookmarks only if they are still the ones written here).
+owner=$(stat -c %U "$home" 2>/dev/null || true)
+marker="$home/.config/goborefined/simple-layout"
+lconf="$home/.config/libfm/libfm.conf"
+simple_bm() {
+   for d in Documents Downloads Pictures Music Videos
+   do echo "file://$home/$d $d"
+   done
+}
+is_simple=0
+if [ -n "$owner" ] && [ "$owner" != root ] && id -Gn "$owner" 2>/dev/null | tr ' ' '\n' | grep -qx simple
+then is_simple=1
+fi
+if [ "$is_simple" = 1 ]
+then
+   mkdir -p "$home/.config/goborefined"
+   if [ -f "$lconf" ]
+   then sed -i -e 's/^places_root=.*/places_root=0/' -e 's/^places_trash=.*/places_trash=1/' \
+               -e 's/^places_computer=.*/places_computer=0/' -e 's/^places_network=.*/places_network=0/' \
+               -e 's/^places_applications=.*/places_applications=0/' -e 's/^places_unmounted=.*/places_unmounted=0/' "$lconf"
+   fi
+   [ -e "$bm" ] || simple_bm > "$bm"
+   echo "Simple account layout written by apply.sh (0.9.1)" > "$marker"
+elif [ -e "$marker" ]
+then
+   if [ -f "$lconf" ]
+   then sed -i -e 's/^places_root=.*/places_root=1/' -e 's/^places_trash=.*/places_trash=0/' "$lconf"
+   fi
+   if [ -f "$bm" ] && [ "$(cat "$bm")" = "$(simple_bm)" ]; then rm -f "$bm"; fi
+   rm -f "$marker"
+fi
 # Which spin version's look this home has (share/spin-version next to share/gobo11 on the image).
 if [ -f "$here/../spin-version" ]
 then head -n 1 "$here/../spin-version" > "$home/.config/awesome/look-version"

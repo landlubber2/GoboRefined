@@ -524,11 +524,51 @@ merge_accounts() {
    return 0
 }
 
+# 0.9.1: home folders are private (mode 700: only their owner gets in). New ones are made so by
+# AddUser; folders of people made before are closed once (the folder itself, never what is in it).
+# A marker on the data partition keeps later versions from closing a folder its owner opened again.
+private_homes() {
+   local h u
+   [ -e "$STATE/homes-private-0.9.1" ] && return 0
+   for h in /Users/*/
+   do
+      h=${h%/}; u=${h##*/}
+      [ -d "$h" ] && [ ! -L "$h" ] || continue
+      id -u "$u" > /dev/null 2>&1 || continue
+      [ "$(stat -c %U "$h")" = "$u" ] || continue
+      if [ "$(stat -c %a "$h")" != 700 ]
+      then chmod 700 "$h" && log "accounts: home folder $h made private (700)"
+      fi
+   done
+   : > "$STATE/homes-private-0.9.1"
+}
+
+# 0.9.1: SSH logins only for members of the group "remote" (it comes with the new image's system
+# groups). Once, when it is still empty: every administrator (group sys) may connect, as before.
+fill_remote_group() {
+   local m u
+   [ -e "$STATE/remote-group-filled" ] && return 0
+   grep -q '^remote:' /System/Settings/group || return 0
+   if [ -z "$(awk -F: '$1 == "remote" { print $4 }' /System/Settings/group)" ]
+   then
+      for m in $(awk -F: '$1 == "sys" { gsub(",", " ", $4); print $4 }' /System/Settings/group)
+      do
+         [[ "$m" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || continue
+         u=$(id -u "$m" 2>/dev/null) || continue
+         [ "$u" -ge 1000 ] && [ "$u" -lt 60000 ] || continue
+         gpasswd -a "$m" remote > /dev/null 2>&1 && log "accounts: $m may log in over SSH (group remote)"
+      done
+   fi
+   : > "$STATE/remote-group-filled"
+}
+
 first_boot() {
    local version h u
    version=$(head -n 1 "$OVERLAY/first-boot-pending" | tr -dc '0-9A-Za-z.-')
    log "first start of version $version"
    merge_accounts || log "accounts: merge failed"
+   private_homes || log "accounts: could not make the home folders private"
+   fill_remote_group || log "accounts: could not fill the group remote"
    regenerate_caches || true
    # New state folders of the new version (the data partition's copy hides the slot's).
    for d in /System/Slot/Data/Variable/*

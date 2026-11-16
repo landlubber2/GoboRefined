@@ -115,7 +115,9 @@ redistribution notes are in `docs/third-party.md`.
 ## Known limits
 
 - Only GoboLinux 017.01 (x86_64) is supported as the build system; the build compiles against the
-  libraries of the stock image, the kernel driver against its kernel 6.12.16-Gobo.
+  libraries of the stock image, the kernel driver against the kernel the build compiles itself (0.9.1: the newest 6.12.y, version in
+  `spin/kernel-version` and `build/sources.manifest`; the compile adds 1-2 hours to the first run and about
+  6 GB to the peak disk use; the image's default linker is gold, so the step passes `LD=ld.bfd`).
 - The output is functionally the same as the project's releases, not bit-identical (time stamps,
   generated keys, file order).
 - GitHub's source archives (`/archive/...tar.gz`) are generated on request. If GitHub ever changes

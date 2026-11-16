@@ -3,20 +3,33 @@
 #
 # Run through sudo, never directly:  sudo -A /System/Index/bin/gobo-settings-helper SUB-COMMAND ...
 # sudo asks the caller's own password (graphical askpass: gobo-askpass). Administrators (group
-# "sys", sudoers "%sys ALL=(ALL) ALL") may run every sub-command; standard users only the two that
-# sudoers lists for "%users" (own-password, report) — with their password, never without.
+# "sys", sudoers "%sys ALL=(ALL) ALL") may run every sub-command; standard and Simple users only
+# the two that sudoers lists for "%users" (own-password, report) — with their password, never
+# without. Every administrative sub-command also checks the caller itself (need_admin_caller).
+#
+# Kinds of accounts (0.9.1): administrator (group "sys"), standard, Simple (group "simple": a
+# short list of programs, only the home folder and USB drives in the file manager; see
+# docs/security.md: that is peace of mind, the boundary is file permissions and no sudo).
 #
 # Sub-commands (every argument is checked; anything else is refused):
 #   own-password                     new password of the calling user ($SUDO_USER) on stdin
 #   set-password LOGIN               new password of LOGIN on stdin
-#   add-user LOGIN admin|standard    full name on stdin line 1, password on stdin line 2
+#   add-user LOGIN admin|standard|simple [large-text]
+#                                    full name on stdin line 1, password on stdin line 2
 #   remove-user LOGIN keep-home|delete-home
-#   set-admin LOGIN yes|no
+#   set-kind LOGIN admin|standard|simple
+#   set-admin LOGIN yes|no           (older name: set-kind admin / standard)
+#   simple-apps LOGIN                the programs of a Simple account: desktop file names
+#                                    (e.g. firefox.desktop) on stdin, one per line
 #   autologin-status                 prints the login name or "off"
-#   autologin off|LOGIN
+#   autologin off|LOGIN [confirmed]  an administrator's account needs "confirmed" (the page
+#                                    has shown the warning that anyone who starts the computer gets in)
 #   ssh-status                       prints "on running", "on stopped", "off running" or "off stopped"
 #   ssh on|off                       remote access (sshd) now and at every start
+#   remote-users                     who may connect: logins on stdin (group "remote")
 #   boot-ssh                         (boot scripts) start sshd if remote access is on
+#   firewall-status                  prints "on active", "on inactive", "off ..."
+#   firewall on|off                  the firewall (gobo-firewall) now and at every start
 #   update-status                    gobo-update --status
 #   update-install FILE              gobo-update --yes FILE (output streamed)
 #   update-rollback                  gobo-update --rollback
@@ -26,6 +39,13 @@
 #   boot-bluetooth-name              (boot scripts) Bluetooth name = host name (main.conf)
 #   hotspot-set                      hotspot name on stdin line 1, password on line 2
 #   hotspot on|off                   Wi-Fi hotspot (client Wi-Fi on that adapter is stopped)
+#   device-start pci|usb ADDRESS     load the driver the kernel names for that device (0.9.2)
+#   device-unblock pci|usb ADDRESS   lift the software radio block of that device
+#   device-rescan                    look for devices again (PCI rescan, udev trigger)
+#   device-log                       refresh the Device Manager's note of kernel complaints
+#   boot-devices                     (boot scripts) the same, a little after the start
+#   app-install FILE                 check (gobo-app-check) and install a GoboLinux package file
+#   app-remove NAME VERSION          remove a program that app-install installed
 #   report                           root-only parts of the system report: last 400 kernel
 #                                    messages, gobo-update --status, the system logs of the spin
 #
@@ -48,6 +68,12 @@ SSHD_PID=/Data/Variable/run/gobo-sshd.pid
 LOG=/Data/Variable/log/gobo-settings.log
 LOOK_APPLY=/Programs/GoboSpin/Current/share/gobo11/apply.sh
 ADMIN_GROUP=sys
+SIMPLE_GROUP=simple                  # 0.9.1: Simple accounts
+REMOTE_GROUP=remote                  # 0.9.1: who may log in over SSH
+SIMPLE_APPS=$STATE/simple-apps       # 0.9.1: <login> = the programs of a Simple account
+FIREWALL=/System/Index/bin/gobo-firewall
+# 0.9.1: shortest password for new passwords (Simple accounts may have shorter ones)
+PW_MIN_ADMIN=8 PW_MIN_STANDARD=8 PW_MIN_SIMPLE=4
 
 die() { echo "gobo-settings-helper: $*" >&2; exit 1; }
 log() { printf '%s %s (by %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" "${SUDO_USER:-root}" >> "$LOG" 2>/dev/null; }
@@ -77,6 +103,48 @@ admins() {   # administrators that are people (uid >= 1000)
    done
 }
 need_admin_caller() { [ "$caller" = root ] || is_admin "$caller" || die "only an administrator can do this"; }
+in_group() { awk -F: -v g="$1" -v u="$2" '$1 == g { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) f = 1 } END { exit !f }' "$GROUP"; }
+kind_of() {   # admin, simple or standard
+   if is_admin "$1"; then echo admin
+   elif in_group "$SIMPLE_GROUP" "$1"; then echo simple
+   else echo standard
+   fi
+}
+# a system group of the spin (gid below 1000; the image brings it with a fixed gid, this is the
+# fallback for a system that does not have it yet)
+ensure_group() {   # ensure_group NAME GID
+   grep -q "^$1:" "$GROUP" && return 0
+   if awk -F: -v g="$2" '$3 == g { f = 1 } END { exit !f }' "$GROUP"
+   then groupadd -r "$1" || die "could not create the group $1"
+   else groupadd -g "$2" "$1" || die "could not create the group $1"
+   fi
+   log "group created: $1"
+}
+# the groups of a kind (lpadmin: printers)
+set_kind() {   # set_kind LOGIN admin|standard|simple
+   case "$2" in
+      admin)    gpasswd -d "$1" "$SIMPLE_GROUP" > /dev/null 2>&1 || true
+                usermod -aG "$ADMIN_GROUP",lpadmin "$1" || die "could not change the groups of $1"
+                ensure_group "$REMOTE_GROUP" 971
+                # 0.9.1: administrators may connect over SSH by default (Settings > Remote access)
+                usermod -aG "$REMOTE_GROUP" "$1" ;;
+      standard) gpasswd -d "$1" "$ADMIN_GROUP" > /dev/null 2>&1 || true
+                gpasswd -d "$1" lpadmin > /dev/null 2>&1 || true
+                gpasswd -d "$1" "$SIMPLE_GROUP" > /dev/null 2>&1 || true ;;
+      simple)   ensure_group "$SIMPLE_GROUP" 970
+                gpasswd -d "$1" "$ADMIN_GROUP" > /dev/null 2>&1 || true
+                gpasswd -d "$1" lpadmin > /dev/null 2>&1 || true
+                gpasswd -d "$1" "$REMOTE_GROUP" > /dev/null 2>&1 || true
+                usermod -aG "$SIMPLE_GROUP" "$1" || die "could not change the groups of $1" ;;
+   esac
+   [ "$(kind_of "$1")" = "$2" ] || die "the kind of $1 could not be changed"
+}
+# the look and the file manager settings of the kind (apply.sh reads the groups), as the user
+reapply_look() {
+   [ -f "$LOOK_APPLY" ] || return 0
+   [ -d "/Users/$1" ] && [ "$(stat -c %U "/Users/$1")" = "$1" ] || return 0
+   su "$1" -s /bin/sh -c 'sh "$0" "$1"' "$LOOK_APPLY" "/Users/$1" > /dev/null 2>&1 || log "apply.sh failed for $1"
+}
 
 read_password() {   # one line from stdin into $PW: 1..128 characters, no control characters
    IFS= read -r PW || [ -n "${PW:-}" ] || die "no password given"
@@ -84,6 +152,12 @@ read_password() {   # one line from stdin into $PW: 1..128 characters, no contro
    [ "${#PW}" -le 128 ] || die "the password is too long"
    [[ "$PW" != *[[:cntrl:]]* ]] || die "the password contains control characters"
 }
+check_password_length() {   # check_password_length KIND (password in $PW)
+   local min=$PW_MIN_STANDARD
+   case "$1" in admin) min=$PW_MIN_ADMIN ;; simple) min=$PW_MIN_SIMPLE ;; esac
+   [ "${#PW}" -ge "$min" ] || { PW=""; die "the password is too short: at least $min characters"; }
+}
+valid_app_id() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}\.desktop$ ]]; }
 
 # Same way as gobo-install: chpasswd on 017.01 exits 0 and changes nothing; usermod -p would
 # put the hash on a command line. openssl reads the password on stdin (printf is a builtin).
@@ -109,9 +183,14 @@ start_sshd() {
    sshd_running && return 0
    mkdir -p "$(dirname "$SSHD_PID")"
    ssh-keygen -A > /dev/null 2>&1   # host keys, once (kept in /System/Settings/ssh)
-   # root never logs in over SSH (whatever sshd_config says); people log in with their password
-   "$(command -v sshd)" -o PermitRootLogin=no -o PidFile="$SSHD_PID" || return 1
+   # root never logs in over SSH (whatever sshd_config says); people log in with their password.
+   # 0.9.1: only members of the group "remote" (Settings > Remote access), 3 tries per connection,
+   # 30 s to log in, never an empty password
+   ensure_group "$REMOTE_GROUP" 971
+   "$(command -v sshd)" -o PermitRootLogin=no -o PidFile="$SSHD_PID" -o AllowGroups="$REMOTE_GROUP" \
+      -o MaxAuthTries=3 -o LoginGraceTime=30 -o PermitEmptyPasswords=no -o PasswordAuthentication=yes || return 1
 }
+firewall_refresh() { [ -x "$FIREWALL" ] && "$FIREWALL" refresh > /dev/null 2>&1; true; }
 stop_sshd() {
    if sshd_running; then kill "$(cat "$SSHD_PID")"; fi
    rm -f "$SSHD_PID"
@@ -182,6 +261,7 @@ hs_stop() {
    then ip addr flush dev "$ifc" 2>/dev/null
    fi
    rm -rf "$HS_RUN"
+   firewall_refresh   # 0.9.1: close DHCP/DNS for the hotspot's devices again
 }
 hs_start() {
    local ifc uplink ssid_hex psk i
@@ -245,6 +325,16 @@ hs_start() {
    iptables -A GOBO_HOTSPOT_FWD -i "$ifc" -s "$HS_NET.0/24" -j ACCEPT
    iptables -A GOBO_HOTSPOT_FWD -o "$ifc" -d "$HS_NET.0/24" -j ACCEPT
    iptables -I FORWARD 1 -j GOBO_HOTSPOT_FWD
+   firewall_refresh   # 0.9.1: the firewall lets the hotspot's devices ask for addresses and names
+}
+
+# 0.9.2: what the kernel said about firmware and drivers that did not start, for the Device
+# Manager (normal users cannot read the kernel log since 0.9.1; these lines only, world-readable)
+devices_kmsg() {
+   local out=/Data/Variable/run/gobo-devices-kmsg
+   dmesg 2>/dev/null | grep -i -E 'firmware|probe|sof-audio|topology' |
+      grep -i -E 'fail|missing|not found|unable|error -' | grep -v -i 'audit' | tail -n 200 > "$out.new" 2>/dev/null &&
+      mv "$out.new" "$out" && chmod 644 "$out"
 }
 
 ### sub-commands ###############################################################
@@ -258,38 +348,44 @@ case "$cmd" in
       [ $# -eq 0 ] || die "$cmd: no arguments"
       [ "$caller" != root ] || die "own-password needs a calling user"
       check_person "$caller"
-      read_password; set_password "$caller"
+      read_password; check_password_length "$(kind_of "$caller")"; set_password "$caller"
       log "password changed: $caller" ;;
 
    set-password)
       [ $# -eq 1 ] || die "$cmd: give one login"
       need_admin_caller; check_person "$1"
-      read_password; set_password "$1"
+      read_password; check_password_length "$(kind_of "$1")"; set_password "$1"
       log "password set: $1" ;;
 
    add-user)
-      [ $# -eq 2 ] || die "$cmd: give login and admin|standard"
+      [ $# -eq 2 ] || [ $# -eq 3 ] || die "$cmd: give login, admin|standard|simple and optionally large-text"
       need_admin_caller
-      login="$1"; kind="$2"
+      login="$1"; kind="$2"; large="${3:-}"
       valid_login_syntax "$login" || die "not a valid login name: $login (small letters, digits, _ and -, starting with a letter)"
-      [ "$kind" = admin ] || [ "$kind" = standard ] || die "kind must be admin or standard"
+      [ "$kind" = admin ] || [ "$kind" = standard ] || [ "$kind" = simple ] || die "kind must be admin, standard or simple"
+      [ -z "$large" ] || [ "$large" = large-text ] || die "the third argument can only be large-text"
       ! grep -q "^$login:" "$PASSWD" || die "the login $login is already used"
       ! grep -q "^$login:" "$GROUP" || die "the name $login is already used by a group"
       [ ! -e "/Users/$login" ] || die "/Users/$login already exists"
       IFS= read -r full || die "no full name given"
       [ "${#full}" -le 64 ] || die "the full name is too long"
       [[ "$full" != *[[:cntrl:]:,=\\]* ]] || die "the full name may not contain : , = \\ or control characters"
-      read_password
+      read_password; check_password_length "$kind"
       AddUser -f "${full:-$login}" -p '!' --skel "$login" > /dev/null 2>&1 || die "AddUser failed"
       grep -q "^$login:" "$PASSWD" || die "the account was not created"
-      [ "$kind" = admin ] && usermod -aG "$ADMIN_GROUP",lpadmin "$login"
+      [ "$kind" = standard ] || set_kind "$login" "$kind"
       set_password "$login"
-      # the look (the skeleton already has it; run apply.sh as the installer does, as the user,
-      # keeping the skeleton's "keyboard layout chosen at install time" line)
-      if [ -f "$LOOK_APPLY" ]
-      then su "$login" -s /bin/sh -c "sh '$LOOK_APPLY' '/Users/$login'" > /dev/null 2>&1 || log "apply.sh failed for $login"
+      chmod 700 "/Users/$login"   # 0.9.1: private home (AddUser does it too)
+      # 0.9.1: "Larger text and icons" (Simple accounts): read by ~/.xinitrc at login
+      if [ "$large" = large-text ]
+      then su "$login" -s /bin/sh -c 'mkdir -p "$0/.config/goborefined" && : > "$0/.config/goborefined/large-text"' "/Users/$login" > /dev/null 2>&1 ||
+         log "large text: could not set it for $login"
       fi
-      log "user added: $login ($kind)"
+      # the look (the skeleton already has it; run apply.sh as the installer does, as the user,
+      # keeping the skeleton's "keyboard layout chosen at install time" line; it also sets up
+      # the file manager of a Simple account)
+      reapply_look "$login"
+      log "user added: $login ($kind${large:+, $large})"
       echo "added $login" ;;
 
    remove-user)
@@ -309,6 +405,11 @@ case "$cmd" in
       else userdel "$1"
       fi
       ! grep -q "^$1:" "$PASSWD" || die "the account was not removed"
+      rm -f "$SIMPLE_APPS/$1"
+      # userdel takes the login out of every group; make sure of the spin's own groups
+      for g in "$ADMIN_GROUP" "$SIMPLE_GROUP" "$REMOTE_GROUP" lpadmin
+      do in_group "$g" "$1" && gpasswd -d "$1" "$g" > /dev/null 2>&1
+      done
       log "user removed: $1 ($2)"
       # 0.8.4: 017.01's userdel leaves the user's private group behind, so adding the same login
       # again failed ("already used by a group"). Remove it when it is the user's own group: same
@@ -327,18 +428,43 @@ case "$cmd" in
          fi
       fi ;;
 
-   set-admin)
-      [ $# -eq 2 ] || die "$cmd: give login and yes|no"
+   set-admin|set-kind)
+      [ $# -eq 2 ] || die "$cmd: give login and the kind"
       need_admin_caller; check_person "$1"
-      case "$2" in
-         yes) usermod -aG "$ADMIN_GROUP",lpadmin "$1" ;;
-         no)  [ "$1" != "$caller" ] || die "you cannot take away your own administrator rights"
-              [ "$(admins | grep -vx "$1" | wc -l)" -gt 0 ] || die "$1 is the last administrator"
-              gpasswd -d "$1" "$ADMIN_GROUP" > /dev/null
-              gpasswd -d "$1" lpadmin > /dev/null 2>&1 || true ;;
-         *) die "say yes or no" ;;
-      esac
-      log "administrator $2: $1" ;;
+      if [ "$cmd" = set-admin ]
+      then
+         case "$2" in yes) new=admin ;; no) new=standard ;; *) die "say yes or no" ;; esac
+      else
+         new="$2"
+         [ "$new" = admin ] || [ "$new" = standard ] || [ "$new" = simple ] || die "kind must be admin, standard or simple"
+      fi
+      if [ "$new" != admin ] && is_admin "$1"
+      then
+         [ "$1" != "$caller" ] || die "you cannot take away your own administrator rights"
+         [ "$(admins | grep -vx "$1" | wc -l)" -gt 0 ] || die "$1 is the last administrator"
+      fi
+      old=$(kind_of "$1")
+      set_kind "$1" "$new"
+      [ "$old" = "$new" ] || reapply_look "$1"
+      log "kind of $1: $old -> $new" ;;
+
+   simple-apps)
+      # the programs a Simple account sees in its menu (desktop file names, one per line)
+      nargs 1 "$@"; need_admin_caller; check_person "$1"
+      list=""; n=0
+      while IFS= read -r app || [ -n "$app" ]
+      do
+         [ -n "$app" ] || continue
+         valid_app_id "$app" || die "not a program name: $app"
+         n=$((n + 1)); [ "$n" -le 200 ] || die "too many programs"
+         list+="$app"$'\n'
+      done
+      mkdir -p "$SIMPLE_APPS"; chmod 755 "$STATE" "$SIMPLE_APPS"
+      new=$(mktemp "$SIMPLE_APPS/.apps.XXXXXX") || die "could not save"
+      printf '# Programs of the Simple account %s (Settings > Accounts). Read at login.\n%s' "$1" "$list" > "$new"
+      chmod 644 "$new"; mv -f "$new" "$SIMPLE_APPS/$1"
+      log "programs of $1: $n"
+      echo "saved $n" ;;
 
    autologin-status)
       nargs 0 "$@"; need_admin_caller
@@ -346,12 +472,19 @@ case "$cmd" in
       echo "${a:-off}" ;;
 
    autologin)
-      nargs 1 "$@"; need_admin_caller
+      [ $# -eq 1 ] || [ $# -eq 2 ] || die "$cmd: wrong number of arguments"
+      need_admin_caller
       [ -f "$LXDM_CONF" ] || die "no login screen settings ($LXDM_CONF)"
       if [ "$1" = off ]
       then sed -i 's|^#* *autologin=.*|# autologin=|' "$LXDM_CONF"
       else
          check_person "$1"
+         # 0.9.1: anyone who starts the computer gets into that account; for an administrator
+         # only after the page showed that warning and it was confirmed
+         if is_admin "$1" && [ "${2:-}" != confirmed ]
+         then die "$1 is an administrator: automatic login needs the confirmation"
+         fi
+         [ -z "${2:-}" ] || [ "$2" = confirmed ] || die "the second argument can only be confirmed"
          if grep -q '^#* *autologin=' "$LXDM_CONF"
          then sed -i "s|^#* *autologin=.*|autologin=$1|" "$LXDM_CONF"
          else sed -i "s|^\[base\]\$|&\nautologin=$1|" "$LXDM_CONF"
@@ -374,12 +507,46 @@ case "$cmd" in
          off) rm -f "$SSH_FLAG"; stop_sshd ;;
          *) die "say on or off" ;;
       esac
+      firewall_refresh   # 0.9.1: port 22 open only while remote access is on
       log "remote access: $1" ;;
+
+   remote-users)
+      # 0.9.1: who may connect over SSH = members of the group "remote" (logins on stdin)
+      nargs 0 "$@"; need_admin_caller
+      ensure_group "$REMOTE_GROUP" 971
+      want=""
+      while IFS= read -r u || [ -n "$u" ]
+      do
+         [ -n "$u" ] || continue
+         check_person "$u"
+         [ "$(kind_of "$u")" != simple ] || die "$u has a Simple account (it cannot connect from other computers)"
+         want+=",$u"
+      done
+      want=${want#,}
+      gpasswd -M "$want" "$REMOTE_GROUP" > /dev/null || die "could not change who may connect"
+      log "remote access allowed for: ${want:-nobody}"
+      echo "${want:-nobody}" ;;
 
    boot-ssh)
       nargs 0 "$@"
       [ "$caller" = root ] || die "boot-ssh is for the boot scripts"
       if [ -e "$SSH_FLAG" ]; then start_sshd; fi ;;
+
+   firewall-status)
+      nargs 0 "$@"
+      [ -x "$FIREWALL" ] || die "the firewall is not installed"
+      "$FIREWALL" status ;;
+
+   firewall)
+      nargs 1 "$@"; need_admin_caller
+      [ -x "$FIREWALL" ] || die "the firewall is not installed"
+      case "$1" in
+         on)  "$FIREWALL" enable || die "the firewall did not start" ;;
+         off) "$FIREWALL" disable || die "the firewall could not be stopped" ;;
+         *) die "say on or off" ;;
+      esac
+      log "firewall: $1"
+      "$FIREWALL" status ;;
 
    update-status)
       nargs 0 "$@"; need_admin_caller
@@ -484,6 +651,121 @@ case "$cmd" in
          off) hs_stop; log "hotspot off"; echo "off" ;;
          *) die "say on or off" ;;
       esac ;;
+
+   # --- 0.9.2: Device Manager -------------------------------------------------------
+   # The device is named by bus and address only; the address must be an entry of
+   # /sys/bus/<bus>/devices. The module is never named by the caller: modprobe is given the
+   # device's own modalias string from sysfs and resolves it itself.
+   device-start|device-unblock)
+      nargs 2 "$@"; need_admin_caller
+      bus="$1" addr="$2"
+      case "$bus" in
+         pci) [[ "$addr" =~ ^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || die "bad device address" ;;
+         usb) [[ "$addr" =~ ^[0-9]{1,3}-[0-9]{1,3}(\.[0-9]{1,3}){0,6}$ ]] || die "bad device address" ;;
+         *) die "the bus is pci or usb" ;;
+      esac
+      dev=/sys/bus/$bus/devices/$addr
+      [ -e "$dev" ] || die "no such device: $bus $addr"
+      real=$(readlink -f "$dev")
+      sysreal=$(readlink -f /sys)   # GoboLinux: /sys is a link to /System/Kernel/Objects
+      [[ "$real" == "$sysreal"/devices/* ]] || die "no such device: $bus $addr"
+      if [ "$cmd" = device-unblock ]
+      then
+         n=0
+         for r in /sys/class/rfkill/rfkill*
+         do [ -e "$r/soft" ] || continue
+            case "$(readlink -f "$r/device")/" in
+               "$real"/*) echo 0 > "$r/soft" && n=$((n + 1)) ;;
+            esac
+         done
+         [ "$n" -gt 0 ] || die "this device has no radio switch"
+         log "device unblocked: $bus $addr"
+         exit 0
+      fi
+      found=0
+      for m in "$dev/modalias" "$dev/$addr":*/modalias
+      do [ -r "$m" ] || continue
+         alias=$(head -n 1 "$m")
+         [[ "$alias" =~ ^[A-Za-z0-9:_*.,+-]{4,400}$ ]] || continue
+         mods=$(modprobe -R -- "$alias" 2>/dev/null | tr '\n' ' ')
+         [ -n "$mods" ] || continue
+         found=1
+         if out=$(modprobe -- "$alias" 2>&1); then echo "loaded: $mods"; else echo "could not load $mods: $out"; fi
+      done
+      [ "$found" = 1 ] || die "this kernel has no driver for that device"
+      [ "$bus" = pci ] && echo "$addr" > /sys/bus/pci/drivers_probe 2>/dev/null
+      log "device driver start: $bus $addr"
+      sleep 1
+      devices_kmsg
+      exit 0 ;;
+
+   device-rescan)
+      nargs 0 "$@"; need_admin_caller
+      echo 1 > /sys/bus/pci/rescan 2>/dev/null
+      udevadm trigger --action=add 2>/dev/null
+      udevadm settle --timeout=8 2>/dev/null
+      devices_kmsg
+      log "devices rescanned" ;;
+
+   device-log)
+      nargs 0 "$@"; need_admin_caller
+      devices_kmsg ;;
+
+   boot-devices)   # (boot scripts) once the drivers had time to start: note what they complained about
+      nargs 0 "$@"
+      ( sleep 25; devices_kmsg ) > /dev/null 2>&1 < /dev/null &
+      ;;
+
+   # --- 0.9.2: Apps (GoboLinux program packages from a file) ---------------------------
+   app-install)
+      nargs 1 "$@"; need_admin_caller
+      f="$1"
+      [[ "$f" == /* ]] || die "give the package file with its full path"
+      [[ "$f" != *[[:cntrl:]]* ]] || die "bad file name"
+      [ -f "$f" ] || die "no such file: $f"
+      base=${f##*/}
+      [[ "$base" =~ ^[A-Za-z0-9][A-Za-z0-9+_.~-]{2,200}\.tar\.(bz2|gz|xz|zst)$ ]] || die "not a GoboLinux package file name"
+      # work on a private copy: the caller's file could change between the check and the install
+      mkdir -p "$STATE/app-tmp" && chmod 700 "$STATE/app-tmp" || die "no work folder"
+      rm -rf "$STATE/app-tmp"/*
+      cp -- "$f" "$STATE/app-tmp/$base" || die "could not copy the package (data partition full?)"
+      copy="$STATE/app-tmp/$base"
+      check=$(TMPDIR="$STATE/app-tmp" /System/Index/bin/gobo-app-check "$copy" 2>&1); rc=$?
+      echo "$check"
+      if [ $rc -ne 0 ]; then rm -rf "$STATE/app-tmp"; die "the package is not compatible with this system; nothing was installed"; fi
+      set -- $(echo "$check" | sed -n 's/^PACKAGE //p')
+      name="$1" pv="$2"
+      [ -n "$name" ] && [ -n "$pv" ] || { rm -rf "$STATE/app-tmp"; die "could not read the package's name"; }
+      [ ! -e "/Programs/$name/$pv" ] || { rm -rf "$STATE/app-tmp"; die "$name $pv is already installed"; }
+      log "app install started: $base"
+      HOME=/Users/root InstallPackage --batch --no-dependencies --same cancel "$copy" 2>&1; rc=$?
+      rm -rf "$STATE/app-tmp"
+      if [ $rc -eq 0 ] && [ -d "/Programs/$name/$pv" ]
+      then
+         printf '%s\t%s\t%s\t%s\n' "$name" "$pv" "$(date '+%Y-%m-%d')" "$caller" >> "$STATE/apps.list"
+         chmod 644 "$STATE/apps.list"
+         echo "INSTALLED-OK $name $pv"
+      else rc=1; echo "the installation did not finish"
+      fi
+      log "app install finished: $base exit $rc"
+      exit $rc ;;
+
+   app-remove)
+      nargs 2 "$@"; need_admin_caller
+      name="$1" pv="$2"
+      [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9+_.-]{0,80}$ ]] && [[ "$pv" =~ ^[0-9A-Za-z][A-Za-z0-9+_.~-]{0,60}$ ]] || die "bad program name or version"
+      # only what was installed through app-install: never a program of the system itself
+      grep -q -F -x -e "$(printf '%s\t%s' "$name" "$pv")" <(cut -f 1,2 "$STATE/apps.list" 2>/dev/null) || die "$name $pv was not installed from a file here"
+      [ -d "/Programs/$name/$pv" ] || die "$name $pv is not installed any more"
+      log "app remove: $name $pv"
+      HOME=/Users/root RemoveProgram --batch --unmanaged keep "$name" "$pv" 2>&1; rc=$?
+      if [ ! -d "/Programs/$name/$pv" ]
+      then
+         awk -F '\t' -v n="$name" -v v="$pv" '!($1 == n && $2 == v)' "$STATE/apps.list" > "$STATE/apps.list.new" && mv "$STATE/apps.list.new" "$STATE/apps.list"
+         chmod 644 "$STATE/apps.list"
+         echo "REMOVED-OK $name $pv"; exit 0
+      fi
+      echo "the program could not be removed"; exit 1 ;;
 
    report)
       nargs 0 "$@"

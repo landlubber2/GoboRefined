@@ -1,0 +1,9 @@
+#!/bin/sh
+# gobo-devices — the Device Manager (a page of the Settings app; 0.9.2).
+#   gobo-devices          open the window
+#   gobo-devices --text   print the device list (what gobo-report puts on top)
+case "${1:-}" in
+   --text) exec lua /Programs/GoboSpin/Current/share/gobo-settings/devices.lua --text ;;
+   "")     exec gobo-settings devices ;;
+   *)      echo "usage: gobo-devices [--text]" >&2; exit 2 ;;
+esac

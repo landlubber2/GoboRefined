@@ -63,6 +63,50 @@ function P.build(C)
    box:pack_start(state, false, false, 0)
    box:pack_start(how, false, false, 0)
    refresh()
+
+   -- 0.9.1: only members of the group "remote" may log in over SSH (default: administrators);
+   -- 3 password tries per connection, 30 seconds to log in, never an empty password
+   box:pack_start(C.heading("Who may connect"), false, false, 0)
+   local who = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 4 }
+   local function fill_who()
+      C.clear(who)
+      local names = {}
+      for _, p in ipairs(C.people()) do
+         if p.remote then table.insert(names, p.login) end
+      end
+      who:pack_start(C.text(#names > 0 and table.concat(names, ", ") or "Nobody (switching remote access on is not enough: choose people below).",
+         "gobo-value"), false, false, 0)
+      who:show_all()
+   end
+   box:pack_start(who, false, false, 0)
+   box:pack_start(C.button("Choose who may connect...", function()
+      local d = Gtk.Dialog { title = "Who may connect", transient_for = C.window, modal = true, destroy_with_parent = true }
+      d:add_button("Cancel", Gtk.ResponseType.CANCEL)
+      d:add_button("Save", Gtk.ResponseType.OK)
+      local vbox = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6, margin = 16 }
+      vbox:pack_start(C.text("These people may log in from another computer with their password. Simple accounts cannot.", "dim-label"), false, false, 0)
+      local checks = {}
+      for _, p in ipairs(C.people()) do
+         if p.kind ~= "simple" then
+            local c = Gtk.CheckButton { label = string.format("%s (%s)", p.login, C.KIND_NAMES[p.kind]), active = p.remote }
+            checks[p.login] = c
+            vbox:pack_start(c, false, false, 0)
+         end
+      end
+      d:get_content_area():pack_start(vbox, true, true, 0)
+      vbox:show_all()
+      local r = d:run()
+      local chosen = {}
+      for login, c in pairs(checks) do if c.active then table.insert(chosen, login) end end
+      d:destroy()
+      if r ~= Gtk.ResponseType.OK then return end
+      C.helper({ "remote-users" }, table.concat(chosen, "\n") .. "\n", function(ok, out)
+         if not ok then C.error(C.clean_error(out)) end
+         fill_who()
+      end)
+   end), false, false, 0)
+   box:pack_start(C.text("Other computers get 3 password tries per connection and 30 seconds to log in.", "dim-label"), false, false, 0)
+   fill_who()
    return outer
 end
 

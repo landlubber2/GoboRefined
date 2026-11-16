@@ -35,6 +35,10 @@ The project's own scripts, look files and tools (`installer/`, `look/gobo11/`, `
 | Sound Open Firmware, sof-bin (program `SOF-Firmware`, replaces the stock 1.4.2) | 2026.09.2 | BSD-3-Clause with Intel's limited patent licence (`LICENCE.Intel`), BSD-3-Clause (`LICENCE.NXP`); copied to `share/doc/sof-firmware/` | https://github.com/thesofproject/sof-bin/releases/download/v2026.09.2/sof-bin-2026.09.2.tar.gz | no (all `sof*` trees copied as `install.sh` does; its debugging tools left out) |
 | SBC (program `SBC`) | 2.0 | LGPL-2.1-or-later (library) | https://mirrors.edge.kernel.org/pub/linux/bluetooth/sbc-2.0.tar.xz (sha256 matches kernel.org sha256sums.asc) | no (built without the tester) |
 | PulseAudio Bluetooth modules (`libbluez5-util`, `module-bluez5-*`, `module-bluetooth-*`; added to the stock PulseAudio 13.0) | 13.0 | LGPL-2.1-or-later (PulseAudio; its `LICENSE`, `LGPL` in `/Programs/PulseAudio-Bluetooth/13.0/share/doc` of the build root) | https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-13.0.tar.xz (sha256 matches the published `.sha256`) | no; built from the release tarball with BlueZ 5 enabled, only these five files kept |
+| Linux kernel (program `Linux`, replaces the stock 6.12.16) | 6.12.117 | GPL-2.0-only (with the syscall note) | https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.117.tar.xz (sha256 matches kernel.org sha256sums.asc) | no source change; the stock kernel's configuration through `make olddefconfig`; the program's `build` tree holds headers and scripts only (step `linux`) |
+| Intel processor microcode (program `Intel-Microcode`) | 20261110 | Intel microcode licence: redistribution in binary form allowed, no modification or reverse engineering (its `license` file, copied to `share/doc/intel-microcode/`) | https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/refs/tags/microcode-20261110.tar.gz | no (the `intel-ucode` files only; dracut puts them into the early part of the initramfs) |
+| Firefox ESR (program `Firefox`, replaces the stock 136.0) | 153.7.0esr | MPL-2.0; Mozilla's official binary with Mozilla's branding (see point 5 below) | https://ftp.mozilla.org/pub/firefox/releases/153.7.0esr/linux-x86_64/en-US/firefox-153.7.0esr.tar.xz (sha256 matches the release's SHA256SUMS) | binary unchanged; added `distribution/policies.json` (`DisableAppUpdate`), the stock launcher script, menu entry and icon |
+| CA certificate bundle (Mozilla's list as extracted by the curl project) | 2026-11-05 | MPL-2.0 | https://curl.se/ca/cacert-2026-11-05.pem (sha256 matches the published `.sha256`) | no (copied over the image's bundle files, step `ca-bundle`) |
 | GoboNet menu widget (`look/gobo11/awesome/spin/gobonet_menu.lua`) | from GoboNet 0.12 | GPL-3.0 (GoboNet) | https://github.com/gobolinux/GoboNet | **yes**: a patched copy of upstream's widget lives in our look (see `HANDOFF.md`, 0.8.1) |
 
 Used only to build, not shipped: GNU xorriso 1.5.6.pl02 (GPL-3.0-or-later), writes the ISO.
@@ -70,9 +74,11 @@ These are observations, not conclusions:
 4. **Fonts (Inter, JetBrains Mono).** SIL OFL 1.1 allows bundling with software. We copy a subset of
    the files unchanged; the licence restricts the font names for modified versions (we do not
    modify them) and asks that the licence travel with the fonts (installed in each program's `doc/`).
-5. **Firefox.** The stock image contains Mozilla's official Firefox 136.0 binary (`Firefox
-   136.0_bin`) with Mozilla's branding. Mozilla's trademark policy governs redistribution of the
-   branded build; we pass it on unchanged.
+5. **Firefox.** Up to 0.8.5 the image contained the stock Mozilla Firefox 136.0 binary; from 0.9.1 it is
+   Mozilla's official Firefox ESR binary (153.7.0esr), with Mozilla's branding. Mozilla's trademark policy
+   governs redistribution of the branded build: the binary is passed on unchanged; the only addition is a
+   policy file that switches its self-updater off (the program folder is read-only). Whether that
+   still counts as "unmodified" for the trademark policy is a point to settle before publishing.
 6. **GPL-3.0 components next to GPL-2.0-or-later code.** Papirus, LXDM, Udevil, CopyQ, GoboNet's
    widget are GPL-3.0(-or-later); ONLYOFFICE is AGPL-3.0. Our code being GPL-2.0-or-later allows it
    to be combined with GPL-3.0 code (under GPL-3.0). Two places where our code and GPL-3.0 code are

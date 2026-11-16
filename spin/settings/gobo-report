@@ -21,6 +21,9 @@ umask 077
    echo "GoboRefined system report, $(date)"
    echo "user: $(id -un) ($(id -Gn))"
    echo "GoboRefined $(head -n 1 /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo '?'), based on GoboLinux 017.01"
+   # 0.9.2: the Device Manager's list on top (problem devices first)
+   section "Devices (gobo-devices --text)"
+   lua /Programs/GoboSpin/Current/share/gobo-settings/devices.lua --text 2>&1
    run uname -a
    run uptime
    section "CPU and memory"

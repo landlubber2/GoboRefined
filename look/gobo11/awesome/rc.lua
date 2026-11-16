@@ -28,6 +28,9 @@ local screenshot = require("spin.screenshot")
 local cliphist = require("spin.cliphist")
 local desktop_icons = require("spin.desktop_icons")   -- 0.6: ~/Desktop icons (PCManFM), Trash clean-up
 local bluetooth = require("spin.bluetooth")   -- 0.8.4: our menu (upstream widget paired without an agent)
+-- 0.9.1: Simple accounts (group "simple"): only the chosen programs, no terminal or desktop tools
+local simple = require("spin.simple")
+spin_simple = simple   -- lab tests
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
 local icon_theme = require("menubar.icon_theme")
@@ -272,8 +275,9 @@ end
 local mymainmenu = awful.menu({
    items = awful.util.table.join({
       { "Search applications...", function() launcher.show() end, beautiful.search_icon },
+   }, (not simple.is_simple) and {   -- 0.9.1: no terminal for Simple accounts
       { "Terminal", terminal, menubar.utils.lookup_icon("utilities-terminal") or beautiful.default_app_icon },
-   }, gears.filesystem.file_readable("/System/Index/bin/gobo-settings")   -- 0.8.2: Settings app (gear)
+   } or {}, gears.filesystem.file_readable("/System/Index/bin/gobo-settings")   -- 0.8.2: Settings app (gear)
       and { { "Settings", "gobo-settings", menubar.utils.lookup_icon("preferences-system") or beautiful.default_app_icon } } or {}),
    theme = { width = beautiful.menu_width, height = beautiful.menu_height },
 })
@@ -288,7 +292,7 @@ menu_gen.generate(function(entries)
    end
 
    for _, entry in ipairs(entries) do
-      if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil then
+      if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil and simple.allows(entry) then
          -- entries whose icon is not found keep their place, with the generic icon
          table.insert(cat_submenus[entry.category], { entry.name, entry.cmdline, entry.icon or beautiful.default_app_icon })
       end
@@ -300,7 +304,9 @@ menu_gen.generate(function(entries)
          mymainmenu:add({ cat.name, cat_submenus[k], icon_theme():find_icon_path(cat.icon_name) })
       end
    end
-   mymainmenu:add({ "Desktop", myawesomemenu, beautiful.desktop_icon })
+   if not simple.is_simple then   -- 0.9.1: the desktop's own tools (restart, config, ...) not for Simple accounts
+      mymainmenu:add({ "Desktop", myawesomemenu, beautiful.desktop_icon })
+   end
    mymainmenu:add({ "Power...", function() power.show() end, beautiful.power_icon })
 end)
 
@@ -336,7 +342,9 @@ local function pinned(icon, command, tip)
 end
 
 local start_button = hoverable(wibox.widget.imagebox(beautiful.start_icon), 4)
-launcher.setup({ on_power = power.show })
+-- 0.9.1: a Simple account's search finds only its programs and runs no typed commands
+launcher.setup({ on_power = power.show, allows = simple.allows, no_commands = simple.is_simple })
+spin_launcher = launcher   -- lab tests
 popups.register("alttab", function() alttab.cancel() end)
 start_button:buttons(awful.util.table.join(
    awful.button({}, 1, function() mymainmenu:toggle() end),   -- left click: the category menu
@@ -504,7 +512,9 @@ awful.screen.connect_for_each_screen(function(s)
    local center_layout = wibox.layout.fixed.horizontal()
    center_layout.spacing = 4
    center_layout:add(start_button)
-   center_layout:add(pinned(find_icon("utilities-terminal", "terminal"), terminal, "Terminal"))
+   if not simple.is_simple then   -- 0.9.1
+      center_layout:add(pinned(find_icon("utilities-terminal", "terminal"), terminal, "Terminal"))
+   end
    center_layout:add(pinned(find_icon("system-file-manager", "folder"), file_manager, "Files"))
    center_layout:add(pinned(find_icon("firefox"), browser, "Firefox"))
    center_layout:add(mytasklist[s])
@@ -591,6 +601,13 @@ root.buttons(awful.util.table.join(
 -- (spin/popups.lua closes it first)
 popups.pass({}, "Print", function() screenshot.take("screen") end)
 popups.pass({ modkey, "Shift" }, "s", function() screenshot.show() end)
+
+-- 0.9.1: keys that open power tools (terminal, restarting or quitting the desktop) are not
+-- bound for Simple accounts; Win+Escape, screenshots, clipboard history and desktops stay
+local function power_key(...)
+   if simple.is_simple then return {} end
+   return awful.key(...)
+end
 
 -- Key bindings
 local globalkeys = awful.util.table.join(
@@ -700,7 +717,7 @@ local globalkeys = awful.util.table.join(
       { description = "Power menu", group = "awesome" }),
 
    -- Standard program
-   awful.key({ modkey }, "Return",
+   power_key({ modkey }, "Return",
       function()
          awful.spawn(terminal)
       end,
@@ -718,11 +735,11 @@ local globalkeys = awful.util.table.join(
       end,
       { description = "Open a browser", group = "launcher" }),
 
-   awful.key({ modkey, "Control" }, "r",
+   power_key({ modkey, "Control" }, "r",
       awesome.restart,
       { description = "Reload Awesome", group = "awesome" }),
 
-   awful.key({ modkey, "Shift" }, "q",
+   power_key({ modkey, "Shift" }, "q",
       awesome.quit,
       { description = "Quit Awesome", group = "awesome" }),
 

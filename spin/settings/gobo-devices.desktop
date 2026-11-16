@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Device Manager
+GenericName=Devices and drivers
+Comment=Every device of this computer, whether it has a driver, and what to do when it has none
+Icon=preferences-desktop-peripherals
+Exec=gobo-devices
+Terminal=false
+Categories=Settings;System;HardwareSettings;
+Keywords=hardware;driver;drivers;devices;firmware;usb;pci;

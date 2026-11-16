@@ -31,6 +31,7 @@ CLOCK_MODE="GMT"        # hardware clock: GMT (UTC, the Linux norm) or LocalTime
 LOOK_DIR=""             # folder with the gobo11 look; default: found automatically
 SOURCE=""               # live image to install from; default: the live session's squashfs
 ASSUME_YES=0
+PW_MIN=8                # 0.9.1: shortest password for the user (an administrator) and root
 
 MIN_DISK_BYTES=32000000000   # "32 GB"
 BIG_DISK_BYTES=48000000000   # from "48 GB" on, the slots are larger (room for more programs)
@@ -226,10 +227,10 @@ ask_password() { # ask_password VAR "who"
    [ "$ASSUME_YES" != 1 ] || die "no password given for $who (set it in the --answers file)"
    while true
    do
-      read -r -s -p "Password for $who: " p1; echo
+      read -r -s -p "Password for $who (at least $PW_MIN characters): " p1; echo
       read -r -s -p "Repeat password for $who: " p2; echo
-      [ -n "$p1" ] && [ "$p1" = "$p2" ] && break
-      echo "Passwords are empty or do not match, try again."
+      [ "${#p1}" -ge "$PW_MIN" ] && [ "$p1" = "$p2" ] && break
+      echo "Passwords are shorter than $PW_MIN characters or do not match, try again."
    done
    printf -v "$var" '%s' "$p1"
 }
@@ -308,9 +309,10 @@ menu_password() { # menu_password VAR WHO
    local var="$1" who="$2" p1 p2
    while true
    do
-      p1=$(D --title "Password" --insecure --passwordbox "Password for $who:\n(each character is shown as a star)" 10 64) || { menu_quit; continue; }
+      p1=$(D --title "Password" --insecure --passwordbox "Password for $who (at least $PW_MIN characters):\n(each character is shown as a star)" 10 64) || { menu_quit; continue; }
       p2=$(D --title "Password" --insecure --passwordbox "Type the password for $who again:" 9 64) || { menu_quit; continue; }
       if [ -z "$p1" ]; then menu_error "The password cannot be empty."; continue; fi
+      if [ "${#p1}" -lt "$PW_MIN" ]; then menu_error "The password is too short: use at least $PW_MIN characters."; continue; fi
       if [ "$p1" != "$p2" ]; then menu_error "The two passwords are not the same. Please type them again."; continue; fi
       printf -v "$var" '%s' "$p1"
       p1=""; p2=""
@@ -495,6 +497,9 @@ why=$(check_hostname "$HOSTNAME_NEW") || die "invalid computer name '$HOSTNAME_N
 [ -f "/System/Index/share/zoneinfo/$TIMEZONE" ] || die "unknown timezone: $TIMEZONE"
 [[ "$XKB_LAYOUT" =~ ^[a-z,_]+$ ]] || die "invalid keyboard layout: $XKB_LAYOUT"
 [ -n "$USER_PASSWORD" ] && [ -n "$ROOT_PASSWORD" ] || die "empty password"
+# 0.9.1: the first user is an administrator, root is root: at least PW_MIN characters each
+[ "${#USER_PASSWORD}" -ge "$PW_MIN" ] && [ "${#ROOT_PASSWORD}" -ge "$PW_MIN" ] ||
+   die "a password is shorter than $PW_MIN characters"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "--swap needs a size in MB"
 disk_bytes=$(lsblk -bdno SIZE "$DISK")
 if [ "$disk_bytes" -ge "$BIG_DISK_BYTES" ]
@@ -712,6 +717,12 @@ in_target ln -sfn "/System/Index/share/zoneinfo/$TIMEZONE" /System/Settings/loca
 step "Creating users"
 in_target AddUser -f "$USER_FULLNAME" -p '!' --skel "$USER_NAME"
 in_target usermod -aG sys,lpadmin "$USER_NAME"     # sys = may use sudo
+# 0.9.1: and may log in over SSH once Remote access is switched on (group "remote", made by
+# gobo-make-system); its home folder is private (AddUser makes it 700; made sure here)
+if grep -q '^remote:' "$DEST/System/Settings/group"
+then in_target usermod -aG remote "$USER_NAME"
+fi
+chmod 700 "$DEST/Users/$USER_NAME"
 chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is not valid"
 
 # Passwords: hashed here (openssl reads the password on stdin; printf is a shell builtin, so it
@@ -917,7 +928,7 @@ if [ "$UI" = menu ]
 then
    gauge_close
    if dialog --backtitle "$BT" --title "Done" --yes-label "Restart now" --no-label "Later" --yesno \
-      "\n$SPIN_NAME is installed on $DISK.\n(System slot A; slot B is filled by the first system update.)\n\n$next\n\nDetails of the installation: $LOG" 14 80
+      "\n$SPIN_NAME is installed on $DISK.\n(System slot A; slot B is filled by the first system update.)\n\n$next\n\n'$USER_NAME' is an administrator. More people (standard accounts, or Simple accounts for a child, a grandparent or a guest): Settings > Accounts > Add a person.\n\nDetails of the installation: $LOG" 17 80
    then clear; exec reboot
    fi
    clear
@@ -925,4 +936,5 @@ fi
 echo
 echo "${c_cyan}$SPIN_NAME is installed on $DISK (system slot A; slot B is filled by the first update).${c_off}"
 echo "$next"
+echo "'$USER_NAME' is an administrator. More people (standard or Simple accounts): Settings > Accounts > Add a person."
 echo "Full log: $LOG"

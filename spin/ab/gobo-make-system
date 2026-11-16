@@ -124,6 +124,14 @@ printf 'export LANG=en_US.UTF-8\nexport LC_ALL=en_US.UTF-8\n' \
 chroot "$T" SymlinkProgram BootScripts >> "$LOG" 2>&1
 ln -sfn /Programs/BootScripts/Settings/inittab "$T/System/Settings/inittab"
 bootup="$T/Programs/BootScripts/Settings/BootScripts/BootUp"
+# 0.9.1: kernel hardening settings and the firewall, before any network comes up
+grep -q 'gobo-firewall boot' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.9.1): kernel settings that make attacks harder (one file), and the
+# firewall (nothing comes in unless it answers this computer; Settings > Network > Firewall).
+Exec "Applying the kernel security settings..." sysctl -q -p /Programs/GoboSpin/Current/share/gobo-security/sysctl.conf
+Exec "Starting the firewall..."                 /System/Index/bin/gobo-firewall boot
+BOOTUP
 grep -q 'gobo-update --boot-task' "$bootup" || cat >> "$bootup" <<'BOOTUP'
 
 # Added by GoboRefined: get an address on the wired interface (in the background, so a
@@ -146,6 +154,12 @@ grep -q 'gobo-settings-helper boot-bluetooth' "$bootup" || cat >> "$bootup" <<'B
 # good in Settings > Bluetooth (the stock "Bluetooth Start" above always powers it on).
 Exec "Applying the Bluetooth setting..." /System/Index/bin/gobo-settings-helper boot-bluetooth
 BOOTUP
+grep -q 'gobo-settings-helper boot-devices' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.9.2): a little after the start, note what the kernel said about
+# missing firmware and drivers that did not start (for Settings > Device Manager).
+Exec "Noting driver messages..." /System/Index/bin/gobo-settings-helper boot-devices
+BOOTUP
 # 0.8.4: the computer's Bluetooth name is its host name (main.conf, written before bluetoothd starts)
 if ! grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup"
 then
@@ -156,11 +170,20 @@ printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Set
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 
 # The desktop's power menu runs these through sudo; group "sys" (may use sudo at all) may
-# run them without a password.
+# run them without a password. 0.9.1: exactly the two commands the power menu uses (before:
+# shutdown/reboot/poweroff/halt with any arguments).
 sudoers="$T/Programs/Sudo/Settings/sudoers"
 if [ -f "$sudoers" ] && ! grep -q 'NOPASSWD: /System/Index/bin/shutdown' "$sudoers"
 then
-   echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown, /System/Index/bin/reboot, /System/Index/bin/poweroff, /System/Index/bin/halt' >> "$sudoers"
+   echo '%sys ALL=(root) NOPASSWD: /System/Index/bin/shutdown -r now, /System/Index/bin/shutdown -h now' >> "$sudoers"
+fi
+# 0.9.1: sudo starts commands with a clean environment and a fixed PATH (stock 017.01: the caller's
+# whole environment, "!env_reset"); administrators may still keep theirs with "sudo -E" (setenv);
+# a password is remembered for 5 minutes.
+if [ -f "$sudoers" ] && grep -q '^Defaults[[:space:]]*!env_reset' "$sudoers"
+then
+   sed -i 's|^Defaults[[:space:]]*!env_reset.*$|# GoboRefined 0.9.1 (stock: "Defaults !env_reset, setenv"):\nDefaults env_reset\nDefaults secure_path="/System/Index/bin:/System/Index/sbin"\nDefaults timestamp_timeout=5\nDefaults:%sys setenv|' "$sudoers"
+   grep -q '^Defaults env_reset$' "$sudoers" || die "could not change the sudo defaults"
 fi
 # 0.8.2: Settings app. Administrators (group sys) may run everything through sudo anyway;
 # standard users may change their own password and read the root part of the system report
@@ -174,6 +197,32 @@ then
 SUDOERS
 fi
 chroot "$T" visudo -c > /dev/null || die "the sudo configuration is not valid"
+
+# 0.9.1: the spin's account groups, with fixed ids below 1000 (gobo-update's first start adds
+# system groups of a new image to existing installs): "simple" = Simple accounts, "remote" = who
+# may log in over SSH (Settings > Remote access).
+for g in simple:970 remote:971
+do
+   if ! grep -q "^${g%%:*}:" "$T/System/Settings/group"
+   then chroot "$T" groupadd -g "${g#*:}" "${g%%:*}" >> "$LOG" 2>&1 || die "could not create the group ${g%%:*}"
+   fi
+done
+
+# 0.9.1: setuid audit (docs/security.md). The 1980s remote shell clients need no root rights on a
+# desktop (nothing here runs rshd/rlogind; ssh replaced them): the bit is taken away.
+for f in rsh rlogin rcp
+do
+   for p in "$T"/Programs/InetUtils/*/bin/$f
+   do
+      if [ -f "$p" ] && [ ! -L "$p" ]; then chmod u-s,g-s "$p"; fi
+   done
+done
+# The same for lsof (as root it showed every user the open files of all others; without the bit it
+# lists the caller's own programs) and ksu (Kerberos "su": no Kerberos is set up here).
+for p in "$T"/Programs/Lsof/*/bin/lsof "$T"/Programs/Kerberos/*/bin/ksu
+do
+   if [ -f "$p" ] && [ ! -L "$p" ]; then chmod u-s,g-s "$p"; fi
+done
 
 # 0.8.1: password hashes for root and group shadow only (stock: 644). gobo-update's boot task
 # does the same on every start for systems installed earlier.

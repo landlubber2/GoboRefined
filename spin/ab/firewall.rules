@@ -1,0 +1,26 @@
+# GoboRefined firewall (0.9.1): what may come IN to this computer. Everything going out is
+# allowed, and so are the answers to it. Read by gobo-firewall at every start and when it is
+# switched on (Settings > Network > Firewall, administrators only).
+#
+# One rule per line:   FAMILY  ARGUMENTS
+#   FAMILY     v4 (iptables), v6 (ip6tables) or both
+#   ARGUMENTS  the iptables arguments of one rule in the chain GOBO_IN, which every incoming
+#              packet passes. The first rule that matches decides.
+# GOBO_OPEN holds what is open only for a while: the SSH port while Remote access is on, and
+# address/name requests from the devices of the Wi-Fi hotspot while it is on (gobo-firewall
+# refresh writes it from the state of those switches).
+
+both  -i lo -j ACCEPT
+both  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+both  -m conntrack --ctstate INVALID -j DROP
+# ping
+v4    -p icmp --icmp-type echo-request -j ACCEPT
+# answers of DHCP servers (an address for this computer)
+v4    -p udp --sport 67 --dport 68 -j ACCEPT
+# IPv6 needs its control messages (finding neighbours and routers, ping) and DHCPv6 answers
+v6    -p ipv6-icmp -j ACCEPT
+v6    -p udp --sport 547 --dport 546 -j ACCEPT
+# opened by Remote access / Hotspot
+both  -j GOBO_OPEN
+# everything else coming in is dropped
+both  -j DROP

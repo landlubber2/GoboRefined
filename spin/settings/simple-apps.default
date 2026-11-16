@@ -1,0 +1,8 @@
+# GoboRefined 0.9.1: the programs a new Simple account sees (desktop file names). An
+# administrator changes the list per person in Settings > Accounts > Programs...
+# (No picture viewer, video player or calculator is on the image yet; Firefox opens pictures.)
+firefox.desktop
+pcmanfm.desktop
+onlyoffice-desktopeditors.desktop
+l3afpad.desktop
+audacious.desktop

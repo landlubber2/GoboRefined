@@ -1,0 +1,133 @@
+#!/bin/bash
+# gobo-firewall — GoboRefined's firewall (0.9.1): nothing comes in unless it answers something
+# this computer asked for; going out is free. The rules are in one readable file:
+#   /Programs/GoboSpin/Current/share/gobo-firewall/firewall.rules
+# (an administrator's own copy at /System/Settings/gobo-firewall.rules is used instead if it exists).
+#
+#   gobo-firewall boot       (boot scripts) start it unless it was switched off
+#   gobo-firewall enable     switch it on now and at every start
+#   gobo-firewall disable    switch it off now and at every start
+#   gobo-firewall start|stop now only
+#   gobo-firewall refresh    open/close what Remote access (SSH) and the Wi-Fi hotspot need
+#   gobo-firewall status     "on active", "on inactive", "off inactive" or "off active"
+#
+# Only its own chains are touched (GOBO_IN, GOBO_OPEN and one jump from INPUT); the hotspot's
+# chains (GOBO_HOTSPOT*, gobo-settings-helper) are separate. IPv6 the same with ip6tables.
+# If a rule cannot be loaded, everything is undone (open is better than a dead network) and the
+# reason is written to /Data/Variable/log/gobo-firewall.log.
+set -u
+export PATH=/System/Index/bin:/System/Index/sbin
+export LC_ALL=C
+unset BASH_ENV ENV CDPATH GLOBIGNORE
+IFS=$' \t\n'
+umask 022
+
+RULES=/Programs/GoboSpin/Current/share/gobo-firewall/firewall.rules
+[ -f /System/Settings/gobo-firewall.rules ] && RULES=/System/Settings/gobo-firewall.rules
+STATE=/Data/Variable/lib/gobo-settings
+OFF_FLAG=$STATE/firewall-off
+SSH_FLAG=$STATE/ssh-enabled
+HS_STATE=/Data/Variable/run/gobo-hotspot/state
+LOG=/Data/Variable/log/gobo-firewall.log
+RUN_STATE=/Data/Variable/run/gobo-firewall.active   # exists while the rules are loaded (Settings reads it)
+
+die() { echo "gobo-firewall: $*" >&2; log "error: $*"; exit 1; }
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG" 2>/dev/null; }
+[ "$(id -u)" = 0 ] || die "must be run as root"
+
+have_v6() { command -v ip6tables > /dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; }
+tables() { echo iptables; if have_v6; then echo ip6tables; fi; }
+active() { iptables -C INPUT -j GOBO_IN > /dev/null 2>&1; }
+
+load_modules() {
+   local m
+   for m in ip_tables iptable_filter nf_conntrack xt_conntrack ip6_tables ip6table_filter
+   do modprobe -q "$m" 2>/dev/null
+   done
+   true
+}
+
+stop_fw() {
+   local t
+   for t in $(tables)
+   do
+      while $t -D INPUT -j GOBO_IN 2>/dev/null; do :; done
+      $t -F GOBO_IN 2>/dev/null; $t -X GOBO_IN 2>/dev/null
+      $t -F GOBO_OPEN 2>/dev/null; $t -X GOBO_OPEN 2>/dev/null
+   done
+   rm -f "$RUN_STATE"
+   true
+}
+
+# refresh_open: GOBO_OPEN from the state of Remote access and the hotspot
+refresh_open() {
+   local t ifc=""
+   if [ -f "$HS_STATE" ]
+   then
+      ifc=$(sed -n 's/^iface=//p' "$HS_STATE" | head -n 1)
+      [[ "$ifc" =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || ifc=""
+   fi
+   for t in $(tables)
+   do
+      $t -N GOBO_OPEN 2>/dev/null; $t -F GOBO_OPEN || return 1
+      if [ -e "$SSH_FLAG" ]
+      then $t -A GOBO_OPEN -p tcp --dport 22 -j ACCEPT || return 1
+      fi
+      if [ -n "$ifc" ] && [ "$t" = iptables ]
+      then
+         $t -A GOBO_OPEN -i "$ifc" -p udp --dport 67 -j ACCEPT &&
+         $t -A GOBO_OPEN -i "$ifc" -p udp --dport 53 -j ACCEPT &&
+         $t -A GOBO_OPEN -i "$ifc" -p tcp --dport 53 -j ACCEPT || return 1
+      fi
+   done
+}
+
+start_fw() {
+   local t fam rest line n=0 tok bad
+   [ -r "$RULES" ] || die "no rules file ($RULES)"
+   load_modules
+   stop_fw
+   refresh_open || { stop_fw; die "could not set up GOBO_OPEN"; }
+   for t in $(tables)
+   do $t -N GOBO_IN || { stop_fw; die "$t: could not create GOBO_IN"; }
+   done
+   while IFS= read -r line || [ -n "$line" ]
+   do
+      n=$((n + 1))
+      line=${line%%#*}
+      read -r fam rest <<< "$line"
+      [ -n "${fam:-}" ] || continue
+      local -a args
+      read -ra args <<< "$rest"
+      bad=""
+      for tok in "${args[@]}"
+      do [[ "$tok" =~ ^[A-Za-z0-9_,./:!-]+$ ]] || bad="$tok"
+      done
+      [ -z "$bad" ] && [ ${#args[@]} -gt 0 ] || { stop_fw; die "$RULES line $n: not understood"; }
+      case "$fam" in
+         v4)   iptables -A GOBO_IN "${args[@]}" || { stop_fw; die "$RULES line $n: iptables refused it"; } ;;
+         v6)   if have_v6; then ip6tables -A GOBO_IN "${args[@]}" || { stop_fw; die "$RULES line $n: ip6tables refused it"; }; fi ;;
+         both) iptables -A GOBO_IN "${args[@]}" || { stop_fw; die "$RULES line $n: iptables refused it"; }
+               if have_v6; then ip6tables -A GOBO_IN "${args[@]}" || { stop_fw; die "$RULES line $n: ip6tables refused it"; }; fi ;;
+         *)    stop_fw; die "$RULES line $n: the first word must be v4, v6 or both" ;;
+      esac
+   done < "$RULES"
+   for t in $(tables)
+   do $t -A INPUT -j GOBO_IN || { stop_fw; die "$t: could not hook GOBO_IN into INPUT"; }
+   done
+   mkdir -p "${RUN_STATE%/*}"; date '+%Y-%m-%d %H:%M:%S' > "$RUN_STATE"; chmod 644 "$RUN_STATE"
+   log "started ($RULES)"
+}
+
+case "${1:-}" in
+   boot)    if [ -e "$OFF_FLAG" ]; then log "switched off: not started"; else start_fw; fi ;;
+   start)   start_fw ;;
+   stop)    stop_fw; log "stopped" ;;
+   enable)  mkdir -p "$STATE"; rm -f "$OFF_FLAG"; start_fw ;;
+   disable) mkdir -p "$STATE"; chmod 755 "$STATE"; : > "$OFF_FLAG"; stop_fw; log "switched off" ;;
+   refresh) if active; then refresh_open || die "could not refresh GOBO_OPEN"; fi ;;
+   status)  s=on; [ -e "$OFF_FLAG" ] && s=off
+            a=inactive; active && a=active
+            echo "$s $a" ;;
+   *) echo "usage: gobo-firewall boot|enable|disable|start|stop|refresh|status" >&2; exit 1 ;;
+esac

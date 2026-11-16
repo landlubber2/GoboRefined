@@ -18,6 +18,8 @@ local matches = {}
 local selected, offset = 1, 0
 local popup, backdrop, prompt_box, list_layout, hint
 local on_power         -- callback for the power button
+local allows           -- 0.9.1: function(entry) -> may this program be listed (Simple accounts)
+local no_commands = false   -- 0.9.1: never run typed text as a command (Simple accounts)
 local open = false
 
 local function p() return beautiful.palette end
@@ -26,14 +28,14 @@ local function load_apps()
    menu_gen.generate(function(entries)
       local seen, list = {}, {}
       for _, e in ipairs(entries) do
-         if e.name and e.cmdline and not seen[e.name] then
+         if e.name and e.cmdline and not seen[e.name] and (not allows or allows(e)) then
             seen[e.name] = true
             table.insert(list, { name = e.name, cmdline = e.cmdline, icon = e.icon })
          end
       end
       -- 0.8.1: the display settings (LXRandR calls itself "Monitor Settings") under the name
       -- the dots menu uses
-      if not seen["Displays"] then
+      if not seen["Displays"] and not no_commands then
          table.insert(list, { name = "Displays", cmdline = "lxrandr", icon = nil })
       end
       table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
@@ -55,7 +57,7 @@ local function filter(query)
       end
       for _, app in ipairs(starts) do table.insert(matches, app) end
       for _, app in ipairs(contains) do table.insert(matches, app) end
-      if #matches == 0 then
+      if #matches == 0 and not no_commands then
          table.insert(matches, { name = "Run command: " .. query, cmdline = query, shell = true })
       end
    end
@@ -243,6 +245,19 @@ end
 
 function launcher.toggle() launcher.show() end
 
+-- the names the search can find (lab tests, 0.9.1)
+function launcher.app_names()
+   local names = {}
+   for _, app in ipairs(apps) do table.insert(names, app.name) end
+   return names
+end
+function launcher.matches_for(query)
+   filter(query)
+   local names = {}
+   for _, app in ipairs(matches) do table.insert(names, app.name) end
+   return names
+end
+
 -- centre of the power button on screen (lab input tests)
 function launcher.power_xy()
    if not open then return nil end
@@ -251,6 +266,8 @@ end
 
 function launcher.setup(args)
    on_power = args and args.on_power
+   allows = args and args.allows
+   no_commands = (args and args.no_commands) == true
    load_apps()
    popups.register("launcher", launcher.hide)
 end

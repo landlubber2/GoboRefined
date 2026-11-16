@@ -1,0 +1,108 @@
+#!/bin/bash
+# gobo-devices-scan [ROOT] — one pass over sysfs for the Device Manager (devices.lua reads this).
+# Prints tab-separated records, one per line; the first field names the record:
+#   pci    SLOT VENDOR DEVICE CLASS DRIVER MODALIAS FLAGS        (DRIVER "-" when nothing is bound)
+#   usb    PORT VENDOR PRODUCT DEVCLASS INTERFACES PRODUCT-TEXT MAKER-TEXT FLAGS REMOVABLE
+#          INTERFACES = "cc/ss/pp=driver=modalias" joined by spaces (driver "-" when unbound)
+#   alias  MODALIAS MODULE...      which modules of the running kernel claim an unbound device
+#   rfkill SYSFS-PATH TYPE SOFT HARD
+#   hci    NAME SYSFS-PATH         Bluetooth adapters (to match "bluetooth hci0: ..." log lines)
+#   block  NAME MODEL SIZE-512 REMOVABLE
+#   power  NAME TYPE STATUS CAPACITY
+#   lspci  one line of "lspci -D -mm -nn" (names)
+#   lsusb  one line of "lsusb" (names)
+#   sound  NUMBER-OF-ALSA-CARDS
+#   kernel RELEASE
+#   kmsg   one kernel message about firmware or a failed driver start (collected as root at
+#          boot and by "Read kernel messages": gobo-settings-helper boot-devices / device-log)
+# FLAGS: words out of net=IFNAME wifi sound bt drm.
+# ROOT (tests): a directory with a copy of sys/, proc/asound/cards and the text files lspci.txt,
+# lsusb.txt, aliases.txt ("MODALIAS MODULE..." per line), kmsg.txt, release.txt.
+export LC_ALL=C PATH=/System/Index/bin:/System/Index/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+R="${1:-}"
+T=$'\t'
+val() { local v=""; [ -r "$1" ] && read -r v < "$1" 2>/dev/null; printf '%s' "${v//$T/ }"; }
+flags() {   # flags DEVICE-DIR: what appeared under the device (not under devices plugged into it)
+   local d="$1" f="" p n seen=" "
+   while IFS= read -r p
+   do case "$p" in
+         */net/*) n=${p#*/net/}; n=${n%%/*}
+            case "$seen" in *" $n "*) continue ;; esac
+            seen="$seen$n "; f="$f net=$n"
+            p=${p%%/net/*}/net/$n
+            if [ -e "$p/wireless" ] || [ -e "$p/phy80211" ]; then f="$f wifi"; fi ;;
+         */sound/card*) case " $f " in *" sound "*) ;; *) f="$f sound" ;; esac ;;
+         */bluetooth/hci*) case " $f " in *" bt "*) ;; *) f="$f bt" ;; esac ;;
+         */drm/card*) case " $f " in *" drm "*) ;; *) f="$f drm" ;; esac ;;
+      esac
+   done < <(find "$d/" -mindepth 1 -maxdepth 4 \( -name 'usb[0-9]*' -o \( -name '[0-9]*-[0-9]*' ! -name '*:*' \) \) -prune -o \
+               \( -path '*/net/*' -o -path '*/sound/card[0-9]*' -o -path '*/bluetooth/hci[0-9]*' -o -path '*/drm/card[0-9]*' \) -print 2>/dev/null)
+   printf '%s' "${f# }"
+}
+drv() { if [ -e "$1/driver" ]; then local l; l=$(readlink "$1/driver"); printf '%s' "${l##*/}"; else printf '%s' "-"; fi; }
+unbound=""
+
+for d in "$R"/sys/bus/pci/devices/*
+do [ -e "$d/vendor" ] || continue
+   v=$(val "$d/vendor"); p=$(val "$d/device"); c=$(val "$d/class"); m=$(val "$d/modalias"); dr=$(drv "$d")
+   printf 'pci\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${d##*/}" "${v#0x}" "${p#0x}" "${c#0x}" "$dr" "$m" "$(flags "$d")"
+   [ "$dr" = "-" ] && [ -n "$m" ] && unbound="$unbound$m"$'\n'
+done
+
+for d in "$R"/sys/bus/usb/devices/*
+do [ -e "$d/idVendor" ] || continue
+   name=${d##*/}
+   case "$name" in usb*) continue ;; esac   # root hubs belong to their controller
+   ifs=""
+   for i in "$d/$name":*
+   do [ -e "$i/bInterfaceClass" ] || continue
+      im=$(val "$i/modalias"); idr=$(drv "$i")
+      ifs="$ifs $(val "$i/bInterfaceClass")/$(val "$i/bInterfaceSubClass")/$(val "$i/bInterfaceProtocol")=$idr=$im"
+      [ "$idr" = "-" ] && [ -n "$im" ] && unbound="$unbound$im"$'\n'
+   done
+   printf 'usb\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$(val "$d/idVendor")" "$(val "$d/idProduct")" \
+      "$(val "$d/bDeviceClass")" "${ifs# }" "$(val "$d/product")" "$(val "$d/manufacturer")" "$(flags "$d")" "$(val "$d/removable")"
+done
+
+if [ -n "$R" ]
+then [ -r "$R/aliases.txt" ] && sed 's/^\([^ ]*\) */alias\t\1\t/' "$R/aliases.txt"
+else
+   printf '%s' "$unbound" | sort -u | while read -r m
+   do [ -n "$m" ] || continue
+      mods=$(modprobe -R "$m" 2>/dev/null | tr '\n' ' ')
+      [ -n "$mods" ] && printf 'alias\t%s\t%s\n' "$m" "${mods% }"
+   done
+fi
+
+for r in "$R"/sys/class/rfkill/rfkill*
+do [ -e "$r/type" ] || continue
+   printf 'rfkill\t%s\t%s\t%s\t%s\n' "$(readlink -f "$r/device" 2>/dev/null)" "$(val "$r/type")" "$(val "$r/soft")" "$(val "$r/hard")"
+done
+for h in "$R"/sys/class/bluetooth/hci*
+do [ -e "$h" ] || continue
+   case "${h##*/}" in *:*) continue ;; esac
+   printf 'hci\t%s\t%s\n' "${h##*/}" "$(readlink -f "$h/device" 2>/dev/null)"
+done
+for b in "$R"/sys/block/sd* "$R"/sys/block/nvme* "$R"/sys/block/mmcblk* "$R"/sys/block/vd*
+do [ -e "$b/size" ] || continue
+   case "${b##*/}" in mmcblk*boot*|mmcblk*rpmb*) continue ;; esac
+   printf 'block\t%s\t%s\t%s\t%s\n' "${b##*/}" "$(val "$b/device/model")" "$(val "$b/size")" "$(val "$b/removable")"
+done
+for s in "$R"/sys/class/power_supply/*
+do [ -e "$s/type" ] || continue
+   printf 'power\t%s\t%s\t%s\t%s\n' "${s##*/}" "$(val "$s/type")" "$(val "$s/status")" "$(val "$s/capacity")"
+done
+
+if [ -n "$R" ]
+then
+   [ -r "$R/lspci.txt" ] && sed 's/^/lspci\t/' "$R/lspci.txt"
+   [ -r "$R/lsusb.txt" ] && sed 's/^/lsusb\t/' "$R/lsusb.txt"
+   [ -r "$R/kmsg.txt" ] && sed 's/^/kmsg\t/' "$R/kmsg.txt"
+   printf 'kernel\t%s\n' "$(val "$R/release.txt")"
+else
+   lspci -D -mm -nn 2>/dev/null | sed 's/^/lspci\t/'
+   lsusb 2>/dev/null | sed 's/^/lsusb\t/'
+   [ -r /Data/Variable/run/gobo-devices-kmsg ] && sed 's/^/kmsg\t/' /Data/Variable/run/gobo-devices-kmsg
+   printf 'kernel\t%s\n' "$(uname -r)"
+fi
+printf 'sound\t%s\n' "$(grep -c '^ *[0-9][0-9]* \[' "$R/proc/asound/cards" 2>/dev/null || true)"

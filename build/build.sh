@@ -36,10 +36,13 @@ CMD=${1:-all}
 
 STOCK_VERSION=017.01
 STOCK_ISO_SIZE=2433744896          # bytes of GoboLinux-017.01-x86_64.iso
-KREL=6.12.16-Gobo
+KVER=$(head -n 1 "$REPO/spin/kernel-version")   # the image's kernel (0.9.1: one place for the version)
+KREL=$KVER-Gobo
+# 0.9.1: + linux (before rtl8852au, which is built against it), intel-microcode, firefox, ca-bundle
 STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
-       lxdm udevil usb-modeswitch rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
-       sbc pulseaudio-bluetooth"
+       lxdm udevil usb-modeswitch linux rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
+       sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle"
+LAST_STEP=ca-bundle
 
 say() { echo "== $*"; }
 die() { echo "build.sh: ERROR: $*" >&2; exit 1; }
@@ -52,6 +55,8 @@ esac
 
 [ "$(id -u)" = 0 ] || die "run as root (sudo bash build/build.sh)"
 [[ "$WORK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "WORK must be an absolute path without spaces (got '$WORK')"
+[ "$(awk '$1 == "linux" { print $2 }' "$MANIFEST")" = "$KVER" ] ||
+   die "spin/kernel-version says $KVER, build/sources.manifest pins another kernel (change both)"
 [ -f "$MANIFEST" ] && [ -f "$REPO/spin/build-iso.sh" ] && [ -f "$REPO/spin/build-programs.sh" ] ||
    die "$REPO does not look like a GoboRefined checkout"
 case "$WORK/" in "$REPO"/*) die "WORK must not be inside the repository checkout" ;; esac
@@ -281,6 +286,7 @@ step_inputs() {
       pcmanfm)    cat "$REPO/spin/patches/pcmanfm-1.2.5-gobo.patch" ;;
       udevil)     cat "$REPO/spin/patches/udevil-0.4.4-gobo-monitor.patch" ;;
       usb-modeswitch) cat "$REPO/spin/gobo-wifi-switch" ;;
+      linux|rtl8852au) cat "$REPO/spin/kernel-version" ;;
       lxdm)       find "$REPO/spin/lxdm" -type f | LC_ALL=C sort | xargs cat ;;
       gobofiles)  find "$REPO/spin/gobofiles" -type f | LC_ALL=C sort | xargs cat ;;
    esac
@@ -317,6 +323,7 @@ build_programs() {
       # LibFM is built "extra only" by menu-cache, PCManFM links against LibFM: redo what follows
       case "$s" in
          menu-cache) rm -f "$STATE/step-libfm.done" "$STATE/step-pcmanfm.done" ;;
+         linux)      rm -f "$STATE/step-rtl8852au.done" ;;   # the driver is built against it
          libfm)      rm -f "$STATE/step-pcmanfm.done" ;;
       esac
       rm -f "$STATE/step-$s.done"
@@ -369,7 +376,7 @@ build_image() {
    [[ "$v" =~ ^[0-9A-Za-z.-]+$ ]] || die "bad VERSION '$v'"
    say "image GoboRefined $v (spin/build-iso.sh)"
    mount_buildroot
-   [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] && [ -e "$STATE/step-pulseaudio-bluetooth.done" ] ||
+   [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] && [ -e "$STATE/step-$LAST_STEP.done" ] ||
       die "the programs are not built yet (run: build.sh programs)"
    # a fresh copy-on-write layer over the stock image every time
    mountpoint -q "$IMG/rootfs" && umount -R "$IMG/rootfs"

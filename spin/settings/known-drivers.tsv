@@ -1,0 +1,9 @@
+# Hardware the project knows something about: ID <tab> kind <tab> text shown to the user.
+# kind: outoftree (separate driver shipped in GoboRefined), kernel (in-kernel from a version),
+# none (no Linux driver), cdmode (adapter still shows its Windows driver CD), note.
+# Add lines freely; IDs are bus-less "vendor:device" in lower-case hex.
+2357:013f	outoftree	TP-Link Archer TX20U Plus (Realtek RTL8852AU): driver 8852au, a separate driver included in GoboRefined since 0.8; rebuilt for every kernel.
+2357:0141	outoftree	TP-Link Archer TX20U Plus (Realtek RTL8852AU): driver 8852au, a separate driver included in GoboRefined since 0.8; rebuilt for every kernel.
+0bda:1a2b	cdmode	This Realtek Wi-Fi adapter is still showing its built-in "driver CD" and not the Wi-Fi part. GoboRefined switches it over by itself a few seconds after it is plugged in; if it stays like this, unplug it and plug it in again, or use Rescan devices.
+8086:a0c8	note	Intel Tiger Lake sound (SOF): needs the firmware collection sof-bin, included in GoboRefined since 0.8.4.
+8086:51c8	note	Intel Alder Lake sound (SOF): needs the firmware collection sof-bin, included in GoboRefined since 0.8.4.

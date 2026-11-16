@@ -10,6 +10,15 @@ xsetroot -solid '#0b1630' -cursor_name left_ptr
 
 # Load user preferences
 [ -e ~/.Xresources ] && xrdb -merge ~/.Xresources
+# 0.9.1: "Larger text and icons" (chosen when the account was made, Settings > Accounts):
+# programs draw everything a step larger (96 -> 120 dots per inch)
+if [ -e ~/.config/goborefined/large-text ]
+then
+   echo 'Xft.dpi: 120' | xrdb -merge
+   # GTK 3 programs read it from their settings file (only [Settings] in it; apply.sh rewrites it)
+   grep -q '^gtk-xft-dpi' ~/.config/gtk-3.0/settings.ini 2>/dev/null ||
+      echo 'gtk-xft-dpi=122880' >> ~/.config/gtk-3.0/settings.ini
+fi
 
 # Update the MIME database
 [ -e /bin/update-mime-database ] && \

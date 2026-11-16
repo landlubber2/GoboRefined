@@ -121,21 +121,38 @@ end
 
 -- Accounts ------------------------------------------------------------------------
 
-function C.people()   -- { {login, uid, name, admin}, ... } for uid 1000..59999
-   local admins = {}
+-- members of a group (group file)
+function C.group_members(group)
+   local set = {}
    for line in (C.read("/System/Settings/group") or ""):gmatch("[^\n]+") do
       local name, members = line:match("^([^:]*):[^:]*:[^:]*:(.*)$")
-      if name == "sys" then
-         for m in members:gmatch("[^,]+") do admins[m] = true end
+      if name == group then
+         for m in members:gmatch("[^,]+") do set[m] = true end
       end
    end
+   return set
+end
+
+-- 0.9.1: three kinds of accounts. "admin" = group sys (may use sudo), "simple" = group simple
+-- (a short list of programs, only the home folder and USB drives), "standard" = the others.
+C.KIND_NAMES = { admin = "Administrator", standard = "Standard", simple = "Simple" }
+C.KIND_HELP = {
+   admin = "Administrator: everything, including system settings, updates and other accounts.",
+   standard = "Standard: own files, all programs and the terminal; no system settings.",
+   simple = "Simple: own files and USB sticks, a short list of programs; nothing that can break the system.",
+}
+C.PW_MIN = { admin = 8, standard = 8, simple = 4 }
+
+function C.people()   -- { {login, uid, name, admin, kind, remote}, ... } for uid 1000..59999
+   local admins, simples, remote = C.group_members("sys"), C.group_members("simple"), C.group_members("remote")
    local list = {}
    for line in (C.read("/System/Settings/passwd") or ""):gmatch("[^\n]+") do
       local login, uid, gecos = line:match("^([^:]*):[^:]*:(%d+):%d+:([^:]*):")
       uid = tonumber(uid)
       if login and uid >= 1000 and uid < 60000 then
+         local kind = admins[login] and "admin" or (simples[login] and "simple" or "standard")
          table.insert(list, { login = login, uid = uid, name = (gecos or ""):match("^([^,]*)") or "",
-                              admin = admins[login] == true })
+                              admin = kind == "admin", kind = kind, remote = remote[login] == true })
       end
    end
    table.sort(list, function(a, b) return a.uid < b.uid end)
@@ -147,6 +164,15 @@ function C.is_admin(login)
       if p.login == (login or C.USER) then return p.admin end
    end
    return false
+end
+
+function C.kind(login)   -- "admin", "standard" or "simple" (root counts as admin)
+   login = login or C.USER
+   if login == "root" then return "admin" end
+   for _, p in ipairs(C.people()) do
+      if p.login == login then return p.kind end
+   end
+   return "standard"
 end
 
 -- Dialogs -------------------------------------------------------------------------
@@ -195,6 +221,10 @@ function C.form(title, fields, ok_label, validate)
       if f.kind == "check" then
          w = Gtk.CheckButton { label = f.label, active = f.value == true }
          grid:attach(w, 1, i - 1, 1, 1)
+      elseif f.kind == "note" then   -- 0.9.1: a line of text across the form
+         w = Gtk.Label { label = f.label, xalign = 0, wrap = true, max_width_chars = 64 }
+         w:get_style_context():add_class("dim-label")
+         grid:attach(w, 0, i - 1, 2, 1)
       else
          if f.kind == "choice" then
             w = Gtk.ComboBoxText()
@@ -207,7 +237,7 @@ function C.form(title, fields, ok_label, validate)
          grid:attach(Gtk.Label { label = f.label, xalign = 1 }, 0, i - 1, 1, 1)
          grid:attach(w, 1, i - 1, 1, 1)
       end
-      if f.on_change and f.kind ~= "check" and f.kind ~= "choice" then
+      if f.on_change and f.kind ~= "check" and f.kind ~= "note" then
          w.on_changed = function() f.on_change(w, widgets) end
       end
       widgets[f.key] = w
@@ -221,6 +251,7 @@ function C.form(title, fields, ok_label, validate)
          local w = widgets[f.key]
          if f.kind == "check" then values[f.key] = w.active
          elseif f.kind == "choice" then values[f.key] = w:get_active_id()
+         elseif f.kind == "note" then values[f.key] = nil
          else values[f.key] = w.text end
       end
       local problem = validate and validate(values)
@@ -232,8 +263,10 @@ function C.form(title, fields, ok_label, validate)
    end
 end
 
-function C.check_password(pw, again)
+function C.check_password(pw, again, kind)   -- kind: the account's kind (shortest length, 0.9.1)
    if pw == "" then return "The password is empty." end
+   local min = C.PW_MIN[kind or "admin"] or 8
+   if #pw < min then return string.format("The password is too short: use at least %d characters.", min) end
    if #pw > 128 then return "The password is too long." end
    if pw:match("%c") then return "The password may not contain control characters." end
    if pw ~= again then return "The two passwords are not the same." end

@@ -38,6 +38,16 @@ function P.build(C)
    end
    box:pack_start(grid, false, false, 0)
 
+   -- 0.9.2: one line from the Device Manager's detection, and the way there
+   do
+      local ok, D = pcall(require, "devices")
+      if ok and C.kind() ~= "simple" then
+         local M = D.scan()
+         box:pack_start(C.heading("Devices and drivers"), false, false, 0)
+         box:pack_start(C.text(M.problems == 0 and "All devices have a driver." or (M.problems .. (M.problems == 1 and " device needs" or " devices need") .. " attention."), M.problems == 0 and "dim-label" or "gobo-value"), false, false, 0)
+         box:pack_start(C.button("Open Device Manager", function() C.spawn({ "gobo-settings", "devices" }) end), false, false, 0)
+      end
+   end
    box:pack_start(C.heading("When something does not work"), false, false, 0)
    box:pack_start(C.text("A system report collects what helps to find the cause (devices, network, the latest system messages, logs) in one text file in your home folder. Without a mouse: open a terminal (Win+Enter) and type  gobo-report", "dim-label"), false, false, 0)
    local btn

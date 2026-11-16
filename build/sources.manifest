@@ -38,6 +38,12 @@ linux-firmware  20261019      linux-firmware-20261019.tar.xz               a10d1
 sof-firmware    2026.09.2     sof-bin-2026.09.2.tar.gz                     5f7bc30b2b5c1e6b0da55a33fc44e2b7f56ae9b06952edcde614f51ef6b943e1  BSD-3-Clause         https://github.com/thesofproject/sof-bin/releases/download/v2026.09.2/sof-bin-2026.09.2.tar.gz
 sbc             2.0           sbc-2.0.tar.xz                               8f12368e1dbbf55e14536520473cfb338c84b392939cc9b64298360fd4a07992  LGPL-2.1-or-later    https://mirrors.edge.kernel.org/pub/linux/bluetooth/sbc-2.0.tar.xz
 pulseaudio-bluetooth 13.0     pulseaudio-13.0.tar.xz                       961b23ca1acfd28f2bc87414c27bb40e12436efcf2158d29721b1e89f3f28057  LGPL-2.1-or-later    https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-13.0.tar.xz
+# 0.9.1 (downloaded 2026-11-16; linux matches kernel.org's sha256sums.asc, firefox Mozilla's SHA256SUMS of the release,
+# cacert the .sha256 published next to it on curl.se; the Intel archive is GitHub's tarball of the tag, hash as downloaded):
+linux           6.12.117      linux-6.12.117.tar.xz                        74e99aa5e60e242e0a165fed8cb2ea0d054bf7a401f01861d403d75733456613  GPL-2.0-only         https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.117.tar.xz
+intel-microcode 20261110      intel-microcode-20261110.tar.gz              989a5cd345808babee491da69ed80ae5741697bc87743a71d0ba611f3fd6afa5  LicenseRef-Intel-microcode  https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/refs/tags/microcode-20261110.tar.gz
+firefox         153.7.0esr    firefox-153.7.0esr.tar.xz                    7d2eb92ca3a7b2a83de092eb9b94c853980214de2fbfdccb2ac39d61c593c5a5  MPL-2.0              https://ftp.mozilla.org/pub/firefox/releases/153.7.0esr/linux-x86_64/en-US/firefox-153.7.0esr.tar.xz
+ca-bundle       2026-11-05    cacert-2026-11-05.pem                        427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285  MPL-2.0              https://curl.se/ca/cacert-2026-11-05.pem
 
 # Not downloaded by the build (already in the repository, listed for completeness):
 #   wireless-regdb 2026.09.03  spin/firmware/wireless-regdb/  ISC

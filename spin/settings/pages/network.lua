@@ -34,6 +34,43 @@ function P.build(C)
       C.button("Refresh", refresh)), false, false, 0)
    box:pack_start(C.text("The network menu (the network icon on the taskbar) lists Wi-Fi networks, connects and disconnects.", "dim-label"), false, false, 0)
    refresh()
+
+   -- 0.9.1: firewall (gobo-firewall): nothing comes in unless it answers this computer; Remote
+   -- access and the hotspot open what they need while they are on. Administrators switch it.
+   local OFF_FLAG = "/Data/Variable/lib/gobo-settings/firewall-off"
+   local ACTIVE = "/Data/Variable/run/gobo-firewall.active"
+   box:pack_start(C.heading("Firewall"), false, false, 0)
+   local fw_state = C.text("")
+   local sw = C.Gtk.Switch { valign = C.Gtk.Align.CENTER }
+   local setting = false
+   local function fw_refresh()
+      setting = true
+      sw.active = not C.exists(OFF_FLAG)
+      sw.state = sw.active
+      setting = false
+      local on, active = not C.exists(OFF_FLAG), C.exists(ACTIVE)
+      fw_state.label = on and (active and "On: other computers cannot connect to this one (except Remote access and the hotspot while they are on)."
+                                      or "On, but not running (see /Data/Variable/log/gobo-firewall.log).")
+                          or "Off: other computers on the network can reach every service of this computer."
+   end
+   sw.on_state_set = function(_, want)
+      if setting then return false end
+      C.helper({ "firewall", want and "on" or "off" }, nil, function(ok, out)
+         if not ok then C.error(C.clean_error(out)) end
+         fw_refresh()
+      end)
+      return true
+   end
+   sw.sensitive = C.is_admin()
+   local line = C.Gtk.Box { orientation = C.Gtk.Orientation.HORIZONTAL, spacing = 12 }
+   line:pack_start(sw, false, false, 0)
+   line:pack_start(C.Gtk.Label { label = "Firewall", xalign = 0 }, false, false, 0)
+   box:pack_start(line, false, false, 0)
+   box:pack_start(fw_state, false, false, 0)
+   if not C.is_admin() then
+      box:pack_start(C.text("Only an administrator can switch the firewall.", "dim-label"), false, false, 0)
+   end
+   fw_refresh()
    return outer
 end
 
