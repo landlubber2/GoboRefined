@@ -13,3 +13,9 @@
 /vm/serve/*.tgz
 # old lab packages (no longer used: build/build.sh compiles everything)
 /spin/programs/
+
+# Internal notes (local only; not published)
+*.md
+!/README.md
+!/BUILDING.md
+!/docs/third-party.md
