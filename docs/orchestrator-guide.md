@@ -143,3 +143,9 @@ See `docs/roadmap.md` for the full list. In short:
   first; the owner must say yes to each and posts under their own account.
 - **Known bugs not fixed**: freeze when the USB Wi-Fi adapter is unplugged; desktop icons not redrawn after
   moving; file-chooser side pane lists system mounts.
+
+## Ready-made briefs
+
+`docs/briefs/` holds complete worker tasks for the next releases (0.8.5, 0.9.1, 0.9.2, 0.9.5, publishing
+preparation, upstream bug reports). Start them as `docs/briefs/README.md` says; each brief lists questions
+to settle with the owner before launching.
