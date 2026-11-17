@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.9.1]
+#   VERSION        [0.9.4]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.9.2}
+VERSION=${VERSION:-0.9.4}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -52,7 +52,11 @@ rm -rf gobo11 ab firmware settings
 cp "$REPO/installer/gobo-install" gobo-install
 cp "$REPO/spin/welcome.src" welcome.src
 cp "$REPO/spin/gobo-command-not-found" gobo-command-not-found
-cp "$REPO/docs/software-install.md" software-install.txt
+# software-install.txt rides on the ISO for users; fall back if the checkout omitted the md
+if [ -f "$REPO/docs/software-install.md" ]
+then cp "$REPO/docs/software-install.md" software-install.txt
+else printf '%s\n' "See https://github.com/landlubber2/GoboRefined and BUILDING.md." > software-install.txt
+fi
 cp -r "$REPO/look/gobo11" gobo11
 cp -r "$REPO/spin/ab" ab
 # 0.8.2: firmware/ (regulatory.db) and settings/ (Settings app)

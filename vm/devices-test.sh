@@ -58,4 +58,20 @@ ok "the installed command runs" "$(S 'hello-gobo')" "^hello$"
 ok "installing it twice is refused" "$(S "$HELPER app-install /tmp/pk/Hello--1.0--x86_64.tar.bz2 2>&1 | tail -n 2")" "already installed"
 ok "remove through the helper" "$(S "$HELPER app-remove Hello 1.0 2>&1 | tail -n 1")" "REMOVED-OK Hello 1.0"
 ok "the program is gone" "$(S 'ls /Programs/Hello 2>&1 | head -n 1; command -v hello-gobo || echo no-command')" "no-command"
+# 0.9.4: MIME — install a package with MimeType=, expect gio as a normal user to name it;
+# an existing user default (text/plain=l3afpad) is not replaced; remove clears the claim.
+S 'rm -rf /tmp/pkmime && mkdir -p /tmp/pkmime/MimeProbe/1.0/bin /tmp/pkmime/MimeProbe/1.0/share/applications /tmp/pkmime/MimeProbe/1.0/Resources &&
+   printf "#!/bin/sh\necho mimeprobe\n" > /tmp/pkmime/MimeProbe/1.0/bin/mimeprobe && chmod 755 /tmp/pkmime/MimeProbe/1.0/bin/mimeprobe &&
+   printf "%s\n" "[Desktop Entry]" "Type=Application" "Name=MimeProbe" "Exec=mimeprobe %f" "Terminal=false" \
+     "MimeType=application/x-gobo-mimeprobe;" > /tmp/pkmime/MimeProbe/1.0/share/applications/mimeprobe.desktop &&
+   echo x86_64 > /tmp/pkmime/MimeProbe/1.0/Resources/Architecture &&
+   echo "Glibc >= 2.20" > /tmp/pkmime/MimeProbe/1.0/Resources/Dependencies &&
+   tar -C /tmp/pkmime -cjf /tmp/pkmime/MimeProbe--1.0--x86_64.tar.bz2 MimeProbe'
+ok "MIME package install" "$(S "$HELPER app-install /tmp/pkmime/MimeProbe--1.0--x86_64.tar.bz2 2>&1 | tail -n 1")" "INSTALLED-OK MimeProbe 1.0"
+ok "MIME in mimeinfo.cache" "$(S 'grep -F application/x-gobo-mimeprobe= /System/Index/share/applications/mimeinfo.cache')" "mimeprobe.desktop"
+ok "MIME default in system mimeapps" "$(S 'grep -F application/x-gobo-mimeprobe= /System/Settings/xdg/mimeapps.list')" "mimeprobe.desktop"
+ok "gio as normal user names it" "$(S 'su lab -c "gio mime application/x-gobo-mimeprobe" 2>&1 | head -n 1')" "mimeprobe.desktop"
+ok "existing text/plain default kept" "$(S 'su lab -c "gio mime text/plain" 2>&1 | head -n 1')" "l3afpad.desktop"
+ok "MIME package remove" "$(S "$HELPER app-remove MimeProbe 1.0 2>&1 | tail -n 1")" "REMOVED-OK MimeProbe 1.0"
+ok "MIME claim gone from mimeapps" "$(S 'grep -F application/x-gobo-mimeprobe= /System/Settings/xdg/mimeapps.list 2>&1 || echo gone')" "gone"
 echo "passed $pass, failed $fail"

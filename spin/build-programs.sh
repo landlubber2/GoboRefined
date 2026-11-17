@@ -340,6 +340,8 @@ linux)
    # The compile takes 1-2 hours on 2 processors. The tree is unpacked outside the scratch folder
    # (/Data/Build/linux-<version>) so that a stopped or repeated run goes on where it was; it is
    # removed at the end unless the file /Data/Build/keep-linux-tree exists.
+   # 0.9.3: apply upstream GoboHide (Recipes Linux/6.12.16/01-gobohide.patch). Without it the
+   # FHS compatibility links (/bin, /etc, /usr, ...) show again — the point of GoboLinux.
    KVER=$(head -n 1 $SPIN/kernel-version); KREL=$KVER-Gobo
    OLDV=6.12.16 OLD=/Programs/Linux/6.12.16 P=/Programs/Linux/$KVER
    [[ "$KVER" =~ ^6\.12\.[0-9]+$ ]] || { echo "spin/kernel-version: '$KVER' is not a 6.12.y version"; exit 1; }
@@ -353,9 +355,29 @@ linux)
       : > $T/.gobo-unpacked
    fi
    cd $T
+   if [ ! -f .gobo-gobohide-applied ]
+   then
+      patch -p1 < $SPIN/patches/linux-6.12.16-gobohide.patch > /Data/Build/linux-gobohide-patch.log 2>&1 || {
+         echo "GoboHide patch failed on linux-$KVER (see /Data/Build/linux-gobohide-patch.log)";
+         tail -n 40 /Data/Build/linux-gobohide-patch.log; exit 1; }
+      # reused tree from a build without GoboHide: drop old objects so namei/readdir rebuild
+      if [ -f .config ]
+      then make LD=ld.bfd clean > /Data/Build/linux-clean-after-gobohide.log 2>&1 || true
+      fi
+      : > .gobo-gobohide-applied
+   fi
    [ -f .config ] || cp $OLD/lib/modules/$OLDV-Gobo/build/.config .config
    # (the image's "ld" is the gold linker, which cannot link a kernel: GNU ld by name)
    make LD=ld.bfd olddefconfig > /Data/Build/linux-olddefconfig.log 2>&1 || { tail -n 20 /Data/Build/linux-olddefconfig.log; exit 1; }
+   # GoboHide defaults to y in the patch; force it if olddefconfig left it unset
+   if ! grep -q '^CONFIG_GOBOHIDE_FS=y$' .config
+   then
+      sed -i '/CONFIG_GOBOHIDE_FS/d' .config
+      echo 'CONFIG_GOBOHIDE_FS=y' >> .config
+      make LD=ld.bfd olddefconfig > /Data/Build/linux-olddefconfig-gobohide.log 2>&1 || {
+         tail -n 20 /Data/Build/linux-olddefconfig-gobohide.log; exit 1; }
+   fi
+   grep -q '^CONFIG_GOBOHIDE_FS=y$' .config || { echo "CONFIG_GOBOHIDE_FS=y missing after olddefconfig"; exit 1; }
    [ "$(make -s LD=ld.bfd kernelrelease)" = "$KREL" ] || { echo "the kernel calls itself $(make -s LD=ld.bfd kernelrelease), expected $KREL"; exit 1; }
    echo "compiling Linux $KREL with $(nproc) jobs (log: /Data/Build/linux-make.log in the build root)"
    make LD=ld.bfd -j$(nproc) bzImage modules > /Data/Build/linux-make.log 2>&1 || { grep -B 5 -A 5 -m 3 'Error ' /Data/Build/linux-make.log; tail -n 30 /Data/Build/linux-make.log; exit 1; }

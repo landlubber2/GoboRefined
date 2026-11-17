@@ -160,6 +160,12 @@ grep -q 'gobo-settings-helper boot-devices' "$bootup" || cat >> "$bootup" <<'BOO
 # missing firmware and drivers that did not start (for Settings > Device Manager).
 Exec "Noting driver messages..." /System/Index/bin/gobo-settings-helper boot-devices
 BOOTUP
+grep -q 'gobo-settings-helper boot-apps' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.9.4): MIME for programs installed through Settings > Apps
+# (mimeinfo.cache + system defaults); drop apps.list rows whose programs are gone.
+Exec "Refreshing Apps file types..." /System/Index/bin/gobo-settings-helper boot-apps
+BOOTUP
 # 0.8.4: the computer's Bluetooth name is its host name (main.conf, written before bluetoothd starts)
 if ! grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup"
 then
@@ -263,6 +269,10 @@ then
    printf '# GoboRefined 0.8.1: power button\nevent=button[ /]power\naction=/System/Index/bin/gobo-power-button\n' \
       > "$acpi_events/gobo-power-button"
 fi
+
+# 0.9.4: the file manager's "Open with" list needs mimeinfo.cache (the image has no
+# update-desktop-database): "gobo-settings-helper boot-apps" (BootUp line above) writes it at
+# every start, from all menu entries in /System/Index/share/applications.
 
 # A/B layout: mount points used by the initramfs, a fixed name for GRUB to load.
 mkdir -p "$T/System/Slot" "$T/System/Data" "$T/System/Kernel/ESP"

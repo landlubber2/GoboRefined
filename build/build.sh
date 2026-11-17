@@ -286,7 +286,8 @@ step_inputs() {
       pcmanfm)    cat "$REPO/spin/patches/pcmanfm-1.2.5-gobo.patch" ;;
       udevil)     cat "$REPO/spin/patches/udevil-0.4.4-gobo-monitor.patch" ;;
       usb-modeswitch) cat "$REPO/spin/gobo-wifi-switch" ;;
-      linux|rtl8852au) cat "$REPO/spin/kernel-version" ;;
+      linux|rtl8852au) cat "$REPO/spin/kernel-version"   # 0.9.4: + the GoboHide patch (a change rebuilds)
+                       cat "$REPO/spin/patches/linux-6.12.16-gobohide.patch" ;;
       lxdm)       find "$REPO/spin/lxdm" -type f | LC_ALL=C sort | xargs cat ;;
       gobofiles)  find "$REPO/spin/gobofiles" -type f | LC_ALL=C sort | xargs cat ;;
    esac

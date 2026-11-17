@@ -112,6 +112,19 @@ redistribution notes are in `docs/third-party.md`.
   the initramfs, packs the live image, makes the update file with `gobo-make-system`, signs it, and
   writes the ISO with xorriso, replaying the stock ISO's boot records.
 
+### In the project's lab VM (for whoever builds the releases)
+
+- Since 0.9.1 the build lives on the second disk, label **`SCRATCH091`** (60 GB), not on the old 40 GB
+  disk `BUILD`: `mount LABEL=SCRATCH091 /Mount/Scratch`, then `WORK=/Mount/Scratch/work`. Check with
+  `lsblk -o NAME,SIZE,LABEL` before building. The old disk has no 6.12.117 kernel and little free space:
+  building there recompiles the kernel for hours. If space runs out, stop and ask; never delete old
+  outputs to make room.
+- Copy the checkout in fresh every time (`vm/push-repo.sh --tarball`, then `wget` it in the guest and
+  unpack it); an archive already on the disk is an old one.
+- Before a build, look at what is already done: `ls $WORK/state` and `/Programs/Linux` in the build
+  root. A step is redone only when its inputs changed (`step_inputs` in `build/build.sh`); do not use
+  `REBUILD=linux` unless the kernel itself must change.
+
 ## Known limits
 
 - Only GoboLinux 017.01 (x86_64) is supported as the build system; the build compiles against the

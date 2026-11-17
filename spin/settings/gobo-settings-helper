@@ -46,6 +46,8 @@
 #   boot-devices                     (boot scripts) the same, a little after the start
 #   app-install FILE                 check (gobo-app-check) and install a GoboLinux package file
 #   app-remove NAME VERSION          remove a program that app-install installed
+#   boot-apps                        (boot scripts) drop missing apps.list rows; refresh MIME
+#                                    (mimeinfo.cache + system mimeapps.list for Apps packages)
 #   report                           root-only parts of the system report: last 400 kernel
 #                                    messages, gobo-update --status, the system logs of the spin
 #
@@ -158,6 +160,107 @@ check_password_length() {   # check_password_length KIND (password in $PW)
    [ "${#PW}" -ge "$min" ] || { PW=""; die "the password is too short: at least $min characters"; }
 }
 valid_app_id() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}\.desktop$ ]]; }
+
+# 0.9.4: file-manager MIME for Apps packages (and Open-with for every Index .desktop).
+# Step 0 on 0.9.3 showed: SymlinkProgram puts .desktop under /System/Index/share/applications
+# and GLib can open it by id, but get_all_for_type / "Open with" stays empty without
+# mimeinfo.cache — and this image has no update-desktop-database. Defaults for types that
+# still have none go in /System/Settings/xdg/mimeapps.list (GLib: $XDG_CONFIG_DIRS or /etc/xdg);
+# a person's ~/.config/mimeapps.list always wins. Never ship update-desktop-database.
+APPS_LIST=$STATE/apps.list
+MIMEINFO_CACHE=/System/Index/share/applications/mimeinfo.cache
+SYSTEM_MIMEAPPS=/System/Settings/xdg/mimeapps.list
+
+apps_list_prune() {
+   # drop rows whose /Programs/Name/Version is gone (e.g. after reset-system-changes)
+   [ -f "$APPS_LIST" ] || return 0
+   local new n v rest line
+   new=$(mktemp "$STATE/.apps.list.XXXXXX") || return 1
+   while IFS= read -r line || [ -n "$line" ]
+   do
+      [ -n "$line" ] || continue
+      n=${line%%$'\t'*}
+      rest=${line#*$'\t'}
+      v=${rest%%$'\t'*}
+      [ -n "$n" ] && [ -n "$v" ] && [ -d "/Programs/$n/$v" ] && printf '%s\n' "$line" >> "$new"
+   done < "$APPS_LIST"
+   chmod 644 "$new"
+   mv -f "$new" "$APPS_LIST"
+}
+
+apps_mime_refresh() {
+   # 1) mimeinfo.cache from every Index .desktop MimeType= (Open-with / get_all_for_type)
+   local appsdir=/System/Index/share/applications tmp map
+   mkdir -p "$STATE" "$appsdir"
+   tmp=$(mktemp "$appsdir/.mimeinfo.cache.XXXXXX") || die "could not write mimeinfo.cache"
+   {
+      echo "[MIME Cache]"
+      for f in "$appsdir"/*.desktop
+      do
+         [ -f "$f" ] || continue
+         # only regular Desktop Entry files with a MimeType line
+         grep -q '^\[Desktop Entry\]' "$f" 2>/dev/null || continue
+         id=${f##*/}
+         [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}\.desktop$ ]] || continue
+         mt=$(sed -n 's/^MimeType=//p' "$f" | head -n 1 | tr ';' ' ')
+         for t in $mt
+         do
+            [ -n "$t" ] || continue
+            [[ "$t" =~ ^[A-Za-z0-9][A-Za-z0-9!_+.-]{0,120}/[A-Za-z0-9][A-Za-z0-9!_+.-]{0,120}$ ]] || continue
+            printf '%s\t%s\n' "$t" "$id"
+         done
+      done
+   } > "$tmp.raw" || true
+   # header stays first; only the type lines are sorted (GLib needs "[MIME Cache]")
+   { head -n 1 "$tmp.raw"; tail -n +2 "$tmp.raw" | awk -F '\t' 'NF == 2 && !seen[$1,$2]++ { list[$1] = list[$1] $2 ";" }
+      END { for (t in list) print t "=" list[t] }' | LC_ALL=C sort; } > "$tmp" || true
+   rm -f "$tmp.raw"
+   chmod 644 "$tmp"
+   mv -f "$tmp" "$MIMEINFO_CACHE"
+
+   # 2) system mimeapps.list: defaults only for Apps packages in apps.list, first claim wins
+   mkdir -p /System/Settings/xdg
+   tmp=$(mktemp /System/Settings/xdg/.mimeapps.list.XXXXXX) || die "could not write mimeapps.list"
+   map=$(mktemp "$STATE/.mime-defaults.XXXXXX") || { rm -f "$tmp"; die "could not write mimeapps.list"; }
+   : > "$map"
+   if [ -f "$APPS_LIST" ]
+   then
+      while IFS=$'\t' read -r n v _rest || [ -n "${n:-}" ]
+      do
+         [ -n "${n:-}" ] || continue
+         [ -d "/Programs/$n/$v" ] || continue
+         for f in "/Programs/$n/$v"/share/applications/*.desktop
+         do
+            [ -f "$f" ] || continue
+            id=${f##*/}
+            valid_app_id "$id" || continue
+            # Index must see this name (SymlinkProgram); otherwise GLib ignores the default
+            [ -e "$appsdir/$id" ] || continue
+            mt=$(sed -n 's/^MimeType=//p' "$f" | head -n 1 | tr ';' ' ')
+            for t in $mt
+            do
+               [ -n "$t" ] || continue
+               [[ "$t" =~ ^[A-Za-z0-9][A-Za-z0-9!_+.-]{0,120}/[A-Za-z0-9][A-Za-z0-9!_+.-]{0,120}$ ]] || continue
+               grep -q -F -x -e "$t" "$map" 2>/dev/null && continue
+               printf '%s\n' "$t" >> "$map"
+               printf '%s=%s\n' "$t" "$id" >> "$tmp.defaults"
+            done
+         done
+      done < "$APPS_LIST"
+   fi
+   {
+      echo "# Generated by gobo-settings-helper (apps_mime_refresh). Do not edit."
+      echo "# Defaults only for programs installed through Settings > Apps, and only for"
+      echo "# types that had no earlier claim here. A person's ~/.config/mimeapps.list wins."
+      echo "[Default Applications]"
+      if [ -f "$tmp.defaults" ]; then LC_ALL=C sort -u "$tmp.defaults"; fi
+   } > "$tmp"
+   rm -f "$map" "$tmp.defaults"
+   if [ -s "$tmp" ] && grep -q '^[a-z]' "$tmp"
+   then chmod 644 "$tmp"; mv -f "$tmp" "$SYSTEM_MIMEAPPS"
+   else rm -f "$tmp" "$SYSTEM_MIMEAPPS"
+   fi
+}
 
 # Same way as gobo-install: chpasswd on 017.01 exits 0 and changes nothing; usermod -p would
 # put the hash on a command line. openssl reads the password on stdin (printf is a builtin).
@@ -742,8 +845,9 @@ case "$cmd" in
       rm -rf "$STATE/app-tmp"
       if [ $rc -eq 0 ] && [ -d "/Programs/$name/$pv" ]
       then
-         printf '%s\t%s\t%s\t%s\n' "$name" "$pv" "$(date '+%Y-%m-%d')" "$caller" >> "$STATE/apps.list"
-         chmod 644 "$STATE/apps.list"
+         printf '%s\t%s\t%s\t%s\n' "$name" "$pv" "$(date '+%Y-%m-%d')" "$caller" >> "$APPS_LIST"
+         chmod 644 "$APPS_LIST"
+         apps_mime_refresh
          echo "INSTALLED-OK $name $pv"
       else rc=1; echo "the installation did not finish"
       fi
@@ -755,17 +859,27 @@ case "$cmd" in
       name="$1" pv="$2"
       [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9+_.-]{0,80}$ ]] && [[ "$pv" =~ ^[0-9A-Za-z][A-Za-z0-9+_.~-]{0,60}$ ]] || die "bad program name or version"
       # only what was installed through app-install: never a program of the system itself
-      grep -q -F -x -e "$(printf '%s\t%s' "$name" "$pv")" <(cut -f 1,2 "$STATE/apps.list" 2>/dev/null) || die "$name $pv was not installed from a file here"
+      grep -q -F -x -e "$(printf '%s\t%s' "$name" "$pv")" <(cut -f 1,2 "$APPS_LIST" 2>/dev/null) || die "$name $pv was not installed from a file here"
       [ -d "/Programs/$name/$pv" ] || die "$name $pv is not installed any more"
       log "app remove: $name $pv"
       HOME=/Users/root RemoveProgram --batch --unmanaged keep "$name" "$pv" 2>&1; rc=$?
       if [ ! -d "/Programs/$name/$pv" ]
       then
-         awk -F '\t' -v n="$name" -v v="$pv" '!($1 == n && $2 == v)' "$STATE/apps.list" > "$STATE/apps.list.new" && mv "$STATE/apps.list.new" "$STATE/apps.list"
-         chmod 644 "$STATE/apps.list"
+         awk -F '\t' -v n="$name" -v v="$pv" '!($1 == n && $2 == v)' "$APPS_LIST" > "$APPS_LIST.new" && mv "$APPS_LIST.new" "$APPS_LIST"
+         chmod 644 "$APPS_LIST"
+         apps_mime_refresh
          echo "REMOVED-OK $name $pv"; exit 0
       fi
       echo "the program could not be removed"; exit 1 ;;
+
+   boot-apps)
+      # (boot scripts) after an update or reset: apps.list may name gone programs; MIME files
+      # in generated-caches may have been cleared — rebuild mimeinfo.cache and system defaults.
+      nargs 0 "$@"
+      mkdir -p "$STATE"
+      apps_list_prune
+      apps_mime_refresh
+      ;;
 
    report)
       nargs 0 "$@"

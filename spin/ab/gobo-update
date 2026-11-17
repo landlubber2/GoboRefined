@@ -455,7 +455,12 @@ regenerate_caches() {
    command -v gio-querymodules > /dev/null && gio-querymodules /System/Index/lib/gio/modules > /dev/null 2>&1
    command -v glib-compile-schemas > /dev/null && glib-compile-schemas /System/Index/share/glib-2.0/schemas > /dev/null 2>&1
    command -v gtk-query-immodules-3.0 > /dev/null && gtk-query-immodules-3.0 --update-cache > /dev/null 2>&1
-   command -v update-desktop-database > /dev/null && update-desktop-database /System/Index/share/applications > /dev/null 2>&1
+   # 0.9.4: the image has no update-desktop-database; gobo-settings-helper writes mimeinfo.cache
+   if command -v update-desktop-database > /dev/null
+   then update-desktop-database /System/Index/share/applications > /dev/null 2>&1
+   elif [ -x /System/Index/bin/gobo-settings-helper ]
+   then /System/Index/bin/gobo-settings-helper boot-apps > /dev/null 2>&1 || true
+   fi
    return 0
 }
 

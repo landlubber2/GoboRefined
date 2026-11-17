@@ -90,3 +90,8 @@ These are observations, not conclusions:
    itself "an unofficial spin of GoboLinux 017.01" and keeps stock names in places (volume label,
    boot menu of the live ISO, `/Mount/GoboLinux`, the efibootmgr label). Whether upstream is fine
    with the name "GoboRefined" and the use of its name is a question for upstream.
+8. **GoboHide kernel patch (0.9.3).** `spin/patches/linux-6.12.16-gobohide.patch` is the patch shipped
+   by gobolinux/Recipes for Linux 6.12.16 (`01-gobohide.patch`), applied to our 6.12.117 build. GPL-2.0
+   with the kernel; original authors Felipe W. Damasio / Lucas C. Villa Real; 6.12 refresh by Samuel
+   Dionne-Riel. URL:
+   https://github.com/gobolinux/Recipes/blob/master/Linux/6.12.16/01-gobohide.patch

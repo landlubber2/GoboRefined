@@ -3,7 +3,7 @@
 #   sh make-package.sh [OUTPUT-DIR]     -> Photos--<version>--x86_64.tar.bz2
 # Run it on a Linux system (file modes matter); the package holds only scripts.
 set -e
-V=1.0
+V=1.1
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here}
 t=$(mktemp -d)
