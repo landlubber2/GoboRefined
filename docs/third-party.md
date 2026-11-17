@@ -43,6 +43,17 @@ The project's own scripts, look files and tools (`installer/`, `look/gobo11/`, `
 
 Used only to build, not shipped: GNU xorriso 1.5.6.pl02 (GPL-3.0-or-later), writes the ISO.
 
+## App packages (not in the image; offered on the website, installed through Settings › Apps)
+
+Built by `apps/<name>/build.sh` from the sources below (sha256 pinned in the script); the packages are in
+`dist/apps/` and on the website.
+
+| Package | Version | Licence | Source | Changed? |
+|---|---|---|---|---|
+| Photos (ours, `apps/photos/`) | 1.1 | MIT | this repository | ours |
+| LXTask (`LXTask--0.1.12`) | 0.1.12 | GPL-2.0-or-later | https://github.com/lxde/lxtask/archive/refs/tags/0.1.12.tar.gz | GTK 3 build; menu name "Task Manager", system icon |
+| Qalculate! (`Qalculate-GTK--5.13.0`): libqalculate 5.13.2 + qalculate-gtk 5.13.0 | 5.13 | GPL-2.0-or-later | https://github.com/Qalculate/libqalculate/releases/download/v5.13.2/libqalculate-5.13.2.tar.gz, https://github.com/Qalculate/qalculate-gtk/releases/download/v5.13.0/qalculate-gtk-5.13.0.tar.gz | no source change; library inside the program folder, developer files removed |
+
 ## Inherited from the stock GoboLinux 017.01 ISO
 
 The ISO is the stock 017.01 live ISO with a repacked live image; the stock image's ~450 programs
