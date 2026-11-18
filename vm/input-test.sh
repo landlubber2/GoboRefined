@@ -189,11 +189,21 @@ scenario() {
                         steps '@k esc'
                         is power-keys-closed 'return tostring(require("spin.power").is_open())' 'false'
                         check power-keys ;;
-   power-enter)         # 0.8.2: End + Enter runs the last entry (Settings) from the keyboard
-                        steps '@k ctrl alt del' '@k end' '@k enter'; pause 3
-                        is power-enter-settings 'return tostring(T.find("gobo-settings") ~= nil)' 'true'
-                        L 'local c = T.find("gobo-settings") if c then c:kill() end return 1' > /dev/null; pause 1
+   power-enter)         # 0.8.2: End + Enter ran the last entry (Settings). 0.9.5: the card has 4 entries and
+                        # the last is "Shut down", so only End is pressed (selection on 4), then Escape
+                        steps '@k ctrl alt del' '@k end'
+                        is power-enter-count 'return tostring(require("spin.power").count())' '"4"'
+                        is power-enter-last 'return tostring(require("spin.power").selected())' '"4"'
+                        steps '@k esc'
+                        is power-enter-closed 'return tostring(require("spin.power").is_open())' 'false'
                         check power-enter ;;
+   desktop-menu)        # 0.9.5: a right click on the desktop opens the desktop menu, not the start menu
+                        # (low right part of the desktop: the test's terminal can be as wide as the screen)
+                        steps 'local g = screen.primary.geometry T.click(g.x + g.width - 60, g.y + g.height - 150, 3) return 1'; pause 2
+                        is desktop-menu-open 'return tostring(spin_debug.desktopmenu.wibox.visible)' true
+                        is desktop-menu-not-start 'return tostring(spin_debug.mainmenu.wibox.visible)' false
+                        steps '@k esc'
+                        check desktop-menu ;;
    show-desktop)        # 0.8.2: the strip at the right end hides the windows, a second click brings them back
                         steps 'return T.click_pos("showdesk")'
                         is show-desktop-hidden 'return tostring(T.find("inputtest").minimized and T.find("zenity").minimized)' 'true'
@@ -209,7 +219,7 @@ ALL="plain menu-click-client menu-click-desktop menu-click-gtk menu-click-taskba
      search-twice search-power power-click-out power-escape tasklist-menu net-menu usb-menu window-menu
      hotkeys-click hotkeys-key alttab alttab-twice desktops desktops-escape shot-menu shot-escape clip-menu
      two-popups panic-in-menu shot-print-in-menu shot-card-in-menu win-tap win-hold
-     power-keys show-desktop power-enter"
+     power-keys show-desktop power-enter desktop-menu"
 
 setup
 for s in ${*:-$ALL}; do scenario "$s"; done

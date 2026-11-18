@@ -33,6 +33,34 @@ function P.build(C)
    box:pack_start(C.row(light, dark), false, false, 0)
    box:pack_start(C.text("Changes the desktop, the taskbar and the windows of programs. Programs that are open keep their colours until they are started again.", "dim-label"), false, false, 0)
 
+   -- 0.9.5: where the start button and the running apps sit on the taskbar. Stored in
+   -- ~/.config/goborefined/taskbar-align ("left"; no file = centre); rc.lua re-arranges every
+   -- taskbar at once (spin_taskbar_align), no restart needed.
+   box:pack_start(C.heading("Taskbar"), false, false, 0)
+   local align_file = dir .. "/taskbar-align"
+   local function align()
+      return C.trim(C.read(align_file) or "") == "left" and "left" or "center"
+   end
+   local centre = Gtk.RadioButton.new_with_label(nil, "Centre")
+   local left = Gtk.RadioButton.new_with_label_from_widget(centre, "Left")
+   if align() == "left" then left.active = true else centre.active = true end
+   local function set_align(to)
+      if align() == to then return end
+      if to == "left" then
+         os.execute("mkdir -p " .. C.q(dir))
+         local f = io.open(align_file, "w")
+         if not f then C.error("Could not save the choice in " .. align_file) return end
+         f:write("left\n"); f:close()
+      else
+         os.remove(align_file)
+      end
+      C.desktop("if spin_taskbar_align then spin_taskbar_align() end")
+   end
+   centre.on_toggled = function(b) if b.active then set_align("center") end end
+   left.on_toggled = function(b) if b.active then set_align("left") end end
+   box:pack_start(C.row(centre, left), false, false, 0)
+   box:pack_start(C.text("Where the start button and the apps sit on the taskbar: in the middle, or at the left edge. The clock and the icons on the right stay where they are.", "dim-label"), false, false, 0)
+
    box:pack_start(C.heading("Wallpaper"), false, false, 0)
    local preview = Gtk.Image()
    local state = C.text("")

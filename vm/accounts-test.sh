@@ -48,6 +48,10 @@ if [ "${1:-}" = session ]; then
    no "session: no Terminal in the menu" "$items" "Terminal"
    no "session: no Desktop tools in the menu" "$items" "Desktop"
    ok "session: menu has Settings and Power" "$items" "Settings.*Power"
+   # 0.9.5: the desktop's right-click menu: no Terminal, the rest is there
+   ditems=$(L 'local t = {} for _, i in ipairs(spin_debug.desktopmenu.items) do table.insert(t, i.label and i.label.text or "?") end return table.concat(t, "|")')
+   no "session: no Terminal in the desktop menu" "$ditems" "Terminal"
+   ok "session: desktop menu entries" "$ditems" "Search applications...|New|Window layout|.* mode|Personalization...|Displays...|Detect displays"
    apps=$(L 'return table.concat(spin_launcher.app_names(), "|")')
    ok "session: search lists the allowed programs" "$apps" "Firefox"
    no "session: search has no terminal" "$apps" "[Tt]erminal\|URxvt\|XTerm\|Htop\|GParted\|Vim"

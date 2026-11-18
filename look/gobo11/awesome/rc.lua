@@ -28,6 +28,7 @@ local screenshot = require("spin.screenshot")
 local cliphist = require("spin.cliphist")
 local desktop_icons = require("spin.desktop_icons")   -- 0.6: ~/Desktop icons (PCManFM), Trash clean-up
 local bluetooth = require("spin.bluetooth")   -- 0.8.4: our menu (upstream widget paired without an agent)
+local newitem = require("spin.newitem")   -- 0.9.5: New folder / text / Word document on the desktop
 -- 0.9.1: Simple accounts (group "simple"): only the chosen programs, no terminal or desktop tools
 local simple = require("spin.simple")
 spin_simple = simple   -- lab tests
@@ -190,29 +191,24 @@ local function regenerate_wallpaper()
    end
 end
 
--- Menu
--- Create a laucher widget and a main menu
-local myawesomemenu = {
-   { "Window control mode", {
-      { "Floating windows", layout_fn(awful.layout.suit.floating), beautiful.layout_floating },
-      { "Tiled", layout_fn(awful.layout.suit.tile), beautiful.layout_tile },
-      { "Tiled left", layout_fn(awful.layout.suit.tile.left), beautiful.layout_tileleft },
-      { "Tiled bottom", layout_fn(awful.layout.suit.tile.bottom), beautiful.layout_tilebottom },
-      { "Tiled top", layout_fn(awful.layout.suit.tile.top), beautiful.layout_tiletop },
-      { "Fair vertical", layout_fn(awful.layout.suit.fair), beautiful.layout_fairv },
-      { "Fair horizontal", layout_fn(awful.layout.suit.fair.horizontal), beautiful.layout_fairh },
-      { "Spiral", layout_fn(awful.layout.suit.spiral), beautiful.layout_spiral },
-      { "Dwindle", layout_fn(awful.layout.suit.spiral.dwindle), beautiful.layout_dwindle },
-      { "All windows maximized", layout_fn(awful.layout.suit.max), beautiful.layout_max },
-      { "Full screen", layout_fn(awful.layout.suit.max.fullscreen), beautiful.layout_fullscreen },
-      { "Magnifier", layout_fn(awful.layout.suit.magnifier), beautiful.layout_magnifier }}},
-   { "Hotkeys", function() return false, show_help end},
-   { "Manual", terminal .. " -e pinfo awesome" },
-   { "Edit Config", editor_cmd .. " " .. awesome.conffile },
-   { "Displays...", displays_tool },
-   { "Detect Displays", function() awful.spawn.with_shell("sh ~/.config/awesome/displays.sh --auto") end },
-   { "Restart Awesome", awesome.restart },
-   { "Quit", function() awesome.quit() end }
+-- Menus
+-- 0.9.5: the old "Desktop" submenu of the start menu is gone. Its window layouts ("Window
+-- control mode") are in the desktop's right-click menu as "Window layout", with Displays... and
+-- Detect displays; the rest is reachable by keys (Win+S hotkeys, Win+Ctrl+R restart the desktop,
+-- Win+Shift+Q quit, Win+Space next layout) and in Settings (Manual, Config).
+local layout_items = {
+   { "Floating windows", layout_fn(awful.layout.suit.floating), beautiful.layout_floating },
+   { "Tiled", layout_fn(awful.layout.suit.tile), beautiful.layout_tile },
+   { "Tiled left", layout_fn(awful.layout.suit.tile.left), beautiful.layout_tileleft },
+   { "Tiled bottom", layout_fn(awful.layout.suit.tile.bottom), beautiful.layout_tilebottom },
+   { "Tiled top", layout_fn(awful.layout.suit.tile.top), beautiful.layout_tiletop },
+   { "Fair vertical", layout_fn(awful.layout.suit.fair), beautiful.layout_fairv },
+   { "Fair horizontal", layout_fn(awful.layout.suit.fair.horizontal), beautiful.layout_fairh },
+   { "Spiral", layout_fn(awful.layout.suit.spiral), beautiful.layout_spiral },
+   { "Dwindle", layout_fn(awful.layout.suit.spiral.dwindle), beautiful.layout_dwindle },
+   { "All windows maximized", layout_fn(awful.layout.suit.max), beautiful.layout_max },
+   { "Full screen", layout_fn(awful.layout.suit.max.fullscreen), beautiful.layout_fullscreen },
+   { "Magnifier", layout_fn(awful.layout.suit.magnifier), beautiful.layout_magnifier },
 }
 
 -- Menus: rounded corners, and rows with padded, evenly sized icons
@@ -304,11 +300,39 @@ menu_gen.generate(function(entries)
          mymainmenu:add({ cat.name, cat_submenus[k], icon_theme():find_icon_path(cat.icon_name) })
       end
    end
-   if not simple.is_simple then   -- 0.9.1: the desktop's own tools (restart, config, ...) not for Simple accounts
-      mymainmenu:add({ "Desktop", myawesomemenu, beautiful.desktop_icon })
-   end
    mymainmenu:add({ "Power...", function() power.show() end, beautiful.power_icon })
 end)
+
+-- 0.9.5: the desktop's own right-click menu (bare desktop and PCManFM's desktop window); the
+-- start button keeps mymainmenu. New items go to ~/Desktop (spin/newitem.lua).
+-- icons by name at menu size (menubar.utils.lookup_icon finds only application-sized icons)
+local function menu_icon(name)
+   return icon_theme():find_icon_path(name, 24) or menubar.utils.lookup_icon(name)
+end
+local have_settings = gears.filesystem.file_readable("/System/Index/bin/gobo-settings")
+local desktop_menu = awful.menu({
+   items = awful.util.table.join({
+      { "Search applications...", function() launcher.show() end, beautiful.search_icon },
+   }, (not simple.is_simple) and {   -- no terminal for Simple accounts
+      { "Terminal", terminal, menubar.utils.lookup_icon("utilities-terminal") or beautiful.default_app_icon },
+   } or {}, {
+      { "New", {
+         { "Folder", function() newitem.create("folder") end, menu_icon("folder-new") or menu_icon("folder") },
+         { "Text document", function() newitem.create("text") end, menu_icon("text-x-generic") },
+         { "Word document", function() newitem.create("docx") end, menu_icon("x-office-document") },
+      }, menu_icon("document-new") },
+      { "Window layout", layout_items, beautiful.layout_tile },
+      { (beautiful.mode == "light") and "Dark mode" or "Light mode", function() power.toggle_mode() end, beautiful.mode_icon },
+   }, have_settings and {
+      { "Personalization...", function() awful.spawn({ "gobo-settings", "appearance" }, false) end,
+        menu_icon("preferences-desktop-wallpaper") or menu_icon("preferences-system") },
+   } or {}, {
+      { "Displays...", displays_tool, menu_icon("preferences-desktop-display") or beautiful.desktop_icon },
+      { "Detect displays", function() awful.spawn.with_shell("sh ~/.config/awesome/displays.sh --auto") end,
+        menu_icon("video-display") or beautiful.desktop_icon },
+   }),
+   theme = { width = beautiful.menu_width, height = beautiful.menu_height },
+})
 
 
 -- Menubar configuration
@@ -403,7 +427,46 @@ end
 
 local mywibox = {}
 -- Taskbar widgets by name, for the lab's input tests (vm/input-test.lua finds them on screen).
-spin_debug = { start = start_button, bars = mywibox, launcher_power_xy = launcher.power_xy }
+spin_debug = { start = start_button, bars = mywibox, launcher_power_xy = launcher.power_xy,
+               desktopmenu = desktop_menu, newitem = newitem }
+
+-- 0.9.5: taskbar alignment (Settings > Appearance): "center" (default: start button, pinned and
+-- running apps in the middle) or "left" (at the left edge, like Windows 10). Per user in
+-- ~/.config/goborefined/taskbar-align (not touched by apply.sh, so it survives updates; a missing
+-- or unknown value means centre). The Settings page calls spin_taskbar_align() to apply it at once.
+local align_file = (os.getenv("HOME") or "") .. "/.config/goborefined/taskbar-align"
+local function read_align()
+   local f = io.open(align_file, "r")
+   local v = f and f:read("*l") or ""
+   if f then f:close() end
+   return (v == "left") and "left" or "center"
+end
+local bar_parts = {}   -- screen -> { tags = ..., center = ..., right = ... }
+local function arrange_bar(s)
+   local parts = bar_parts[s]
+   if not parts or not mywibox[s] then return end
+   local layout = wibox.layout.align.horizontal()
+   layout.expand = "none"
+   if read_align() == "left" then
+      -- start button at the left edge, running apps after it; desktop numbers move to the right side
+      local left = wibox.layout.fixed.horizontal()
+      left:add(wibox.container.margin(parts.center, 6, 0, 4, 4))
+      local right = wibox.layout.fixed.horizontal()
+      right:add(parts.tags)
+      right:add(parts.right)
+      layout:set_left(left)
+      layout:set_right(right)
+   else
+      layout:set_left(parts.tags)
+      layout:set_middle(wibox.container.margin(parts.center, 0, 0, 4, 4))
+      layout:set_right(parts.right)
+   end
+   mywibox[s]:set_widget(layout)
+end
+function spin_taskbar_align()
+   for s in screen do arrange_bar(s) end
+   return read_align()
+end
 local mytaglist = {}
 mytaglist.buttons = awful.util.table.join(
    awful.button({}, 1, awful.tag.viewonly),
@@ -535,9 +598,8 @@ awful.screen.connect_for_each_screen(function(s)
    right_layout:add(wibox.container.margin(mytextclock, 8, 8, 0, 0))
    right_layout:add(show_desktop_strip(s))
 
-   local layout = wibox.layout.align.horizontal()
-   layout.expand = "none"
-   -- desktop numbers on the left, only while the screen has more than one desktop
+   -- desktop numbers on the left (0.9.5: on the right when the taskbar is aligned left), only
+   -- while the screen has more than one desktop
    local tag_area = wibox.container.margin(mytaglist[s], 10, 0, 12, 12)
    tag_area.visible = #s.tags > 1
    desktops.on_change(function(changed_s)
@@ -545,12 +607,10 @@ awful.screen.connect_for_each_screen(function(s)
    end)
    spin_debug.tag_area = spin_debug.tag_area or {}
    spin_debug.tag_area[s] = tag_area
-   layout:set_left(tag_area)
-   layout:set_middle(wibox.container.margin(center_layout, 0, 0, 4, 4))
-   layout:set_right(right_layout)
-
-   mywibox[s]:set_widget(layout)
+   bar_parts[s] = { tags = tag_area, center = center_layout, right = right_layout }
+   arrange_bar(s)
 end)
+screen.connect_signal("removed", function(s) bar_parts[s] = nil end)
 
 
 -- Realtek USB Wi-Fi adapters that start as a "driver CD": switch them from the session too,
@@ -558,7 +618,7 @@ end)
 wifi_switch.start({ icon = find_icon("network-wireless", "network-wireless-symbolic") })
 
 -- Files in ~/Desktop on the desktop (PCManFM --desktop, spin/desktop_icons.lua); Trash clean-up
-desktop_icons.start({ menu = function() mymainmenu:toggle() end })   -- same as a root right click
+desktop_icons.start({ menu = function() desktop_menu:toggle() end })   -- same as a root right click (0.9.5: own menu)
 
 -- 0.8.2: called by the Settings app through awesome-client
 function spin_reload_wallpaper()
@@ -591,7 +651,7 @@ end
 -- Mouse bindings
 root.buttons(awful.util.table.join(
    awful.button({}, 1, function() popups.close_all() end),
-   awful.button({}, 3, function() mymainmenu:toggle() end)
+   awful.button({}, 3, function() desktop_menu:toggle() end)   -- 0.9.5: the desktop menu
    --awful.button({}, 4, awful.tag.viewnext),
    --awful.button({}, 5, awful.tag.viewprev)
 ))

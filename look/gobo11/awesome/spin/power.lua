@@ -1,5 +1,5 @@
--- Power menu: lock, log out, restart, shut down, plus the dark/light switch and (0.8.2)
--- the Settings app. A small card in the middle of the screen; Escape or a click outside
+-- Power menu: lock, log out, restart, shut down (0.9.5: the light/dark switch moved to the
+-- desktop right-click menu, Settings is in the start menu). A small card in the middle of the screen; Escape or a click outside
 -- closes it.
 --
 -- 0.8.2: the menu can be used from the keyboard (power button, Win key path): Left/Right/Up/Down
@@ -48,13 +48,7 @@ local function entries()
       { "Log out", beautiful.logout_icon, function() awesome.quit() end },
       { "Restart", beautiful.restart_icon, function() system("shutdown -r now") end },
       { "Shut down", beautiful.power_icon, function() system("shutdown -h now") end },
-      { (beautiful.mode == "light") and "Dark mode" or "Light mode", beautiful.mode_icon, power.toggle_mode },
    }
-   -- 0.8.2: the Settings app (spin/settings), when the image has it
-   if gears.filesystem.file_readable("/System/Index/bin/gobo-settings") then
-      table.insert(list, { "Settings", menubar.utils.lookup_icon("preferences-system") or beautiful.mode_icon,
-         function() awful.spawn("gobo-settings") end })
-   end
    return list
 end
 
@@ -76,6 +70,7 @@ end
 power.select = select                          -- lab tests
 function power.selected() return sel end       -- lab tests
 function power.is_open() return open end       -- lab tests
+function power.count() return #buttons end     -- lab tests (0.9.5: 4 entries)
 
 function power.hide()
    if not open then return end

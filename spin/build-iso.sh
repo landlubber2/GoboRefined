@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.9.4]
+#   VERSION        [0.9.5]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.9.4}
+VERSION=${VERSION:-0.9.5}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -203,6 +203,10 @@ install -m 644 ab/gobo-sysctl.conf $P/1.0/share/gobo-security/sysctl.conf
 mkdir -p $P/1.0/share/doc
 install -m 644 firmware/wireless-regdb/LICENSE $P/1.0/share/doc/wireless-regdb-LICENSE
 install -m 644 software-install.txt $P/1.0/share/doc/software-install.txt
+# 0.9.5: the offline GoboRefined manual (Settings > Manual) and the look's New > Word document template
+mkdir -p $P/1.0/share/doc/goborefined-manual
+install -m 644 "$REPO/spin/manual/index.html" $P/1.0/share/doc/goborefined-manual/index.html
+[ -s "gobo11/templates/New document.docx" ] || { echo "missing look template New document.docx"; exit 1; }
 cp -r gobo11 $P/1.0/share/gobo11
 echo "GoboRefined (unofficial spin of GoboLinux 017.01): thin installer and desktop look." > $P/1.0/Resources/Description
 echo "$VERSION" > $P/1.0/share/spin-version

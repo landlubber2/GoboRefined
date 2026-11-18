@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoboRefined manual</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1b2230; --dim: #5a6475; --bg: #f6f7fa; --card: #ffffff; --line: #d9dee8; --accent: #2f6fde; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8ebf2; --dim: #9aa3b5; --bg: #10141c; --card: #181e2a; --line: #2a3242; --accent: #6ea0ff; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 Inter, "Noto Sans", sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; }
+  h2 { font-size: 19px; margin: 32px 0 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  p, li { margin: 6px 0; }
+  .dim { color: var(--dim); }
+  nav { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; margin: 16px 0; }
+  nav a { margin-right: 14px; white-space: nowrap; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  td { padding: 6px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+  tr:first-child td { border-top: 0; }
+  td:first-child { white-space: nowrap; width: 1%; }
+  kbd { font: 13px "JetBrains Mono", monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  code { font: 13px "JetBrains Mono", monospace; }
+</style>
+</head>
+<body>
+<main>
+<h1>GoboRefined manual</h1>
+<p class="dim">GoboRefined is an unofficial, modernized spin of GoboLinux 017.01. This page is on your computer and works without internet.</p>
+
+<nav>
+  <a href="#desktop">The desktop</a>
+  <a href="#keys">Keyboard shortcuts</a>
+  <a href="#apps">Adding programs</a>
+  <a href="#updates">Updates and going back</a>
+  <a href="#settings">Where settings are kept</a>
+  <a href="#help">Help and more</a>
+</nav>
+
+<h2 id="desktop">The desktop</h2>
+<ul>
+  <li><b>Start button</b> (the dots on the taskbar, or a short tap on the Win key): search, terminal, Settings, programs by category, Power.</li>
+  <li><b>Right click on the desktop</b>: search, terminal, <i>New</i> (folder, text document, Word document), window layout, light or dark mode, personalization, displays.</li>
+  <li><b>Power card</b> (Ctrl+Alt+Delete): lock, log out, restart, shut down.</li>
+  <li><b>Settings</b> (start button &gt; Settings): network, Bluetooth, appearance (colours, wallpaper, taskbar position), sound, displays, updates, programs, accounts.</li>
+  <li>Files on the desktop are the files in your <code>Desktop</code> folder. The thin strip at the right end of the taskbar shows the desktop.</li>
+</ul>
+
+<h2 id="keys">Keyboard shortcuts</h2>
+<p class="dim">Win+S shows the full list on screen at any time.</p>
+<table>
+  <tr><td><kbd>Win</kbd> (tap)</td><td>Start menu</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>R</kbd></td><td>Search and start programs</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Enter</kbd></td><td>Terminal</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>E</kbd></td><td>File manager</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Web browser</td></tr>
+  <tr><td><kbd>Alt</kbd>+<kbd>Tab</kbd></td><td>Switch between windows</td></tr>
+  <tr><td><kbd>Alt</kbd>+<kbd>F4</kbd></td><td>Close the window</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Up</kbd> / <kbd>Left</kbd> / <kbd>Right</kbd> / <kbd>Down</kbd></td><td>Dock the window to a side or the top, or move a docked window</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>F</kbd></td><td>Full screen</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>N</kbd> / <kbd>Win</kbd>+<kbd>M</kbd></td><td>Minimize / maximize</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Space</kbd></td><td>Next window layout (also: right click on the desktop &gt; Window layout)</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Desktops: list, switch, add, remove</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>,</kbd> / <kbd>Win</kbd>+<kbd>.</kbd></td><td>Previous / next desktop</td></tr>
+  <tr><td><kbd>Print</kbd></td><td>Screenshot of the whole screen (saved in Pictures/Screenshots and copied)</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>Screenshot of an area, a window or the screen</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></td><td>Clipboard history</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>L</kbd></td><td>Lock the screen</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Delete</kbd></td><td>Power card</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Escape</kbd></td><td>Close every menu and popup and free the keyboard (when something seems stuck)</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>Restart the desktop (your windows stay open)</td></tr>
+  <tr><td><kbd>Win</kbd>+<kbd>S</kbd></td><td>Show all shortcuts</td></tr>
+</table>
+<p class="dim">Simple accounts have no terminal and no desktop-restart keys.</p>
+
+<h2 id="apps">Adding programs</h2>
+<ul>
+  <li><b>Settings &gt; Software &gt; Apps</b> installs a program from a package file (GoboLinux's own format, a file named like <code>Name--Version--x86_64.tar.bz2</code>), from a folder, a USB stick or an FTP server. The page checks the package first and says if it does not fit this system. Programs installed there can be removed on the same page.</li>
+  <li>Programs added this way open their files by double click when nothing else was chosen for that kind of file.</li>
+  <li>Advanced: GoboLinux's own tools (<code>Compile</code>, <code>InstallPackage</code>) work in a terminal as an administrator. Every program lives in its own folder under <code>/Programs</code>. A text file on this computer has more on this: <code>/Programs/GoboSpin/Current/share/doc/software-install.txt</code>.</li>
+</ul>
+
+<h2 id="updates">Updates and going back</h2>
+<ul>
+  <li>GoboRefined keeps <b>two copies of the system</b> (slots A and B). An update is installed into the copy that is not running and is used from the next restart. Your files and settings are on a separate data partition and are kept.</li>
+  <li>Install an update: <b>Settings &gt; Software &gt; Updates &gt; Install update from file...</b>, or in a terminal <code>sudo gobo-update /path/to/GoboRefined-&lt;version&gt;.update</code>, then restart. Only update files signed by the GoboRefined project are accepted.</li>
+  <li>Go back to the previous version: the same page, or <code>sudo gobo-update --rollback</code>, then restart. If an updated system does not start, the computer goes back to the other copy by itself.</li>
+  <li><code>sudo gobo-update --status</code> shows both copies and which one starts next.</li>
+</ul>
+
+<h2 id="settings">Where settings are kept</h2>
+<table>
+  <tr><td><code>~/.config/goborefined/</code></td><td>Your GoboRefined choices: wallpaper, taskbar position, Settings look. Kept across updates.</td></tr>
+  <tr><td><code>~/.config/awesome/</code></td><td>The desktop (Awesome): its configuration file <code>rc.lua</code> and the light/dark choice (<code>mode</code>). A system update puts the default files back, except the light/dark choice. Settings &gt; Config edits and restores <code>rc.lua</code> (advanced).</td></tr>
+  <tr><td><code>~/.config/</code></td><td>Settings of the other programs (file manager, clipboard history, default programs in <code>mimeapps.list</code>, ...).</td></tr>
+  <tr><td><code>/System/Settings</code></td><td>System-wide settings (administrators only). Changes there are kept across updates; <code>sudo gobo-update --reset-system-changes</code> undoes all of them.</td></tr>
+  <tr><td><code>/Programs</code></td><td>Every program in its own folder and version (the GoboLinux way).</td></tr>
+</table>
+
+<h2 id="help">Help and more</h2>
+<ul>
+  <li>Something does not work: <b>Settings &gt; About &gt; Save system report</b> (or <code>gobo-report</code> in a terminal) writes one text file in your home folder that helps to find the cause.</li>
+  <li>GoboLinux documentation (online): <a href="https://gobolinux.org/documentation.html">gobolinux.org/documentation.html</a> and the <a href="https://gobolinux.org/">GoboLinux home page</a>.</li>
+  <li>Awesome, the window manager behind the desktop: <a href="https://awesomewm.org/apidoc/">awesomewm.org/apidoc</a>.</li>
+</ul>
+
+<p class="dim" style="margin-top:32px">Window manager reference: open a terminal and type <code>pinfo awesome</code> (or Settings &gt; Manual &gt; Window manager reference).</p>
+</main>
+</body>
+</html>

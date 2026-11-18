@@ -1,7 +1,8 @@
 #!/bin/sh
 # gobo-settings — the GoboRefined Settings app (Lua + lgi + GTK 3; files in
 # /Programs/GoboSpin/Current/share/gobo-settings). "gobo-settings PAGE" opens a page directly
-# (appearance, accounts, updates, remote, network, bluetooth, hotspot, sound, displays, trash, about).
+# (appearance, accounts, updates, remote, network, bluetooth, hotspot, sound, displays, trash, about,
+# devices, apps, manual, config).
 #
 # 0.8.2: one window per user. If Settings is already open on this desktop, the desktop (Awesome)
 # brings that window to the front instead, and a PAGE argument is handed to it through
