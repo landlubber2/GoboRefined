@@ -15,6 +15,9 @@ fi
 mkdir -p "$home/.config/awesome" "$home/.config/gtk-3.0"
 cp -r "$here/awesome/." "$home/.config/awesome/"
 cp "$here/picom.conf" "$home/.config/picom.conf"
+# 0.9.6: file manager action "Pin to start" (files and folders in the start menu's panel)
+mkdir -p "$home/.local/share/file-manager/actions"
+cp "$here/file-manager/actions/gobo-pin-to-start.desktop" "$home/.local/share/file-manager/actions/"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
 # Terminal: right click pastes (perl extension, loaded via URxvt.perl-ext-common)
 mkdir -p "$home/.urxvt/ext"

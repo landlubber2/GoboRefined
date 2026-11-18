@@ -60,6 +60,12 @@ if [ "${1:-}" = session ]; then
    ok "session: Win+Enter (terminal) not bound" "$keys" "winreturn=0"
    keys=$(L 'local n = 0 for _, k in ipairs(root.keys()) do if k.key == "Escape" then n = n + 1 end end return "esc=" .. n')
    no "session: Win+Escape still bound" "$keys" "esc=0"
+   # 0.9.6: the frequently-used panel works for Simple accounts; files and folders cannot be pinned;
+   # their hotkeys file is ignored (no Hotkeys tile; a file planted by hand changes nothing)
+   ok "session: frequently used panel opens with the menu" "$(L 'local sp = require("spin.startpanel") local was = sp.enabled() sp.set_enabled(true) spin_debug.mainmenu:show() local v = spin_debug.startpanel ~= nil and spin_debug.startpanel.visible spin_debug.mainmenu:hide() sp.set_enabled(was) return "panel=" .. tostring(v)')" "panel=true"
+   ok "session: no file pins for Simple" "$(S 'su kid -c "gobo-pin-to-start /Users/kid/Desktop" > /dev/null 2>&1; echo pin=$?')" "pin=1"
+   ok "session: own hotkeys ignored for Simple" "$(S 'su kid -c "mkdir -p ~/.config/goborefined && printf \"key\\tclipboard\\tMod4+x\\n\" > ~/.config/goborefined/hotkeys"'; L 'spin_hotkeys_reload() local n = 0 for _, k in ipairs(root.keys()) do if k.key == "x" then n = n + 1 end end return "x=" .. n')" "x=0"
+   S 'rm -f /Users/kid/.config/goborefined/hotkeys'
    # the file manager: "/" and "/Programs" refused, a window starts at home
    S "pkill -u kid -x pcmanfm -f -- '--no-desktop' 2>/dev/null; pid=\$(pgrep -u kid -x awesome | head -n 1); disp=\$(tr '\\0' '\\n' < /proc/\$pid/environ | sed -n 's/^DISPLAY=//p'); su kid -c \"DISPLAY=\$disp pcmanfm /Programs > /dev/null 2>&1 &\"; sleep 4"
    wins=$(L 'local t = {} for _, c in ipairs(client.get()) do table.insert(t, (c.class or "?") .. ":" .. (c.name or "?")) end return table.concat(t, "|")')

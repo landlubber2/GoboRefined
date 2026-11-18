@@ -206,10 +206,14 @@ end
 -- seen then): every keyboard grab, ours or awful's, runs through this filter first.
 -- 0.8.1: keys registered with popups.pass() (the screenshot keys) also get through: every
 -- popup closes, the grabs are released, then the key's action runs.
+-- 0.9.6: opts.keep_open = true: nothing is closed first; the action itself closes the popups
+-- when it is done (the screenshot keys: the picture is taken with the popup on it). The list is
+-- built again when the user's hotkeys change (clear_passes, then pass again).
 local passes = {}
-function popups.pass(mods, key, action)
-   table.insert(passes, { mods = mods, key = key:lower(), action = action })
+function popups.pass(mods, key, action, opts)
+   table.insert(passes, { mods = mods, key = key:lower(), action = action, keep_open = opts and opts.keep_open })
 end
+function popups.clear_passes() passes = {} end
 do
    local c_run = keygrabber.run
    local function has(mods, wanted)
@@ -241,8 +245,10 @@ do
          local p = pass_for(mods, key, event)
          if p then
             gears.timer.delayed_call(function()
-               popups.close_all()
-               popups.release_grabs()
+               if not p.keep_open then
+                  popups.close_all()
+                  popups.release_grabs()
+               end
                p.action()
             end)
             return

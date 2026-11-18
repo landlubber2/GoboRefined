@@ -20,6 +20,7 @@ local popup, backdrop, prompt_box, list_layout, hint
 local on_power         -- callback for the power button
 local allows           -- 0.9.1: function(entry) -> may this program be listed (Simple accounts)
 local no_commands = false   -- 0.9.1: never run typed text as a command (Simple accounts)
+local on_launch, on_context, on_hide   -- 0.9.6: start an app (counted), right click on an app, closed
 local open = false
 
 local function p() return beautiful.palette end
@@ -67,7 +68,9 @@ end
 local function start(app)
    launcher.hide()
    if not app then return end
-   if app.shell then awful.spawn.with_shell(app.cmdline) else awful.spawn(app.cmdline) end
+   if app.shell then awful.spawn.with_shell(app.cmdline)
+   elseif on_launch then on_launch(app)
+   else awful.spawn(app.cmdline) end
 end
 
 local function redraw()
@@ -97,7 +100,10 @@ local function redraw()
       row:connect_signal("mouse::enter", function()
          if selected ~= i then selected = i; redraw() end
       end)
-      row:buttons(awful.button({}, 1, function() start(app) end))
+      row:buttons(gears.table.join(
+         awful.button({}, 1, function() start(app) end),
+         -- 0.9.6: "Pin to start" / "Unpin from start" (not for "Run command: ...")
+         awful.button({}, 3, function() if on_context and not app.shell then on_context(app) end end)))
       list_layout:add(row)
    end
    hint.text = (#matches > ROWS)
@@ -195,6 +201,7 @@ local prompt_grabber   -- the search prompt's awful.keygrabber function while it
 function launcher.hide()
    if not open then return end
    open = false
+   if on_hide then pcall(on_hide) end
    popup.visible = false
    backdrop.visible = false
    -- Stop exactly the search prompt's grabber. 0.5 called awful.keygrabber.stop() without
@@ -268,6 +275,9 @@ function launcher.setup(args)
    on_power = args and args.on_power
    allows = args and args.allows
    no_commands = (args and args.no_commands) == true
+   on_launch = args and args.on_launch
+   on_context = args and args.on_context
+   on_hide = args and args.on_hide
    load_apps()
    popups.register("launcher", launcher.hide)
 end

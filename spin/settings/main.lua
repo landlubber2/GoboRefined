@@ -24,14 +24,14 @@ local C = require("common")
 
 local PAGES = {
    "network", "bluetooth", "hotspot", "remote",
-   "appearance", "trash",
+   "appearance", "hotkeys", "trash",
    "displays", "sound", "devices",
    "updates", "apps",
    "accounts", "about", "manual", "config",
 }
 local CATEGORIES = {
    { title = "Connectivity", icon = "network-wireless", pages = { "network", "bluetooth", "hotspot", "remote" } },
-   { title = "Customization", icon = "preferences-desktop-theme", pages = { "appearance", "trash" } },
+   { title = "Customization", icon = "preferences-desktop-theme", pages = { "appearance", "hotkeys", "trash" } },   -- 0.9.6: + hotkeys
    { title = "Devices", icon = "computer", pages = { "displays", "sound", "devices" } },
    { title = "Software", icon = "system-software-install", pages = { "updates", "apps" } },
    { title = "Accounts and system", icon = "system-users", pages = { "accounts", "about", "manual", "config" } },
@@ -44,7 +44,7 @@ local KIND_PAGES = {
    simple   = { appearance = true, accounts = true, sound = true, about = true, manual = true },   -- 0.9.5: + manual
    standard = { appearance = true, accounts = true, sound = true, about = true,
                 network = true, bluetooth = true, displays = true, trash = true,
-                devices = true, apps = true, manual = true, config = true },   -- 0.9.5: + manual, config
+                devices = true, apps = true, manual = true, config = true, hotkeys = true },   -- 0.9.5: + manual, config; 0.9.6: + hotkeys
 }
 do
    local allowed = KIND_PAGES[C.kind()]

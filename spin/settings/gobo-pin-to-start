@@ -1,0 +1,54 @@
+#!/bin/sh
+# GoboRefined 0.9.6: pin files or folders to the start menu's "Pinned and frequent" panel.
+# Run by the file manager's "Pin to start" action (~/.local/share/file-manager/actions/), as the
+# user, with the selected paths:   gobo-pin-to-start PATH...
+# Appends "file<TAB>path" or "folder<TAB>path" to ~/.config/goborefined/start-pins (pins the panel
+# already has are skipped; 8 places at most) and asks the running desktop to read the list again.
+# Simple accounts pin programs only (from the start menu): refused here.
+set -u
+pins="$HOME/.config/goborefined/start-pins"
+slots=8
+tab=$(printf '\t')
+
+note() {
+   if command -v zenity > /dev/null 2>&1 && [ -n "${DISPLAY:-}" ]
+   then zenity --warning --title="Pin to start" --no-wrap --text="$1" > /dev/null 2>&1 &
+   else echo "gobo-pin-to-start: $1" >&2
+   fi
+}
+
+[ $# -ge 1 ] || { echo "usage: gobo-pin-to-start PATH..." >&2; exit 2; }
+case " $(id -Gn 2>/dev/null) " in
+   *" simple "*) note "This account can pin programs only."; exit 1 ;;
+esac
+
+mkdir -p "$HOME/.config/goborefined" || exit 1
+[ -e "$pins" ] || printf '# GoboRefined start menu pins (kind<TAB>target), in pin order\n' > "$pins"
+added=0
+for p in "$@"
+do
+   case "$p" in
+      /*) ;;
+      *) p="$(pwd)/$p" ;;
+   esac
+   case "$p" in
+      *"$tab"*|*'
+'*) note "Names with tabs or line breaks cannot be pinned."; continue ;;
+   esac
+   if [ -d "$p" ]; then kind=folder
+   elif [ -e "$p" ]; then kind=file
+   else note "Not found: $p"; continue
+   fi
+   line="$kind$tab$p"
+   grep -qxF -- "$line" "$pins" && continue
+   count=$(grep -c "^[a-z]*$tab" "$pins")
+   if [ "$count" -ge "$slots" ]
+   then note "All $slots places are pinned. Unpin something first (right click on it in the start menu)."; break
+   fi
+   printf '%s\n' "$line" >> "$pins"
+   added=$((added + 1))
+done
+if [ "$added" -gt 0 ] && command -v awesome-client > /dev/null 2>&1
+then echo 'if spin_start_pins_reload then spin_start_pins_reload() end' | awesome-client > /dev/null 2>&1
+fi
+exit 0

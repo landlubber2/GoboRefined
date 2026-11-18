@@ -29,6 +29,12 @@ local cliphist = require("spin.cliphist")
 local desktop_icons = require("spin.desktop_icons")   -- 0.6: ~/Desktop icons (PCManFM), Trash clean-up
 local bluetooth = require("spin.bluetooth")   -- 0.8.4: our menu (upstream widget paired without an agent)
 local newitem = require("spin.newitem")   -- 0.9.5: New folder / text / Word document on the desktop
+-- 0.9.6: pinned and frequently used apps next to the start menu (loaded before the first menu
+-- scan: it notes the desktop file of every menu entry); right-click menus on top of popups
+local startpanel = require("spin.startpanel")
+local ctxmenu = require("spin.ctxmenu")
+-- 0.9.6: user hotkeys (Settings > Hotkeys): the list of actions, defaults and the user's file
+local hotkeys = require("spin.hotkeys_list")
 -- 0.9.1: Simple accounts (group "simple"): only the chosen programs, no terminal or desktop tools
 local simple = require("spin.simple")
 spin_simple = simple   -- lab tests
@@ -266,6 +272,33 @@ do
          cmd = args.cmd, theme = args.theme, akey = "",
       }
    end
+
+   -- 0.9.6: a right click on an app entry (one that carries `app`, see the start menu below)
+   -- opens "Pin to start" / "Unpin from start" on top of the menu; awful.menu's own right click
+   -- closes the whole menu. Other entries keep the stock buttons.
+   local menu_add = awful.menu.add
+   awful.menu.add = function(self, args, index)
+      local r = menu_add(self, args, index)
+      local item = args and args.app and self.items[index or #self.items]
+      if item and item._background then
+         item._background:buttons(gears.table.join(
+            awful.button({}, 3, function() startpanel.app_context(args.app) end),
+            awful.button({}, 1, function()
+               ctxmenu.hide()
+               local num = gears.table.hasitem(self.items, item)
+               self:item_enter(num, { mouse = true })
+               self:exec(num, { exec = true, mouse = true })
+            end)))
+      end
+      return r
+   end
+end
+startpanel.allow_files = not simple.is_simple   -- 0.9.6: Simple accounts pin programs only
+startpanel.file_manager = file_manager
+
+-- icons by name at menu size (menubar.utils.lookup_icon finds only application-sized icons)
+local function menu_icon(name)
+   return icon_theme():find_icon_path(name, 24) or menubar.utils.lookup_icon(name)
 end
 
 local mymainmenu = awful.menu({
@@ -287,12 +320,22 @@ menu_gen.generate(function(entries)
       cat_submenus[k] = {}
    end
 
+   local allowed = {}
    for _, entry in ipairs(entries) do
+      if entry.name ~= nil and entry.cmdline ~= nil and simple.allows(entry) then
+         table.insert(allowed, entry)
+      end
       if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil and simple.allows(entry) then
          -- entries whose icon is not found keep their place, with the generic icon
-         table.insert(cat_submenus[entry.category], { entry.name, entry.cmdline, entry.icon or beautiful.default_app_icon })
+         -- 0.9.6: started through startpanel.launch (counted for "frequently used"); `app` lets
+         -- a right click pin it
+         local app = { id = startpanel.id_for(entry.name, entry.cmdline), name = entry.name,
+                       cmdline = entry.cmdline, icon = entry.icon }
+         table.insert(cat_submenus[entry.category], { entry.name, function() startpanel.launch(app) end,
+            entry.icon or beautiful.default_app_icon, app = app })
       end
    end
+   startpanel.set_apps(allowed)
    table.sort(cat_keys)
    for _, k in ipairs(cat_keys) do
       if #cat_submenus[k] > 0 then
@@ -301,14 +344,28 @@ menu_gen.generate(function(entries)
       end
    end
    mymainmenu:add({ "Power...", function() power.show() end, beautiful.power_icon })
+   -- 0.9.6: the panel switch (the menu stays open; the label says what a click does next)
+   mymainmenu:add({ startpanel.toggle_label(), function(item, m)
+      startpanel.set_enabled(not startpanel.enabled())
+      if item and item.label then item.label:set_text(startpanel.toggle_label()) end
+      return true   -- keep the menu open: awful.menu re-shows it, which shows or hides the panel
+   end, menu_icon("view-list") or menu_icon("go-previous") })
 end)
+-- 0.9.6: the panel opens and closes with the start menu
+do
+   local show, hide = mymainmenu.show, mymainmenu.hide
+   mymainmenu.show = function(self, args)
+      show(self, args)
+      startpanel.show_for(self)
+   end
+   mymainmenu.hide = function(self)
+      startpanel.hide()
+      hide(self)
+   end
+end
 
 -- 0.9.5: the desktop's own right-click menu (bare desktop and PCManFM's desktop window); the
 -- start button keeps mymainmenu. New items go to ~/Desktop (spin/newitem.lua).
--- icons by name at menu size (menubar.utils.lookup_icon finds only application-sized icons)
-local function menu_icon(name)
-   return icon_theme():find_icon_path(name, 24) or menubar.utils.lookup_icon(name)
-end
 local have_settings = gears.filesystem.file_readable("/System/Index/bin/gobo-settings")
 local desktop_menu = awful.menu({
    items = awful.util.table.join({
@@ -367,7 +424,9 @@ end
 
 local start_button = hoverable(wibox.widget.imagebox(beautiful.start_icon), 4)
 -- 0.9.1: a Simple account's search finds only its programs and runs no typed commands
-launcher.setup({ on_power = power.show, allows = simple.allows, no_commands = simple.is_simple })
+launcher.setup({ on_power = power.show, allows = simple.allows, no_commands = simple.is_simple,
+                 -- 0.9.6: counted for "frequently used"; right click pins
+                 on_launch = startpanel.launch, on_context = startpanel.app_context, on_hide = ctxmenu.hide })
 spin_launcher = launcher   -- lab tests
 popups.register("alttab", function() alttab.cancel() end)
 start_button:buttons(awful.util.table.join(
@@ -657,428 +716,198 @@ root.buttons(awful.util.table.join(
 ))
 
 
--- 0.8.1: the screenshot keys also work while a menu or popup holds the keyboard
--- (spin/popups.lua closes it first)
-popups.pass({}, "Print", function() screenshot.take("screen") end)
-popups.pass({ modkey, "Shift" }, "s", function() screenshot.show() end)
+-- Key bindings
+-- 0.9.6: built by build_keys() from spin/hotkeys_list.lua (actions, defaults, fixed keys) and the
+-- user's file ~/.config/goborefined/hotkeys (Settings > Hotkeys). spin_hotkeys_reload() builds
+-- them again and applies them at once, no restart. Simple accounts: defaults only, and the keys
+-- that open power tools (terminal, restarting or quitting the desktop) are not bound (0.9.1).
+-- 0.8.1/0.9.6: the screenshot keys also work while a menu or popup holds the keyboard
+-- (spin/popups.lua lets them through; the screenshot is taken BEFORE the popup closes).
+local hotkeys_file = (os.getenv("HOME") or "") .. hotkeys.FILE_NAME
 
--- 0.9.1: keys that open power tools (terminal, restarting or quitting the desktop) are not
--- bound for Simple accounts; Win+Escape, screenshots, clipboard history and desktops stay
-local function power_key(...)
-   if simple.is_simple then return {} end
-   return awful.key(...)
+local global_actions = {
+   screenshot = function() screenshot.show() end,
+   ["screenshot-screen"] = function() screenshot.take("screen") end,
+   clipboard = function() cliphist.show() end,
+   help = function() show_help() end,
+   ["start-menu"] = function() mymainmenu:show() end,
+   search = function() launcher.show() end,
+   desktops = function() desktops.show() end,
+   ["desktop-prev"] = function() awful.tag.viewprev() end,
+   ["desktop-next"] = function() awful.tag.viewnext() end,
+   ["previous-window"] = function()
+      awful.client.focus.history.previous()
+      if client.focus then client.focus:raise() end
+   end,
+   lock = function() power.lock() end,
+   ["power-menu"] = function() power.show() end,
+   terminal = function() awful.spawn(terminal) end,
+   files = function() awful.spawn(file_manager) end,
+   browser = function() awful.spawn(browser) end,
+   ["restart-desktop"] = function() awesome.restart() end,
+   ["quit-desktop"] = function() awesome.quit() end,
+   ["layout-next"] = function() awful.layout.inc(layouts, 1) end,
+   ["layout-prev"] = function() awful.layout.inc(layouts, -1) end,
+   ["focus-next"] = function()
+      awful.client.focus.byidx(1)
+      if client.focus then client.focus:raise() end
+   end,
+   ["focus-prev"] = function()
+      awful.client.focus.byidx(-1)
+      if client.focus then client.focus:raise() end
+   end,
+   restore = function()
+      local c = awful.client.restore()
+      if c then client.focus = c; c:raise() end   -- focus the restored window
+   end,
+}
+local window_actions = {
+   ["win-fullscreen"] = function(c) c.fullscreen = not c.fullscreen end,
+   ["win-maximize"] = function(c)
+      c.maximized_vertical   = not c.maximized_vertical
+      c.maximized_horizontal = not c.maximized_horizontal
+   end,
+   -- the window has the input focus, so it cannot be minimized... it is, and loses the focus
+   ["win-minimize"] = function(c) c.minimized = true end,
+   ["win-close"] = function(c) window_menu.hide(c); c:kill() end,
+   ["win-ontop"] = function(c) c.ontop = not c.ontop end,
+   ["win-floating"] = function(c) awful.client.floating.toggle(c) end,
+   ["win-menu"] = function(c)
+      local geo = c:geometry()
+      window_menu.show(c, { coords = { x = geo.x, y = geo.y } })
+   end,
+   ["win-screen"] = function(c) c:move_to_screen() end,
+}
+
+-- a user's own shortcut: start a program (desktop file id) or run a command
+local function custom_action(entry)
+   if entry.kind == "app" then
+      return function()
+         local app = startpanel.app(entry.value)
+         if app then awful.spawn(app.cmdline)
+         else awful.spawn({ "gtk-launch", (entry.value:gsub("%.desktop$", "")) }) end
+      end
+   end
+   return function() awful.spawn.with_shell(entry.value) end
 end
 
--- Key bindings
-local globalkeys = awful.util.table.join(
-
-   -- Screenshots (0.6): saved to ~/Pictures/Screenshots and copied to the clipboard
-   awful.key({}, "Print",
-      function() screenshot.take("screen") end,
-      { description = "Screenshot of the whole screen", group = "screenshots and clipboard" }),
-
-   awful.key({ modkey, "Shift" }, "s",
-      function() screenshot.show() end,
-      { description = "Screenshot: area, window or screen", group = "screenshots and clipboard" }),
-
-   -- Clipboard history (0.6)
-   awful.key({ modkey, "Shift" }, "v",
-      function() cliphist.show() end,
-      { description = "Clipboard history: pick an earlier copy", group = "screenshots and clipboard" }),
-
-   awful.key({ modkey }, "s",
-      show_help,
-      { description = "Show hotkeys", group = "awesome" }),
-
-   -- Virtual desktops (0.6)
-   awful.key({ modkey, "Shift" }, "Tab",
-      function() desktops.show() end,
-      { description = "Desktops: list, switch, add, remove", group = "desktops" }),
-
-   awful.key({ modkey }, ",",
-      awful.tag.viewprev,
-      { description = "Previous desktop", group = "desktops" }),
-
-   awful.key({ modkey }, ".",
-      awful.tag.viewnext,
-      { description = "Next desktop", group = "desktops" }),
-
-   -- Safety net (0.6): closes every popup and menu, releases keyboard and mouse grabs and
-   -- focuses the window under the pointer. Also works inside a grab (spin/popups.lua).
-   awful.key({ modkey }, "Escape",
-      function() popups.panic() end,
-      { description = "Close all popups, free the keyboard", group = "awesome" }),
-
-   awful.key({ modkey }, "j",
-      function()
-         awful.client.focus.byidx(-1)
-         if client.focus then client.focus:raise() end
-      end,
-      { description = "Focus previous by index", group = "client" }),
-
-   awful.key({ modkey }, "k",
-      function()
-         awful.client.focus.byidx(1)
-         if client.focus then client.focus:raise() end
-      end,
-      { description = "Focus next by index", group = "client" }),
-
-   awful.key({ modkey }, "w",
-      function()
-         mymainmenu:show()
-      end,
-      { description = "Show main menu", group = "awesome" }),
-
-   -- Layout manipulation
-   awful.key({ modkey, "Shift" }, "j",
-      function()
-         awful.client.swap.byidx(1) 
-      end,
-      { description = "Swap with next client by index", group = "client" }),
-
-   awful.key({ modkey, "Shift" }, "k",
-      function()
-         awful.client.swap.byidx(-1)
-      end,
-      { description = "Swap with previous client by index", group = "client" }),
-   
-   awful.key({ modkey, "Control" }, "j",
-      function()
-         awful.screen.focus_relative(1)
-      end,
-      { description = "Focus the next screen", group = "screen" }),
-   
-   awful.key({ modkey, "Control" }, "k",
-      function() 
-         awful.screen.focus_relative(-1)
-      end,
-      { description = "Focus the previous screen", group = "screen" }),
-   
-   awful.key({ modkey }, "u",
-      awful.client.urgent.jumpto,
-      { description = "Jump to urgent client", group = "client" }),
-
-   awful.key({ modkey }, "Tab",
-      function()
-         awful.client.focus.history.previous()
-         if client.focus then
-            client.focus:raise()
-         end
-      end,
-      { description = "Go back to previous client", group = "client" }),
-
-   -- Lock and power
-   awful.key({ modkey }, "l",
-      function() power.lock() end,
-      { description = "Lock the screen", group = "awesome" }),
-
-   awful.key({ "Control", ALT }, "Delete",
-      function() power.show() end,
-      { description = "Power menu", group = "awesome" }),
-
-   -- Standard program
-   power_key({ modkey }, "Return",
-      function()
-         awful.spawn(terminal)
-      end,
-      { description = "Open a terminal", group = "launcher" }),
-
-   awful.key({ modkey }, "e",
-      function()
-         awful.spawn(file_manager)
-      end,
-      { description = "Open the file manager", group = "launcher" }),
-
-   awful.key({ modkey, "Shift" }, "Return",
-      function()
-         awful.util.spawn(browser)
-      end,
-      { description = "Open a browser", group = "launcher" }),
-
-   power_key({ modkey, "Control" }, "r",
-      awesome.restart,
-      { description = "Reload Awesome", group = "awesome" }),
-
-   power_key({ modkey, "Shift" }, "q",
-      awesome.quit,
-      { description = "Quit Awesome", group = "awesome" }),
-
-   awful.key({ modkey }, "bracketright",
-      function()
-         awful.tag.incmwfact(0.05)
-      end,
-      { description = "Increase master width factor", group = "layout" }),
-
-   awful.key({ modkey }, "bracketleft",
-      function()
-         awful.tag.incmwfact(-0.05)
-      end,
-      { description = "Decrease master width factor", group = "layout" }),
-
-   awful.key({ modkey, "Shift" }, "h",
-      function()
-         awful.tag.incnmaster( 1, nil, true)
-      end,
-      { description = "Increase the number of master clients", group = "layout" }),
-
-   awful.key({ modkey, "Shift" }, "l",
-      function()
-         awful.tag.incnmaster(-1, nil, true)
-      end,
-      { description = "Decrease the number of master clients", group = "layout" }),
-
-   awful.key({ modkey, "Control" }, "h",
-      function()
-         awful.tag.incncol( 1, nil, true)
-      end,
-      { description = "Increase the number of columns", group = "layout" }),
-
-   awful.key({ modkey, "Control" }, "l",
-      function()
-         awful.tag.incncol(-1, nil, true)
-      end,
-      { description = "Decrease the number of columns", group = "layout" }),
-
-   awful.key({ modkey }, "space",
-      function()
-         awful.layout.inc(layouts, 1)
-      end,
-      { description = "Select next", group = "layout" }),
-
-   awful.key({ modkey, "Shift" }, "space",
-      function()
-         awful.layout.inc(layouts, -1)
-      end,
-      { description = "Select previous", group = "layout" }),
-
-   awful.key({ modkey, "Control" }, "n",
-      function()
-         local c = awful.client.restore()
-         -- Focus restored client
-         if c then
-            client.focus = c
-            c:raise()
-         end
-      end,
-      { description = "Restore minimized", group = "client" }),
-
-   -- Prompt
-   awful.key({ modkey }, "r",
-      function()
-         launcher.show()
-      end,
-      { description = "Search and start applications", group = "launcher" }),
-
-   awful.key({ ALT }, "F2",
-      function()
-         launcher.show()
-      end,
-      { description = "Search and start applications", group = "launcher" }),
-
-   --[[
-   awful.key({ modkey }, "x",
-      function()
-         awful.prompt.run({ prompt = "Run Lua code: " },
-         mypromptbox[mouse.screen].widget,
-         awful.util.eval, nil,
-         awful.util.getdir("cache") .. "/history_eval")
-      end
-      { description = "Run Lua code", group = "awesome" }),
-   ]]
-
-   -- Menubar
-   awful.key({ modkey }, "p",
-      function() launcher.show() end,
-      { description = "Search and start applications", group = "launcher" }),
-
-   -- Switch windows
-   awful.key({ ALT, }, "Tab",
-      function()
-         alttab.switch(1, "Alt_L", "Tab", "ISO_Left_Tab")
-      end,
-      { description = "Switch between windows", group = "awesome gobolinux" }),
-   
-   awful.key({ ALT, "Shift" }, "Tab",
-      function()
-         alttab.switch(-1, "Alt_L", "Tab", "ISO_Left_Tab")
-      end,
-      { description = "Switch between windows backwards", group = "awesome gobolinux" }),
-
-   -- Multimedia keys    
-   awful.key({}, "XF86HomePage",
-      function()
-         awful.util.spawn(browser)
-      end,
-      { description = "Open a browser", group = "multimedia" }),
-   
-   awful.key({}, "XF86AudioRaiseVolume",
-      function()
-         sound_widget:set_volume(5, "+")
-      end,
-      { description = "Raise audio volume", group = "multimedia" }),
-   
-   awful.key({}, "XF86AudioLowerVolume",
-      function()
-         sound_widget:set_volume(5, "-") 
-      end,
-      { description = "Lower audio volume", group = "multimedia" }),
-   
-   awful.key({}, "XF86AudioMute",
-      function() 
-         sound_widget:toggle_mute() 
-      end,
-      { description = "Toggle mute", group = "multimedia" }),
-   
-   awful.key({}, "XF86MonBrightnessDown", function() light_widget:dec_brightness(5) end,
-      { description = "Lower screen brightness", group = "multimedia" }
-   ),
-   
-   awful.key({}, "XF86MonBrightnessUp", function() light_widget:inc_brightness(5) end,
-      { description = "Raise screen brightness", group = "multimedia" }
+-- keys that never change (the safety net first)
+local function fixed_globalkeys()
+   local keys = awful.util.table.join(
+      -- Safety net (0.6): closes every popup and menu, releases keyboard and mouse grabs and
+      -- focuses the window under the pointer. Also works inside a grab (spin/popups.lua).
+      awful.key({ modkey }, "Escape", function() popups.panic() end,
+         { description = "Close all popups, free the keyboard", group = "awesome" }),
+      awful.key({ modkey, "Shift" }, "j", function() awful.client.swap.byidx(1) end,
+         { description = "Swap with next client by index", group = "client" }),
+      awful.key({ modkey, "Shift" }, "k", function() awful.client.swap.byidx(-1) end,
+         { description = "Swap with previous client by index", group = "client" }),
+      awful.key({ modkey, "Control" }, "j", function() awful.screen.focus_relative(1) end,
+         { description = "Focus the next screen", group = "screen" }),
+      awful.key({ modkey, "Control" }, "k", function() awful.screen.focus_relative(-1) end,
+         { description = "Focus the previous screen", group = "screen" }),
+      awful.key({ modkey }, "u", awful.client.urgent.jumpto,
+         { description = "Jump to urgent client", group = "client" }),
+      awful.key({ modkey }, "bracketright", function() awful.tag.incmwfact(0.05) end,
+         { description = "Increase master width factor", group = "layout" }),
+      awful.key({ modkey }, "bracketleft", function() awful.tag.incmwfact(-0.05) end,
+         { description = "Decrease master width factor", group = "layout" }),
+      awful.key({ modkey, "Shift" }, "h", function() awful.tag.incnmaster(1, nil, true) end,
+         { description = "Increase the number of master clients", group = "layout" }),
+      awful.key({ modkey, "Shift" }, "l", function() awful.tag.incnmaster(-1, nil, true) end,
+         { description = "Decrease the number of master clients", group = "layout" }),
+      awful.key({ modkey, "Control" }, "h", function() awful.tag.incncol(1, nil, true) end,
+         { description = "Increase the number of columns", group = "layout" }),
+      awful.key({ modkey, "Control" }, "l", function() awful.tag.incncol(-1, nil, true) end,
+         { description = "Decrease the number of columns", group = "layout" }),
+      -- Switch windows
+      awful.key({ ALT }, "Tab", function() alttab.switch(1, "Alt_L", "Tab", "ISO_Left_Tab") end,
+         { description = "Switch between windows", group = "awesome gobolinux" }),
+      awful.key({ ALT, "Shift" }, "Tab", function() alttab.switch(-1, "Alt_L", "Tab", "ISO_Left_Tab") end,
+         { description = "Switch between windows backwards", group = "awesome gobolinux" }),
+      -- Multimedia keys
+      awful.key({}, "XF86HomePage", function() awful.util.spawn(browser) end,
+         { description = "Open a browser", group = "multimedia" }),
+      awful.key({}, "XF86AudioRaiseVolume", function() sound_widget:set_volume(5, "+") end,
+         { description = "Raise audio volume", group = "multimedia" }),
+      awful.key({}, "XF86AudioLowerVolume", function() sound_widget:set_volume(5, "-") end,
+         { description = "Lower audio volume", group = "multimedia" }),
+      awful.key({}, "XF86AudioMute", function() sound_widget:toggle_mute() end,
+         { description = "Toggle mute", group = "multimedia" }),
+      awful.key({}, "XF86MonBrightnessDown", function() light_widget:dec_brightness(5) end,
+         { description = "Lower screen brightness", group = "multimedia" }),
+      awful.key({}, "XF86MonBrightnessUp", function() light_widget:inc_brightness(5) end,
+         { description = "Raise screen brightness", group = "multimedia" })
    )
-)
+   -- Bind all key numbers to tags.
+   -- Be careful: we use keycodes to make it works on any keyboard layout.
+   -- Win+1..9 = desktop 1..9 (those that exist); only the first is listed in the hotkeys help.
+   for i = 1, 9 do
+      local function d(text) return i == 1 and { description = text, group = "desktops" } or nil end
+      keys = awful.util.table.join(keys,
+         awful.key({ modkey }, "#" .. i + 9,
+            function()
+               local tag = awful.tag.gettags(mouse.screen)[i]
+               if tag then awful.tag.viewonly(tag) end
+            end,
+            d("Go to desktop 1 (Win+1 ... Win+9)")),
+         awful.key({ modkey, "Control" }, "#" .. i + 9,
+            function()
+               local tag = awful.tag.gettags(mouse.screen)[i]
+               if tag then awful.tag.viewtoggle(tag) end
+            end,
+            d("Also show desktop 1 (Win+Ctrl+1 ... 9)")),
+         awful.key({ modkey, "Shift" }, "#" .. i + 9,
+            function()
+               if client.focus then
+                  local tag = awful.tag.gettags(client.focus.screen)[i]
+                  if tag then awful.client.movetotag(tag) end
+               end
+            end,
+            d("Move window to desktop 1 (Win+Shift+1 ... 9)")),
+         awful.key({ modkey, "Control", "Shift" }, "#" .. i + 9,
+            function()
+               if client.focus then
+                  local tag = awful.tag.gettags(client.focus.screen)[i]
+                  if tag then awful.client.toggletag(tag) end
+               end
+            end,
+            d("Window also on desktop 1 (Win+Ctrl+Shift+1 ... 9)")))
+   end
+   return keys
+end
 
 local delta = 64
+local function fixed_clientkeys()
+   return awful.util.table.join(
+      awful.key({ modkey, "Control" }, "Return", function(c) c:swap(awful.client.getmaster()) end,
+         { description = "Move to master", group = "client" }),
 
-local clientkeys = awful.util.table.join(
+      docking.move_key("vertical",   -delta, { modkey, ALT }, "Up"),
+      docking.move_key("vertical",    delta, { modkey, ALT }, "Down"),
+      docking.move_key("horizontal", -delta, { modkey, ALT }, "Left"),
+      docking.move_key("horizontal",  delta, { modkey, ALT }, "Right"),
 
-   awful.key({ modkey }, "f",
-      function(c)
-         c.fullscreen = not c.fullscreen
-      end,
-      { description = "Toggle fullscreen", group = "client" }),
-   
-   awful.key({ modkey, "Shift" }, "c",
-      function(c)
-         c:kill()
-      end,
-      { description = "Close", group = "client" }),
-   
-   awful.key({ modkey, "Control" }, "space",
-      awful.client.floating.toggle,
-      { description = "Window always floating", group = "client" }),
+      docking.resize_key("vertical",   -delta, { modkey, ALT, "Ctrl" }, "Up"),
+      docking.resize_key("vertical",    delta, { modkey, ALT, "Ctrl" }, "Down"),
+      docking.resize_key("horizontal", -delta, { modkey, ALT, "Ctrl" }, "Left"),
+      docking.resize_key("horizontal",  delta, { modkey, ALT, "Ctrl" }, "Right"),
 
-   awful.key({ modkey, "Control" }, "Return",
-      function(c)
-         c:swap(awful.client.getmaster())
-      end,
-      { description = "Move to master", group = "client" }),
+      docking.corner_key("top",    "left",  { modkey }, "KP_Home"),
+      docking.corner_key("top",    "right", { modkey }, "KP_Prior"),
+      docking.corner_key("bottom", "left",  { modkey }, "KP_End"),
+      docking.corner_key("bottom", "right", { modkey }, "KP_Next"),
 
-   awful.key({ modkey }, "o",
-      function(c)
-         c:move_to_screen() 
-      end,
-      { description = "Move to screen", group = "client" }),
+      awful.key({ modkey }, "KP_Left",  docking.dock_left),
+      awful.key({ modkey }, "KP_Right", docking.dock_right),
+      awful.key({ modkey }, "KP_Up",    docking.dock_up),
+      awful.key({ modkey }, "KP_Down",  docking.dock_down),
 
-   awful.key({ modkey }, "t",
-      function(c)
-         c.ontop = not c.ontop
-      end,
-      { description = "Toggle always-on-top", group = "client" }),
-
-   awful.key({ modkey }, "n",
-      function(c)
-         -- The client currently has the input focus, so it cannot be
-         -- minimized, since minimized clients can't have the focus.
-         c.minimized = true
-      end,
-      { description = "Minimize", group = "client" }),
-
-   awful.key({ modkey }, "m",
-      function(c)
-         c.maximized_vertical   = not c.maximized_vertical
-         c.maximized_horizontal = not c.maximized_horizontal
-      end,
-      { description = "Maximize", group = "client" }),
-
-   awful.key({ ALT }, "F4",
-      function(c)
-         window_menu.hide(c)
-         c:kill()
-      end,
-      { description = "Close", group = "client" }),
-
-   awful.key({ ALT }, "space",
-      function(c)
-         local geo = c:geometry()
-         window_menu.show(c, { coords = { x = geo.x, y = geo.y } })
-      end,
-      { description = "Open window menu", group = "client" }),
-
-   docking.move_key("vertical",   -delta, { modkey, ALT }, "Up"),
-   docking.move_key("vertical",    delta, { modkey, ALT }, "Down"),
-   docking.move_key("horizontal", -delta, { modkey, ALT }, "Left"),
-   docking.move_key("horizontal",  delta, { modkey, ALT }, "Right"),
-
-   docking.resize_key("vertical",   -delta, { modkey, ALT, "Ctrl" }, "Up"),
-   docking.resize_key("vertical",    delta, { modkey, ALT, "Ctrl" }, "Down"),
-   docking.resize_key("horizontal", -delta, { modkey, ALT, "Ctrl" }, "Left"),
-   docking.resize_key("horizontal",  delta, { modkey, ALT, "Ctrl" }, "Right"),
-
-   docking.corner_key("top",    "left",  { modkey }, "KP_Home"),
-   docking.corner_key("top",    "right", { modkey }, "KP_Prior"),
-   docking.corner_key("bottom", "left",  { modkey }, "KP_End"),
-   docking.corner_key("bottom", "right", { modkey }, "KP_Next"),
-
-   awful.key({ modkey }, "KP_Left",  docking.dock_left),
-   awful.key({ modkey }, "KP_Right", docking.dock_right),
-   awful.key({ modkey }, "KP_Up",    docking.dock_up),
-   awful.key({ modkey }, "KP_Down",  docking.dock_down),
-
-   awful.key({ modkey }, "Left",  docking.dock_left,  { description = "Dock / move docked window", group = "awesome gobolinux" }),
-   awful.key({ modkey }, "Right", docking.dock_right, { description = "Dock / move docked window", group = "awesome gobolinux" }),
-   awful.key({ modkey }, "Up",    docking.dock_up,    { description = "Dock / move docked window", group = "awesome gobolinux" }),
-   awful.key({ modkey }, "Down",  docking.dock_down,  { description = "Dock / move docked window", group = "awesome gobolinux" })
-)
-
--- Bind all key numbers to tags.
--- Be careful: we use keycodes to make it works on any keyboard layout.
--- Win+1..9 = desktop 1..9 (those that exist); only the first is listed in the hotkeys help.
-for i = 1, 9 do
-   local function d(text) return i == 1 and { description = text, group = "desktops" } or nil end
-   globalkeys = awful.util.table.join(globalkeys,
-
-   awful.key({ modkey }, "#" .. i + 9,
-      function()
-         local screen = mouse.screen
-         local tag = awful.tag.gettags(screen)[i]
-         if tag then
-            awful.tag.viewonly(tag)
-         end
-      end,
-      d("Go to desktop 1 (Win+1 ... Win+9)")),
-
-   awful.key({ modkey, "Control" }, "#" .. i + 9,
-      function()
-         local screen = mouse.screen
-         local tag = awful.tag.gettags(screen)[i]
-         if tag then
-            awful.tag.viewtoggle(tag)
-         end
-      end,
-      d("Also show desktop 1 (Win+Ctrl+1 ... 9)")),
-
-   awful.key({ modkey, "Shift" }, "#" .. i + 9,
-      function()
-         if client.focus then
-            local tag = awful.tag.gettags(client.focus.screen)[i]
-            if tag then
-               awful.client.movetotag(tag)
-            end
-         end
-      end,
-      d("Move window to desktop 1 (Win+Shift+1 ... 9)")),
-
-   awful.key({ modkey, "Control", "Shift" }, "#" .. i + 9,
-      function()
-         if client.focus then
-            local tag = awful.tag.gettags(client.focus.screen)[i]
-            if tag then
-               awful.client.toggletag(tag)
-            end
-         end
-      end,
-      d("Window also on desktop 1 (Win+Ctrl+Shift+1 ... 9)")))
+      awful.key({ modkey }, "Left",  docking.dock_left,  { description = "Dock / move docked window", group = "awesome gobolinux" }),
+      awful.key({ modkey }, "Right", docking.dock_right, { description = "Dock / move docked window", group = "awesome gobolinux" }),
+      awful.key({ modkey }, "Up",    docking.dock_up,    { description = "Dock / move docked window", group = "awesome gobolinux" }),
+      awful.key({ modkey }, "Down",  docking.dock_down,  { description = "Dock / move docked window", group = "awesome gobolinux" })
+   )
 end
 
 local clientbuttons = awful.util.table.join(
@@ -1095,14 +924,14 @@ local clientbuttons = awful.util.table.join(
          docking.smart_mouse_move(c)
       end),
 
-   awful.button({ "Control", ALT }, 1, 
+   awful.button({ "Control", ALT }, 1,
       function(c) client.focus = c
          c:raise()
          awful.mouse.client.resize(c)
       end),
 
-   awful.button({ ALT }, 3, 
-      function(c) 
+   awful.button({ ALT }, 3,
+      function(c)
          client.focus = c
          c:raise()
          awful.mouse.client.resize(c)
@@ -1114,47 +943,126 @@ local clientbuttons = awful.util.table.join(
 -- Binding Super_L makes X send every key to that grab (the root window) while Win is held,
 -- so the window keys with Win (Win+F, Win+arrows, ...) would no longer reach the window's
 -- own bindings: they are mirrored as global keys acting on the focused window.
-local function tap_used() end
-do
-   local GLib = require("lgi").GLib
-   local tap = { down = false, used = false, t = 0 }
-   local function now() return GLib.get_monotonic_time() / 1e6 end
-   tap_used = function() tap.used = true end
-   for _, k in ipairs(globalkeys) do k:connect_signal("press", tap_used) end
-   for _, k in ipairs(clientkeys) do k:connect_signal("press", tap_used) end
+local tap = { down = false, used = false, t = 0 }
+local function tap_now() return GLib.get_monotonic_time() / 1e6 end
+local function tap_used() tap.used = true end
+spin_debug.mainmenu = mymainmenu   -- lab input test (win-tap scenarios)
+-- a click with Win held also counts (the click still reaches the window)
+for _, b in ipairs({ 1, 2, 3 }) do
+   clientbuttons = awful.util.table.join(clientbuttons, awful.button({ modkey }, b, tap_used))
+end
+
+local help_entries = {}   -- what the last build put into the Win+S help (awful.key.hotkeys)
+local function build_keys()
+   local cfg = simple.is_simple and hotkeys.parse("") or hotkeys.load(hotkeys_file)
+   -- the previous build's help lines go (the help is built again from awful.key.hotkeys)
+   local mine = {}
+   for _, d in ipairs(help_entries) do mine[d] = true end
+   for i = #awful.key.hotkeys, 1, -1 do
+      if mine[awful.key.hotkeys[i]] then table.remove(awful.key.hotkeys, i) end
+   end
+   local n0 = #awful.key.hotkeys
+
+   local used = hotkeys.fixed_combos()
+   local g, ck = fixed_globalkeys(), fixed_clientkeys()
+   local function bind(list, combo, fn, desc, group)
+      local n = hotkeys.normalize(combo)
+      local mods, key = hotkeys.split(n)
+      if not mods or used[n] then return false end
+      used[n] = desc or true
+      for _, k in ipairs(awful.key(mods, key, fn, desc and { description = desc, group = group } or nil)) do
+         table.insert(list, k)
+      end
+      return true
+   end
+   popups.clear_passes()
+   for _, a in ipairs(hotkeys.ACTIONS) do
+      if not (simple.is_simple and a.power) then
+         for _, combo in ipairs(hotkeys.keys_of(cfg, a.id)) do
+            if a.window then
+               bind(ck, combo, window_actions[a.id], a.label, a.group)
+            elseif bind(g, combo, global_actions[a.id], a.label, a.group)
+               and (a.id == "screenshot" or a.id == "screenshot-screen") then
+               local mods, key = hotkeys.split(combo)
+               popups.pass(mods, key, global_actions[a.id], { keep_open = true })
+            end
+         end
+      end
+   end
+   for _, c in ipairs(cfg.custom) do
+      bind(g, c.combo, custom_action(c), c.name, "your own shortcuts")
+   end
+
+   -- the Win-key tap (see above)
+   for _, k in ipairs(g) do k:connect_signal("press", tap_used) end
+   for _, k in ipairs(ck) do k:connect_signal("press", tap_used) end
    local extra = {}
-   for _, k in ipairs(clientkeys) do
+   for _, k in ipairs(ck) do
       local mods = k.modifiers or {}
       if gears.table.hasitem(mods, modkey) and not gears.table.hasitem(mods, "Lock")
          and not gears.table.hasitem(mods, "Mod2") then
-         for _, g in ipairs(awful.key(mods, k.key, function()
+         for _, x in ipairs(awful.key(mods, k.key, function()
             local c = client.focus
             if c then k:emit_signal("press", c) end
-         end)) do table.insert(extra, g) end
+         end)) do table.insert(extra, x) end
       end
    end
-   for _, g in ipairs(awful.key({}, "Super_L", function()
-      if not tap.down then tap.down, tap.used, tap.t = true, false, now() end
-   end)) do table.insert(extra, g) end
-   for _, g in ipairs(awful.key({ modkey }, "Super_L", nil, function()
-      local open = tap.down and not tap.used and now() - tap.t < 0.6
+   for _, x in ipairs(awful.key({}, "Super_L", function()
+      if not tap.down then tap.down, tap.used, tap.t = true, false, tap_now() end
+   end)) do table.insert(extra, x) end
+   for _, x in ipairs(awful.key({ modkey }, "Super_L", nil, function()
+      local open = tap.down and not tap.used and tap_now() - tap.t < 0.6
       tap.down = false
       if open then mymainmenu:toggle() end
-   end)) do table.insert(extra, g) end
-   globalkeys = awful.util.table.join(globalkeys, extra)
-   spin_debug.mainmenu = mymainmenu   -- lab input test (win-tap scenarios)
-   -- a click with Win held also counts (the click still reaches the window)
-   for _, b in ipairs({ 1, 2, 3 }) do
-      clientbuttons = awful.util.table.join(clientbuttons, awful.button({ modkey }, b, tap_used))
-   end
+   end)) do table.insert(extra, x) end
+   g = awful.util.table.join(g, extra)
+
+   help_entries = {}
+   for i = n0 + 1, #awful.key.hotkeys do table.insert(help_entries, awful.key.hotkeys[i]) end
+   return g, ck
 end
+
+local globalkeys, clientkeys = build_keys()
+local default_properties   -- the rules below; the client keys are swapped on a reload
 
 -- Set keys
 root.keys(globalkeys)
 
+-- 0.9.6: Settings > Hotkeys saved the file: build and apply the keys again (no restart); the
+-- Win+S help is built again the next time it opens
+function spin_hotkeys_reload()
+   globalkeys, clientkeys = build_keys()
+   root.keys(globalkeys)
+   if default_properties then default_properties.keys = clientkeys end
+   for _, c in ipairs(client.get()) do c.keys = clientkeys end
+   local w = hotkeys_popup.default_widget
+   if w then
+      hide_help()
+      w._cached_awful_keys = {}
+      w._cached_wiboxes = {}
+   end
+   return #globalkeys
+end
+-- 0.9.6: while Settings waits for "press the new keys", the desktop must not act on them: only
+-- Win+Escape stays bound (and every window loses its keys) until spin_hotkeys_capture(false),
+-- or after 30 s at the latest (Settings closed in the middle)
+local capture_timer
+function spin_hotkeys_capture(on)
+   if capture_timer then capture_timer:stop(); capture_timer = nil end
+   if on then
+      root.keys(awful.key({ modkey }, "Escape", function() popups.panic() end))
+      for _, c in ipairs(client.get()) do c.keys = {} end
+      capture_timer = gears.timer.start_new(30, function() spin_hotkeys_capture(false) return false end)
+      return "capturing"
+   end
+   root.keys(globalkeys)
+   for _, c in ipairs(client.get()) do c.keys = clientkeys end
+   return "normal"
+end
+
 -- Rules to apply to new clients (through the "manage" signal).
 
-local default_properties = {
+default_properties = {
    border_width = beautiful.border_width,
    focus = awful.client.focus.filter,
    raise = true,

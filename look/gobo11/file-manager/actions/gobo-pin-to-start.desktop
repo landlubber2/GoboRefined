@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Action
+Name=Pin to start
+Tooltip=Show this file or folder in the start menu's "Pinned and frequent" panel
+Icon=bookmark-new
+TryExec=gobo-pin-to-start
+Profiles=pin;
+
+[X-Action-Profile pin]
+Name=Pin to start
+Exec=gobo-pin-to-start %F
+MimeTypes=all/all;

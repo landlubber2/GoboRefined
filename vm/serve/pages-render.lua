@@ -1,4 +1,4 @@
--- Lab check (0.9.5): build every Settings page off screen as the desktop user; prints ok/FAIL per page.
+-- Lab check (0.9.5; 0.9.6: + hotkeys): build every Settings page off screen as the desktop user; prints ok/FAIL per page.
 package.path = "/System/Aliens/LuaRocks/share/lua/5.3/?.lua;/System/Aliens/LuaRocks/share/lua/5.3/?/init.lua;" .. package.path
 package.cpath = "/System/Aliens/LuaRocks/lib/lua/5.3/?.so;" .. package.cpath
 local here = "/Programs/GoboSpin/Current/share/gobo-settings"
@@ -7,7 +7,7 @@ local lgi = require("lgi")
 local Gtk = lgi.require("Gtk", "3.0")
 local C = require("common")
 C.window = Gtk.Window {}
-for _, id in ipairs({ "network", "bluetooth", "hotspot", "remote", "appearance", "trash", "displays", "sound",
+for _, id in ipairs({ "network", "bluetooth", "hotspot", "remote", "appearance", "hotkeys", "trash", "displays", "sound",
                       "devices", "updates", "apps", "accounts", "about", "manual", "config" }) do
    local ok, page = pcall(require, "pages." .. id)
    local ok2, w = false, page

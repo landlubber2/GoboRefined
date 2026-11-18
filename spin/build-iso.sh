@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.9.5]
+#   VERSION        [0.9.6]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.9.5}
+VERSION=${VERSION:-0.9.6}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -185,7 +185,7 @@ install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $R/System/Se
 mkdir -p $P/1.0/lib/firmware
 install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
 # 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
-install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check $P/1.0/bin/
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check settings/gobo-pin-to-start $P/1.0/bin/   # 0.9.6: + gobo-pin-to-start
 mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
 install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher
 install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/

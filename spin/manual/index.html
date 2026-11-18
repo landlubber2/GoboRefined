@@ -42,7 +42,7 @@
 
 <h2 id="desktop">The desktop</h2>
 <ul>
-  <li><b>Start button</b> (the dots on the taskbar, or a short tap on the Win key): search, terminal, Settings, programs by category, Power.</li>
+  <li><b>Start button</b> (the dots on the taskbar, or a short tap on the Win key): search, terminal, Settings, programs by category, Power. Its last entry, <i>Frequently used apps</i>, opens a panel on the left with your pinned items and the programs you start most; it stays until you choose <i>Hide frequently used apps</i>. Right click a program in the menu or the search to <i>Pin to start</i>; in the file manager right click a file or folder   <li><b>Start button</b> (the dots on the taskbar, or a short tap on the Win key): search, terminal, Settings, programs by category, Power.</li>gt; <i>Pin to start</i>; right click a pinned item   <li><b>Start button</b> (the dots on the taskbar, or a short tap on the Win key): search, terminal, Settings, programs by category, Power.</li>gt; <i>Unpin</i>.</li>
   <li><b>Right click on the desktop</b>: search, terminal, <i>New</i> (folder, text document, Word document), window layout, light or dark mode, personalization, displays.</li>
   <li><b>Power card</b> (Ctrl+Alt+Delete): lock, log out, restart, shut down.</li>
   <li><b>Settings</b> (start button &gt; Settings): network, Bluetooth, appearance (colours, wallpaper, taskbar position), sound, displays, updates, programs, accounts.</li>
@@ -50,7 +50,7 @@
 </ul>
 
 <h2 id="keys">Keyboard shortcuts</h2>
-<p class="dim">Win+S shows the full list on screen at any time.</p>
+<p class="dim">Win+S shows the full list on screen at any time. <b>Settings &gt; Customization &gt; Hotkeys</b> changes or turns off these keys and adds your own (a key that starts a program or a command); the list below shows the defaults.</p>
 <table>
   <tr><td><kbd>Win</kbd> (tap)</td><td>Start menu</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>R</kbd></td><td>Search and start programs</td></tr>
@@ -65,7 +65,7 @@
   <tr><td><kbd>Win</kbd>+<kbd>Space</kbd></td><td>Next window layout (also: right click on the desktop &gt; Window layout)</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Desktops: list, switch, add, remove</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>,</kbd> / <kbd>Win</kbd>+<kbd>.</kbd></td><td>Previous / next desktop</td></tr>
-  <tr><td><kbd>Print</kbd></td><td>Screenshot of the whole screen (saved in Pictures/Screenshots and copied)</td></tr>
+  <tr><td><kbd>Print</kbd></td><td>Screenshot of the whole screen (saved in Pictures/Screenshots and copied). An open menu or popup is in the picture.</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>Screenshot of an area, a window or the screen</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd></td><td>Clipboard history</td></tr>
   <tr><td><kbd>Win</kbd>+<kbd>L</kbd></td><td>Lock the screen</td></tr>
@@ -93,7 +93,7 @@
 
 <h2 id="settings">Where settings are kept</h2>
 <table>
-  <tr><td><code>~/.config/goborefined/</code></td><td>Your GoboRefined choices: wallpaper, taskbar position, Settings look. Kept across updates.</td></tr>
+  <tr><td><code>~/.config/goborefined/</code></td><td>Your GoboRefined choices: wallpaper, taskbar position, Settings look, your hotkeys (<code>hotkeys</code>), start menu pins and frequently used programs (<code>start-pins</code>, <code>app-usage</code>). Kept across updates.</td></tr>
   <tr><td><code>~/.config/awesome/</code></td><td>The desktop (Awesome): its configuration file <code>rc.lua</code> and the light/dark choice (<code>mode</code>). A system update puts the default files back, except the light/dark choice. Settings &gt; Config edits and restores <code>rc.lua</code> (advanced).</td></tr>
   <tr><td><code>~/.config/</code></td><td>Settings of the other programs (file manager, clipboard history, default programs in <code>mimeapps.list</code>, ...).</td></tr>
   <tr><td><code>/System/Settings</code></td><td>System-wide settings (administrators only). Changes there are kept across updates; <code>sudo gobo-update --reset-system-changes</code> undoes all of them.</td></tr>
