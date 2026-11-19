@@ -314,6 +314,25 @@ do
    else echo "certificate bundle NOT refreshed (no plain file): ${f#$R}"
    fi
 done
+# 0.9.8: one session bus address. DBus 1.12's own session.conf (share/dbus-1) includes the "legacy" file
+# /System/Settings/dbus-1/session.conf, which in 017.01 is a full copy of it with its own <listen>: the
+# session bus listened twice and DBUS_SESSION_BUS_ADDRESS held two addresses ("a;b"). Valid D-Bus, but
+# the Dart dbus package (Flutter apps such as AppImage Pool) refuses it ("duplicate key 'guid'") and the
+# app stays a white window. The legacy file becomes an empty configuration (both copies: ProfileInstall).
+for f in $R/Programs/DBus/Settings/dbus-1/session.conf $R/Programs/DBus/Current/Resources/Defaults/Settings/dbus-1/session.conf
+do
+   [ -f $f ] && [ ! -L $f ] || { echo "no plain D-Bus session.conf: ${f#$R}"; exit 1; }
+   cat > $f <<'DBUSCONF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<!-- GoboRefined: empty on purpose. The session bus configuration is DBus's own share/dbus-1/session.conf,
+     which includes this file; a copy of it here made the session bus listen on two addresses. -->
+<busconfig>
+</busconfig>
+DBUSCONF
+done
+n=$(chroot $R sh -c 'grep -c "<listen>" /usr/share/dbus-1/session.conf /System/Settings/dbus-1/session.conf' | awk -F: '{ s += $2 } END { print s }')
+[ "$n" = 1 ] || { echo "the session bus would listen on $n addresses"; exit 1; }
 chroot $R SymlinkProgram GoboSpin | tail -n 1
 chroot $R test -e /System/Index/lib/firmware/regulatory.db.p7s || { echo "regulatory.db not linked into lib/firmware"; exit 1; }
 # 0.8.2: the hotspot (Settings > Hotspot) needs dnsmasq; Bluetooth uses the stock BlueZ 5.54
