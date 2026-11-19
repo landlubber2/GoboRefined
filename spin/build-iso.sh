@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.9.6]
+#   VERSION        [0.9.7]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.9.6}
+VERSION=${VERSION:-0.9.7}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -214,6 +214,68 @@ ln -sfn 1.0 $P/Current
 # never a private key in the image
 grep -rqs -e "PRIVATE KEY" $P && { echo "a private key ended up in GoboSpin"; exit 1; }
 mount -t proc proc $R/proc
+# 0.9.7: the C library 2.38 (build step glibc) becomes the system's; the stock 2.30 stays in
+# /Programs/Glibc/2.30 with nothing linked to it. The index is switched from THIS machine, not
+# inside the chroot: until the loader and libc.so.6 links point at one version, nothing may run in
+# the image. After that every chroot command below (SymlinkProgram, ldconfig, depmod, dracut,
+# gobo-make-system's ProfileInstall) runs on 2.38.
+GV=2.38 GOLDV=2.30
+GSRC="$PROGRAMS_FROM/Programs/Glibc/$GV"
+[ -x "$GSRC/lib/ld-linux-x86-64.so.2" ] && [ -f "$GSRC/lib/libc.so.6" ] && [ -f "$GSRC/lib/libcrypt.so.1" ] &&
+   [ -s "$GSRC/lib/locale/locale-archive" ] || { echo "Glibc $GV not built (step glibc; no $GSRC)"; exit 1; }
+[ "$(readlink $R/Programs/Glibc/Current)" = "$GOLDV" ] && [ -d $R/Programs/Glibc/$GOLDV/lib ] || { echo "the image's C library is not the stock $GOLDV"; exit 1; }
+echo "== C library: Glibc $GOLDV -> $GV"
+rm -rf $R/Programs/Glibc/$GV && cp -a "$GSRC" $R/Programs/Glibc/
+# libraries 2.30 had and 2.38 has not (e.g. libSegFault.so): nothing in the image may need them
+for f in $R/Programs/Glibc/$GOLDV/lib/*.so.*
+do
+   b=$(basename "$f")
+   case "$b" in *-$GOLDV.so|*-1.0.so) continue ;; esac   # the versioned file names behind the links
+   [ -e "$R/Programs/Glibc/$GV/lib/$b" ] || echo "$b"
+done > $B/glibc-gone
+if [ -s $B/glibc-gone ]
+then
+   echo "sonames of $GOLDV not in $GV: $(tr '\n' ' ' < $B/glibc-gone)"
+   find $R/Programs -path "$R/Programs/Glibc" -prune -o -type f \( -perm -u+x -o -name '*.so*' \) -print0 |
+      xargs -0 -r readelf -d 2> /dev/null | awk '/^File: / { f = $2 } /\(NEEDED\)/ { gsub(/[\[\]]/, "", $5); print $5 "\t" f }' |
+      grep -F -f <(sed 's/.*/&\t/' $B/glibc-gone) > $B/glibc-gone-users || true
+   [ ! -s $B/glibc-gone-users ] || { echo "programs need libraries that $GV does not have:"; head -n 20 $B/glibc-gone-users; exit 1; }
+fi
+# every index link into 2.30 goes (listed first, then deleted: an overlay walk), then 2.38's lib/ and
+# bin/ are linked by hand: loader, libc.so.6 & co. switch in one go
+find $R/System -xdev -lname "/Programs/Glibc/$GOLDV/*" -print0 > $B/glibc-old-links
+echo "index links into Glibc $GOLDV: $(tr -cd '\0' < $B/glibc-old-links | wc -c)"
+xargs -0 -r rm -f < $B/glibc-old-links
+for sub in lib bin
+do
+   for f in $R/Programs/Glibc/$GV/$sub/*
+   do
+      b=$(basename "$f") dst=$R/System/Index/$sub/$(basename "$f")
+      if [ ! -L "$dst" ] && [ ! -e "$dst" ]
+      then ln -s "/Programs/Glibc/$GV/$sub/$b" "$dst"
+      else echo "kept (another program's, or a real folder): $sub/$b -> $(readlink "$dst")"
+      fi
+   done
+done
+ln -sfn $GV $R/Programs/Glibc/Current
+[ "$(chroot $R readlink -f /lib64/ld-linux-x86-64.so.2)" = "/Programs/Glibc/$GV/lib/ld-linux-x86-64.so.2" ] &&
+   [ "$(chroot $R readlink -f /System/Index/lib/libc.so.6)" = "/Programs/Glibc/$GV/lib/libc.so.6" ] ||
+   { echo "loader or libc.so.6 do not point at Glibc $GV"; exit 1; }
+chroot $R /bin/true || { echo "the image does not run programs on Glibc $GV"; exit 1; }
+chroot $R SymlinkProgram Glibc $GV | tail -n 1
+chroot $R ldconfig
+left=$(find $R/System -xdev -lname "/Programs/Glibc/$GOLDV/*" | head -n 5)
+[ -z "$left" ] || { echo "links into Glibc $GOLDV left: $left"; exit 1; }
+chroot $R ldd --version | head -n 1 | grep -q " $GV\$" || { chroot $R ldd --version | head -n 1; echo "ldd is not $GV"; exit 1; }
+chroot $R getconf GNU_LIBC_VERSION | grep -qx "glibc $GV" || { echo "getconf does not report glibc $GV"; exit 1; }
+[ "$(chroot $R readlink -f /System/Index/include/stdio.h)" = "/Programs/Glibc/$GV/include/stdio.h" ] || { echo "headers are not $GV's"; exit 1; }
+# logins: libcrypt 2.38 makes the same SHA-512 hash as openssl (as the installer writes them)
+h_new=$(chroot $R python3 -c 'import crypt; print(crypt.crypt("Gobo test 1", "$6$gobosalt1234567"))')
+h_ref=$(chroot $R openssl passwd -6 -salt gobosalt1234567 'Gobo test 1')
+[ -n "$h_ref" ] && [ "$h_new" = "$h_ref" ] || { echo "libcrypt in the image gives another hash"; exit 1; }
+chroot $R locale -a | grep -qx pl_PL.utf8 && chroot $R locale -a | grep -qx en_US.utf8 || { echo "locales missing"; exit 1; }
+chroot $R env LC_ALL=pl_PL.UTF-8 date -d 2026-11-18 +%A | grep -qx 'środa' || { echo "Polish locale does not work"; exit 1; }
+echo "Glibc $GV: $(chroot $R ldd --version | head -n 1); $(chroot $R locale -a | wc -l) locales"
 # 0.8.4: Linux-Firmware 20261019 and SOF-Firmware 2026.09.2 replaced the stock versions above
 # (20250309-GIT, 1.4.2); drop the index links that still point at the old versions so
 # SymlinkProgram links the new trees (and no dangling link is left behind)
@@ -329,11 +391,20 @@ echo "== initramfs with the A/B root (dracut module goboab; same modules as the 
 DRACUT_MODS=$R/Programs/Dracut/Current/lib/dracut/modules.d
 ln -sfn /Programs/GoboSpin/Current/share/gobo-update/dracut/90goboab $DRACUT_MODS/90goboab
 mount --rbind /sys $R/System/Kernel/Objects && mount --make-rslave $R/System/Kernel/Objects
+# 0.9.7: dracut 103's dracut-install climbs from each /sys/devices/platform node with realpath() until the
+# result is "/sys/devices". Through GoboLinux's /sys link it is "/System/Kernel/Objects/devices", so the
+# loop only ends when realpath() fails on the ever longer path: glibc 2.30's did, 2.38's does not (it
+# hung for 80 minutes). So during this dracut run /sys is a real folder with sysfs on it; the link
+# comes back right after.
+[ "$(readlink $R/sys)" = System/Kernel/Objects ] || { echo "unexpected /sys in the image"; exit 1; }
+rm $R/sys && mkdir $R/sys && mount --rbind /sys $R/sys && mount --make-rslave $R/sys
 mount --rbind /dev $R/System/Kernel/Devices && mount --make-rslave $R/System/Kernel/Devices
 IMG=/Programs/Linux/Current/Resources/Unmanaged/System/Kernel/Boot/initramfs-$KREL.img
 chroot $R dracut --kver $KREL --force --no-hostonly --early-microcode -L 4 --add goboab $IMG > $B/dracut.log 2>&1 ||
    { tail -n 20 $B/dracut.log; exit 1; }
 umount -R $R/System/Kernel/Devices; umount -R $R/System/Kernel/Objects
+umount -R $R/sys && rmdir $R/sys && ln -s System/Kernel/Objects $R/sys
+[ "$(readlink $R/sys)" = System/Kernel/Objects ] || { echo "/sys link not restored"; exit 1; }
 cp $R$IMG $R/System/Kernel/Boot/initramfs-$KREL.img
 chroot $R lsinitrd $IMG > $B/lsinitrd.log
 grep -q 'bin/goboab-root' $B/lsinitrd.log && grep -q 'overlay.ko' $B/lsinitrd.log ||

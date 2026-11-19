@@ -39,10 +39,11 @@ STOCK_ISO_SIZE=2433744896          # bytes of GoboLinux-017.01-x86_64.iso
 KVER=$(head -n 1 "$REPO/spin/kernel-version")   # the image's kernel (0.9.1: one place for the version)
 KREL=$KVER-Gobo
 # 0.9.1: + linux (before rtl8852au, which is built against it), intel-microcode, firefox, ca-bundle
+# 0.9.7: + glibc (the C library 2.38; installed next to the build root's 2.30, which stays in use)
 STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
        lxdm udevil usb-modeswitch linux rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
-       sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle"
-LAST_STEP=ca-bundle
+       sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle glibc"
+LAST_STEP=glibc
 
 say() { echo "== $*"; }
 die() { echo "build.sh: ERROR: $*" >&2; exit 1; }
@@ -288,6 +289,7 @@ step_inputs() {
       usb-modeswitch) cat "$REPO/spin/gobo-wifi-switch" ;;
       linux|rtl8852au) cat "$REPO/spin/kernel-version"   # 0.9.4: + the GoboHide patch (a change rebuilds)
                        cat "$REPO/spin/patches/linux-6.12.16-gobohide.patch" ;;
+      glibc)      cat "$REPO"/spin/patches/glibc-2.38-branch-*.patch ;;
       lxdm)       find "$REPO/spin/lxdm" -type f | LC_ALL=C sort | xargs cat ;;
       gobofiles)  find "$REPO/spin/gobofiles" -type f | LC_ALL=C sort | xargs cat ;;
    esac

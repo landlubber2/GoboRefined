@@ -748,6 +748,121 @@ pulseaudio-bluetooth)
    ln -sfn 13.0 /Programs/PulseAudio-Bluetooth/Current
    ls -l $P/lib/pulse-13.0/modules
    ;;
+glibc)
+   # 0.9.7: the GNU C library 2.38 (017.01 has 2.30), so that current ready-made programs
+   # (AppImages, VS Code, Steam ...: glibc >= 2.34) run. The 2.38 release plus the fixes of its stable
+   # branch (spin/patches/glibc-2.38-branch-*.patch: CVE-2023-4911 and many more), configured like the
+   # stock 2.30 (gobolinux/Recipes Glibc/2.30: prefix /usr, sysconfdir /System/Settings, slibdir /lib)
+   # so every compiled-in path stays where 2.30 has it. libcrypt is built (--enable-crypt): logins
+   # read the same $6$ hashes. Installed to /Programs/Glibc/2.38 ONLY: the build root keeps running
+   # its own 2.30 (no SymlinkProgram, Current stays); spin/build-iso.sh switches the image over.
+   V=2.38 P=/Programs/Glibc/2.38 OLD=/Programs/Glibc/2.30
+   PATCH=$(ls $SPIN/patches/glibc-2.38-branch-*.patch)
+   [ "$(readlink /Programs/Glibc/Current)" = 2.30 ] && [ -d $OLD/lib ] || { echo "the build root's C library is not the stock 2.30"; exit 1; }
+   [ -f "$PATCH" ] || { echo "no glibc branch patch in $SPIN/patches"; exit 1; }
+   unpack glibc-$V.tar.xz
+   patch -p1 -s < "$PATCH"
+   # Gobo: /usr/include/net and scsi are links into the index (installing goes to an install root,
+   # nothing is clobbered); FHS paths as in the recipe's glibc-2.30-fhs-1.patch
+   sed -i 's,test -L \${ac_prefix}/include/\(net\|scsi\),false,' sysdeps/unix/sysv/linux/configure
+   grep -q 'include/net is a symlink' sysdeps/unix/sysv/linux/configure && ! grep -q 'test -L ${ac_prefix}/include' sysdeps/unix/sysv/linux/configure ||
+      { echo "the include/net check was not switched off"; exit 1; }
+   sed -i 's,"/var/db/nscd/,"/var/cache/nscd/,' nscd/nscd.h
+   sed -i 's,^VAR_DB = /var/db$,VAR_DB = /var/lib/nss_db,' nss/db-Makefile
+   sed -i 's,"/var/db/","/var/lib/nss_db/",' sysdeps/generic/paths.h sysdeps/unix/sysv/linux/paths.h
+   sed -i 's,^vardbdir = \$(localstatedir)/db$,vardbdir = $(localstatedir)/lib/nss_db,' Makeconfig
+   ! grep -q '/var/db' nscd/nscd.h sysdeps/unix/sysv/linux/paths.h || { echo "FHS path change failed"; exit 1; }
+   mkdir _build && cd _build
+   GB=$(pwd)
+   # (the image's "ld" is gold: glibc needs GNU ld)
+   CC="gcc -fuse-ld=bfd" LD=ld.bfd CFLAGS="-O2 -pipe" CXXFLAGS="-O2 -pipe" \
+   ../configure --prefix=/usr --sysconfdir=/System/Settings --localstatedir=/var --libexecdir=/usr/lib \
+      --enable-kernel=3.2 --with-headers=/Programs/Linux-Headers/Current/include \
+      --enable-stack-protector=strong --disable-profile --disable-werror --enable-crypt \
+      libc_cv_slibdir=/lib
+   NJ=$(nproc)
+   make -j$NJ
+   # quick checks (not the whole test suite: hours, and parts need a container setup)
+   # glibc's own tests of libcrypt (a FAIL stops the build; the comparison below is the main gate)
+   make -C ../crypt objdir=$GB check > /Data/Build/glibc-check-crypt.log 2>&1 || echo "make check in crypt returned an error (see the summary)"
+   if [ -f crypt/subdir-tests.sum ]
+   then
+      cut -d: -f1 crypt/subdir-tests.sum | sort | uniq -c
+      ! grep -q '^FAIL:' crypt/subdir-tests.sum || { grep '^FAIL:' crypt/subdir-tests.sum; tail -n 30 /Data/Build/glibc-check-crypt.log; echo "glibc crypt tests failed"; exit 1; }
+   else echo "NOTE: the crypt tests did not run (no crypt/subdir-tests.sum); log: /Data/Build/glibc-check-crypt.log"; tail -n 15 /Data/Build/glibc-check-crypt.log
+   fi
+   ./testrun.sh /System/Index/bin/bash -c 'echo "new C library runs bash"'
+   ./testrun.sh /System/Index/bin/python3 -c 'import sys; print("new C library runs python", sys.version.split()[0])'
+   h_new=$(./testrun.sh /System/Index/bin/python3 -c 'import crypt; print(crypt.crypt("Gobo test 1", "$6$gobosalt1234567"))')
+   h_ref=$(openssl passwd -6 -salt gobosalt1234567 'Gobo test 1')
+   [ -n "$h_ref" ] && [ "$h_new" = "$h_ref" ] || { echo "libcrypt 2.38 gives another SHA-512 hash: '$h_new' vs '$h_ref'"; exit 1; }
+   echo "libcrypt 2.38: SHA-512 crypt matches openssl"
+   ./testrun.sh ./elf/ldconfig -V | head -n 1
+   DEST=/Data/Build/glibc-dest
+   rm -rf $DEST && mkdir -p $DEST
+   make install install_root=$DEST
+   make -j$NJ localedata/install-locales install_root=$DEST > /Data/Build/glibc-locales.log 2>&1 || { tail -n 30 /Data/Build/glibc-locales.log; exit 1; }
+   # the gconv module cache (make install does not write it; 2.30 has one): iconvconfig of the new
+   # build, on the install root's usr/lib/gconv
+   ./testrun.sh ./iconv/iconvconfig --prefix=$DEST
+   [ -f $DEST/usr/lib/gconv/gconv-modules.cache ] || { echo "iconvconfig wrote no gconv-modules.cache"; exit 1; }
+   # lay out like the stock 2.30 program
+   rm -rf $P && mkdir -p $P/bin $P/lib $P/Resources
+   cp -a $DEST/lib/. $P/lib/
+   cp -a $DEST/usr/lib/. $P/lib/
+   for d in usr/bin usr/sbin sbin bin
+   do [ -d $DEST/$d ] && cp -a $DEST/$d/. $P/bin/
+   done
+   cp -a $DEST/usr/include $P/include
+   cp -a $DEST/usr/share $P/share
+   # library links of the install root (../../lib/libX.so.N) become links inside lib/
+   find $P/lib -maxdepth 1 -type l | while read -r l
+   do t=$(readlink "$l"); case "$t" in */*) ln -sfn "$(basename "$t")" "$l" ;; esac
+   done
+   # (bin/ld.so -> ../../lib/ld-linux-x86-64.so.2 in the install root)
+   find $P/bin -maxdepth 1 -type l | while read -r l
+   do t=$(readlink "$l"); case "$t" in ../../lib/*) ln -sfn "../lib/${t#../../lib/}" "$l" ;; esac
+   done
+   ln -sfn ld-linux-x86-64.so.2 $P/lib/ld-lsb-x86-64.so.3
+   dangling=$(find $P -xtype l | head -n 5)
+   [ -z "$dangling" ] || { echo "dangling links in $P: $dangling"; exit 1; }
+   # the linker scripts name /lib/... and /usr/lib/... (links to /System/Index/lib), as in 2.30
+   grep -q 'GROUP ( /lib/libc.so.6 /usr/lib/libc_nonshared.a' $P/lib/libc.so || { echo "unexpected libc.so linker script"; cat $P/lib/libc.so; exit 1; }
+   # debug info off the shared libraries and programs (2.30 is stripped the same way)
+   find $P/bin $P/lib -type f \( -name '*.so*' -o -perm -u+x \) | while read -r f
+   do if [ "$(head -c 4 "$f" | tail -c 3)" = ELF ]; then strip --strip-debug "$f" || echo "could not strip $f"; fi
+   done
+   find $P/lib -maxdepth 1 -name '*.a' -exec strip --strip-debug {} \; 2>/dev/null || true
+   for f in ld-linux-x86-64.so.2 libc.so.6 libm.so.6 libcrypt.so.1 libpthread.so.0 libdl.so.2 librt.so.1 libresolv.so.2 libnss_files.so.2 libnss_dns.so.2 libnss_db.so.2 libnss_compat.so.2 libutil.so.1 libanl.so.1
+   do [ -e $P/lib/$f ] || { echo "glibc 2.38: lib/$f missing"; exit 1; }
+   done
+   [ -e $P/lib/libnsl.so.1 ] || echo "NOTE: glibc 2.38 has no libnsl.so.1 (2.30 had it; spin/build-iso.sh checks that nothing needs it)"
+   for f in ldd ldconfig locale localedef iconv getent getconf
+   do [ -x $P/bin/$f ] || { echo "glibc 2.38: bin/$f missing"; exit 1; }
+   done
+   [ -s $P/lib/locale/locale-archive ] && [ -f $P/lib/gconv/gconv-modules.cache ] || { echo "no locale archive or gconv cache"; ls $P/lib/locale $P/lib/gconv | head; exit 1; }
+   ls -la $P/lib/ld-linux-x86-64.so.2 $P/lib/libc.so.6 $P/lib/libcrypt.so.1
+   # locales: the archive is read with the new library
+   n=$($GB/testrun.sh $GB/locale/localedef --list-archive $P/lib/locale/locale-archive | tee /Data/Build/glibc-locales.list | wc -l)
+   grep -qx en_US.utf8 /Data/Build/glibc-locales.list && grep -qx pl_PL.utf8 /Data/Build/glibc-locales.list || { echo "en_US.utf8 / pl_PL.utf8 not in the archive"; exit 1; }
+   echo "locales in the archive: $n"
+   # Resources and settings as in 2.30 (Settings are shared: ld.so.conf, nsswitch.conf, rpc)
+   mkdir -p $P/Resources/Defaults/Settings
+   for f in ld.so.conf nsswitch.conf rpc
+   do cp -a $OLD/Resources/Defaults/Settings/$f $P/Resources/Defaults/Settings/
+   done
+   cp -a $OLD/Resources/Unmanaged $OLD/Resources/UnmanagedFiles $P/Resources/
+   echo x86_64 > $P/Resources/Architecture
+   printf 'BinUtils 2.33.1\nGCC 14.2.0\nLinux-Headers 5.4.15\n' > $P/Resources/Dependencies
+   printf '[Name] Glibc\n[Summary] %s\n[License] LGPL-2.1-or-later\n[Homepage] https://www.gnu.org/software/libc/\n' \
+      "The GNU C library 2.38 with the fixes of its stable branch (GoboRefined 0.9.7)" > $P/Resources/Description
+   echo "[File] https://ftp.gnu.org/gnu/glibc/glibc-$V.tar.xz" > $P/Resources/PackageSource
+   chown -R root:root $P
+   rm -rf $DEST
+   [ "$(readlink /Programs/Glibc/Current)" = 2.30 ] && [ "$(readlink -f /System/Index/lib/libc.so.6)" = "$(readlink -f $OLD/lib/libc.so.6)" ] ||
+      { echo "the build root's own C library changed"; exit 1; }
+   du -sh $P $P/lib/locale
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"

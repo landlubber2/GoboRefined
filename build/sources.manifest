@@ -45,6 +45,10 @@ intel-microcode 20261110      intel-microcode-20261110.tar.gz              989a5
 firefox         153.7.0esr    firefox-153.7.0esr.tar.xz                    7d2eb92ca3a7b2a83de092eb9b94c853980214de2fbfdccb2ac39d61c593c5a5  MPL-2.0              https://ftp.mozilla.org/pub/firefox/releases/153.7.0esr/linux-x86_64/en-US/firefox-153.7.0esr.tar.xz
 ca-bundle       2026-11-05    cacert-2026-11-05.pem                        427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285  MPL-2.0              https://curl.se/ca/cacert-2026-11-05.pem
 
+# 0.9.7 (downloaded 2026-11-18; GPG signature glibc-2.38.tar.xz.sig by the glibc release manager checked; the fixes of
+# the 2.38 stable branch are in the repository: spin/patches/glibc-2.38-branch-1970e818.patch):
+glibc           2.38          glibc-2.38.tar.xz                            fb82998998b2b29965467bc1b69d152e9c307d2cf301c9eafb4555b770ef3fd2  LGPL-2.1-or-later    https://ftp.gnu.org/gnu/glibc/glibc-2.38.tar.xz
+
 # Not downloaded by the build (already in the repository, listed for completeness):
 #   wireless-regdb 2026.09.03  spin/firmware/wireless-regdb/  ISC
 #     https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-2026.09.03.tar.xz

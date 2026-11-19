@@ -99,7 +99,10 @@ then
 else warn "the package does not list what it depends on"
 fi
 # 5 compiled files
-glibc=$(ls /Programs/Glibc 2>/dev/null | grep -v -x -e Current -e Settings -e Variable | sort -V | tail -n 1)
+# 0.9.7: the C library this system RUNS (2.38 on 0.9.7 keeps the old 2.30 folder; after a rollback to
+# 0.9.6 it is 2.30 again); the newest folder in /Programs/Glibc only if getconf cannot tell
+glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | sed -n 's/^glibc \([0-9][0-9.]*\)$/\1/p')
+[ -n "$glibc" ] || glibc=$(ls /Programs/Glibc 2>/dev/null | grep -v -x -e Current -e Settings -e Variable | sort -V | tail -n 1)
 known=$( { ldconfig -p 2>/dev/null | awk 'NR > 1 { print $1 }'; ls /System/Index/lib /System/Index/lib64 2>/dev/null; find "$tmp" \( -type f -o -type l \) -name '*.so*' -printf '%f\n'; } | sort -u)
 n=0 wrongcpu="" need_glibc="" nolib=""
 while IFS= read -r -d '' e

@@ -97,7 +97,10 @@ stock ISO, GNU xorriso (only to write the ISO; not in the image), xrandr, Inter,
 Papirus icons, Menu-Cache, LibFM, PCManFM, PaVuControl, LxRandr, LXDM, Udevil, USB-ModeSwitch, the
 RTL8852AU Wi-Fi driver, ONLYOFFICE Desktop Editors (official binary), CopyQ, L3afpad, dnsmasq, the
 linux-firmware collection (kernel.org), Sound Open Firmware (sof-bin), the SBC codec library and the
-PulseAudio 13.0 source (only its Bluetooth modules are built and added to the stock PulseAudio).
+PulseAudio 13.0 source (only its Bluetooth modules are built and added to the stock PulseAudio),
+and (0.9.7) the GNU C library 2.38 (`glibc-2.38.tar.xz`, with the fixes of its stable branch from
+`spin/patches/glibc-2.38-branch-*.patch`; step `glibc`, about 10 minutes on 6 CPUs, installed next to the build
+root's own 2.30, which the build keeps using; the image step makes 2.38 the system's C library).
 A file whose sha256 differs is refused. Patches we apply are in `spin/patches/`; licences and
 redistribution notes are in `docs/third-party.md`.
 
