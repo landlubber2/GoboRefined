@@ -17,7 +17,7 @@
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
 #   PUBKEY         its public key, embedded in the image           [$REPO/spin/ab/update-signing.pub.pem]
-#   VERSION        [0.9.7]
+#   VERSION        [0.10]
 # Programs expected under $PROGRAMS_FROM/Programs: the EXTRA and MODULES lists below, built
 # with spin/build-programs.sh.
 #
@@ -30,7 +30,7 @@ REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
-VERSION=${VERSION:-0.9.7}
+VERSION=${VERSION:-0.10}
 SIGNING_KEY=${SIGNING_KEY:-/dev/shm/gobo-update-signing.pem}
 PUBKEY=${PUBKEY:-$REPO/spin/ab/update-signing.pub.pem}
 # GoboRefined = the spin's name (unofficial, based on GoboLinux 017.01). The volume label below must
@@ -69,7 +69,8 @@ sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-syst
 bash -n ab/gobo-firewall && sh -n gobo11/apply.sh   # 0.9.1
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
 # boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
-head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in ||
+head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in &&
+   grep -qx 'set gobo_layout=btrfs' ab/grub.cfg.in ||
    { echo "ab/grub.cfg.in is not a valid boot menu template"; exit 1; }
 openssl pkey -in "$SIGNING_KEY" -pubout 2>/dev/null | cmp -s - "$PUBKEY" ||
    { echo "the signing key does not belong to $PUBKEY"; exit 1; }
@@ -78,7 +79,7 @@ grep -q "PRIVATE KEY" "$PUBKEY" && { echo "$PUBKEY holds a private key"; exit 1;
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
        Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq Linux-Firmware SOF-Firmware SBC
-       Intel-Microcode Firefox"   # 0.8.5: + SBC (Bluetooth audio codec); 0.9.1: + Intel-Microcode, Firefox ESR (replaces the stock 136.0)
+       Intel-Microcode Firefox Btrfs-Progs Rsync"   # 0.8.5: + SBC (Bluetooth audio codec); 0.9.1: + Intel-Microcode, Firefox ESR (replaces the stock 136.0); 0.10: + Btrfs-Progs, Rsync (btrfs layout)
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 # 0.9.1: the kernel is built by the step "linux" (spin/build-programs.sh); its version is the one
@@ -406,6 +407,16 @@ done
 chroot $R test -e /System/Index/share/file-manager/actions/gobo-folder-colour.desktop || { echo "folder colour action not linked"; exit 1; }
 # no stray link inside /Mount/Media (USB drives are mounted there; see gobo-install)
 [ -L $R/Mount/Media/Media ] && rm -f $R/Mount/Media/Media
+# 0.10: eudev's 64-btrfs.rules runs '${exec_prefix}/bin/udevadm' (a configure variable left unexpanded in
+# 017.01): "failed to execute" for every btrfs device event, and with a btrfs disk the boot's udev start
+# took about 11 s longer. Fixed in the image (dracut copies the rule into the initramfs below).
+BTRULE=$(ls $R/Programs/Eudev/*/lib/udev/rules.d/64-btrfs.rules 2>/dev/null | head -n 1)
+[ -f "$BTRULE" ] || { echo "no eudev 64-btrfs.rules in the image"; exit 1; }
+sed -i 's|\${exec_prefix}/bin/udevadm|/System/Index/bin/udevadm|' "$BTRULE"
+grep -q 'exec_prefix' "$BTRULE" && { echo "64-btrfs.rules not fixed"; exit 1; }
+grep -q 'RUN+="/System/Index/bin/udevadm trigger' "$BTRULE" || { echo "64-btrfs.rules: unexpected content"; exit 1; }
+chroot $R test -x /System/Index/bin/mkfs.btrfs && chroot $R test -x /System/Index/bin/btrfs && chroot $R test -x /System/Index/bin/rsync ||
+   { echo "btrfs-progs or rsync not linked in the image"; exit 1; }
 echo "== initramfs with the A/B root (dracut module goboab; same modules as the stock image + goboab)"
 DRACUT_MODS=$R/Programs/Dracut/Current/lib/dracut/modules.d
 ln -sfn /Programs/GoboSpin/Current/share/gobo-update/dracut/90goboab $DRACUT_MODS/90goboab
@@ -428,6 +439,14 @@ cp $R$IMG $R/System/Kernel/Boot/initramfs-$KREL.img
 chroot $R lsinitrd $IMG > $B/lsinitrd.log
 grep -q 'bin/goboab-root' $B/lsinitrd.log && grep -q 'overlay.ko' $B/lsinitrd.log ||
    { echo "goboab missing from the initramfs"; exit 1; }
+# 0.10: the btrfs layout - btrfs module, goboab's btrfs path, the fixed udev rule
+grep -q '/btrfs.ko' $B/lsinitrd.log || { echo "btrfs module missing from the initramfs"; exit 1; }
+GR=$(grep -o '[^ ]*bin/goboab-root$' $B/lsinitrd.log | head -n 1)
+chroot $R lsinitrd -f "$GR" $IMG | grep -q 'subvol=@system-' || { echo "the initramfs's goboab-root ($GR) has no btrfs path"; exit 1; }
+if grep -q '64-btrfs.rules' $B/lsinitrd.log
+then
+   chroot $R lsinitrd -f "${BTRULE#$R/}" $IMG | grep -q exec_prefix && { echo "the initramfs has the unfixed 64-btrfs.rules"; exit 1; }
+fi
 # 0.9.1: processor microcode for both makers at the front of the initramfs, modules of the new kernel
 grep -q 'kernel/x86/microcode/GenuineIntel.bin' $B/lsinitrd.log && grep -q 'kernel/x86/microcode/AuthenticAMD.bin' $B/lsinitrd.log ||
    { echo "early microcode missing from the initramfs"; exit 1; }
@@ -522,8 +541,9 @@ mksquashfs $B/system $UPDATE -comp zstd -b 131072 -noappend -no-progress -xattrs
 rm -rf $B/system
 IMAGE_SIZE=$(stat -c %s $UPDATE)
 {
-   echo "GOBOREFINED-UPDATE 1"
+   echo "GOBOREFINED-UPDATE 2"   # 0.10: format 2 (btrfs layout); 0.9.x gobo-update accepts only 1 and refuses this file
    echo "name=GoboRefined"
+   echo "layout=btrfs"
    echo "version=$VERSION"
    echo "image_size=$IMAGE_SIZE"
    echo "image_sha256=$(sha256sum $UPDATE | cut -d' ' -f1)"

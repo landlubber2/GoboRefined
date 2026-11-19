@@ -1,24 +1,35 @@
 #!/bin/bash
-# gobo-update — whole-system updates for GoboRefined (A/B system slots, 0.8).
+# gobo-update — whole-system updates for GoboRefined (A/B system versions on btrfs, 0.10).
 #
-#   sudo gobo-update FILE                  install GoboRefined-<version>.update into the other slot
-#   sudo gobo-update --status              show both slots, their versions and what starts next
-#   sudo gobo-update --rollback            start the other slot from the next restart on
+#   sudo gobo-update FILE                  install GoboRefined-<version>.update as the other version
+#   sudo gobo-update --status              show both versions, what starts next, the free space
+#   sudo gobo-update --rollback            start the other version from the next restart on
 #   sudo gobo-update --reset-system-changes
 #                                          at the next restart, forget all changes made to system
 #                                          files since the install (accounts and home folders stay)
 #
-# The running slot is never written. An update is only selected after it was verified (signature,
-# checksum), unpacked and checked; GRUB then tries it twice, and goes back to the old slot by
-# itself if it does not start. --boot-task is run by the boot scripts (not by hand).
+# The disk (0.10, docs/ab-design.md): GOBO_BOOT (FAT: GRUB, grubenv, gobo/a and gobo/b with each
+# version's kernel, initramfs and gobo-slot.env) and GOBO_POOL (btrfs: @system-a, @system-b,
+# @data, @swap). An update: the other version's subvolume is deleted, the running one is snapshotted
+# in its place (instant, shares every file) and the new image is copied over it with rsync (only
+# changed files are written). The running version is never written. A new version is only offered
+# after it was verified, copied and checked (gobo-slot.env on GOBO_BOOT is written last); GRUB then
+# tries it twice and goes back to the old version by itself if it does not start.
+# --boot-task is run by the boot scripts (not by hand).
+# The ext4 layout of 0.8-0.9.x is refused: those computers are reinstalled for 0.10.
 set -euo pipefail
 umask 022
 
 PUBKEY=/Programs/GoboSpin/Current/share/gobo-update/update-signing.pub.pem
-STATE=/Data/Variable/lib/gobo-update      # root-owned: lock, notice for the desktop, slot versions
+STATE=/Data/Variable/lib/gobo-update      # root-owned: lock, notice for the desktop, version names
 LOG=/Data/Variable/log/gobo-update.log
-OVERLAY=/System/Data/System-Overlay       # the data partition, mounted by the initramfs
+OVERLAY=/System/Data/System-Overlay       # subvolume @data, mounted by the initramfs
 TRAILER_SIZE=8192
+# 0.10: format 2. A 0.9.x gobo-update accepts only "GOBOREFINED-UPDATE 1" and so refuses a 0.10 file
+# before it writes anything (it would put the btrfs-only system into an ext4 slot).
+TRAILER_MAGIC="GOBOREFINED-UPDATE 2"
+POOL_OPTS=noatime,compress=zstd:3
+MARGIN=$((2 * 1024 * 1024 * 1024))       # free space kept on top of what an update writes
 APPLY_LOOK=/Programs/GoboSpin/Current/share/gobo11/apply.sh
 ASSUME_YES=0
 
@@ -29,7 +40,7 @@ say()  { echo "$*"; log "$*"; }
 step() { echo "${c_cyan}==> $*${c_off}"; log "==> $*"; }
 die()  { echo "${c_red}gobo-update: $*${c_off}" >&2; log "ERROR: $*"; exit 1; }
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
 
 ### Where we are ###############################################################
 
@@ -41,40 +52,51 @@ cmdline_arg() { # cmdline_arg NAME -> value of NAME=... on the kernel command li
    return 0
 }
 
-uuid_of() { # "UUID=x" -> x
-   case "$1" in UUID=*) echo "${1#UUID=}" ;; *) echo "" ;; esac
+uuid_of() { # "UUID=x" -> x (letters, digits and - only)
+   case "$1" in UUID=*) [[ "${1#UUID=}" =~ ^[0-9A-Fa-f-]+$ ]] && echo "${1#UUID=}" ;; esac
+   return 0
 }
 
 load_layout() {
    [ "$(cmdline_arg root)" = gobo ] || die "this system was not started from an A/B layout (no root=gobo)"
+   [ "$(cmdline_arg gobo.layout)" = btrfs ] ||
+      die "this computer has the disk layout of GoboRefined 0.8-0.9.x (ext4 slots). GoboRefined 0.10 and later need a new installation from the 0.10 ISO (back up /Users first); nothing was changed"
    CUR=$(cmdline_arg gobo.slot)
-   case "$CUR" in a) OTHER=b ;; b) OTHER=a ;; *) die "unknown running slot '$CUR'" ;; esac
-   CUR_UUID=$(uuid_of "$(cmdline_arg gobo.root)")
+   case "$CUR" in a) OTHER=b ;; b) OTHER=a ;; *) die "unknown running version '$CUR'" ;; esac
+   POOL_UUID=$(uuid_of "$(cmdline_arg gobo.root)")
    BOOT_UUID=$(uuid_of "$(cmdline_arg gobo.boot)")
-   [ -n "$CUR_UUID" ] && [ -n "$BOOT_UUID" ] || die "gobo.root= / gobo.boot= missing on the kernel command line"
+   [ -n "$POOL_UUID" ] && [ -n "$BOOT_UUID" ] || die "gobo.root= / gobo.boot= missing on the kernel command line"
+   [ "$(uuid_of "$(cmdline_arg gobo.data)")" = "$POOL_UUID" ] || die "gobo.data= is not the pool on the kernel command line"
    MODE=normal
    [ "$(cmdline_arg gobo.system-changes)" = off ] && MODE=safe
    CUR_VERSION=$(slot_version_in /System/Slot)
    return 0
 }
 
-slot_version_in() { # slot_version_in DIR (a mounted slot) -> version or empty
-   [ -f "$1/gobo-slot.env" ] || return 0
-   grub-editenv "$1/gobo-slot.env" list 2>/dev/null | sed -n 's/^slot_version=//p' | tr -dc '0-9A-Za-z.-'
+# NB: "grub-editenv FILE list" CREATES a missing FILE - and GRUB offers a version as soon as
+# gobo/<x>/gobo-slot.env exists. So every reader checks that the file is there first.
+env_version() { # env_version FILE -> slot_version in FILE, or empty
+   [ -f "$1" ] || return 0
+   { grub-editenv "$1" list 2>/dev/null || true; } | sed -n 's/^slot_version=//p' | head -n 1 | tr -dc '0-9A-Za-z.-'
 }
+slot_version_in() { env_version "$1/gobo-slot.env"; }   # a system tree (subvolume)
+boot_version() { env_version "$BOOT/gobo/$1/gobo-slot.env"; }   # what GRUB offers (needs mount_boot)
 
 letter_upper() { [ "$1" = a ] && echo A || echo B; }
 
 TMP=""
 BOOT=""
+POOL=""
+LOOP=""
 cleanup() {
    local m
    set +e
    if [ -n "$TMP" ]
    then
-      for m in "$TMP/slot" "$TMP/peek" "$TMP/boot"
+      for m in "$TMP/sq" "$TMP/pool" "$TMP/boot"
       do mountpoint -q "$m" 2>/dev/null && { umount "$m" || umount -l "$m"; }
       done
+      [ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null
       rm -rf "$TMP"
    fi
 }
@@ -90,7 +112,7 @@ lock() {
 
 make_tmp() { [ -n "$TMP" ] || TMP=$(mktemp -d /tmp/gobo-update.XXXXXX); }
 
-mount_boot() { # mounts GOBO_BOOT at $TMP/boot, reads the layout from grub.cfg
+mount_boot() { # mounts GOBO_BOOT at $TMP/boot and checks that its grub.cfg is this computer's btrfs layout
    local dev
    make_tmp
    [ -n "$BOOT" ] && return 0
@@ -101,13 +123,27 @@ mount_boot() { # mounts GOBO_BOOT at $TMP/boot, reads the layout from grub.cfg
    mount -t vfat -o umask=0077 "$dev" "$TMP/boot" || die "cannot mount the boot partition $dev"
    BOOT="$TMP/boot"
    [ -f "$BOOT/grub/grub.cfg" ] && [ -f "$BOOT/grub/grubenv" ] || die "no grub.cfg/grubenv on the boot partition"
-   for v in uuid_a uuid_b uuid_data partuuid_a partuuid_b
-   do
-      val=$(sed -n "s/^set gobo_$v=\([0-9A-Fa-f-]*\)\$/\1/p" "$BOOT/grub/grub.cfg" | head -n 1)
-      [ -n "$val" ] || die "grub.cfg has no gobo_$v"
-      printf -v "L_$v" '%s' "$val"
-   done
-   [ "$(eval echo "\$L_uuid_$CUR")" = "$CUR_UUID" ] || die "grub.cfg does not match the running slot"
+   grep -qx 'set gobo_layout=btrfs' "$BOOT/grub/grub.cfg" && grep -qx "set gobo_uuid_pool=$POOL_UUID" "$BOOT/grub/grub.cfg" ||
+      die "grub.cfg on the boot partition is not the btrfs layout of this computer"
+   L_partuuid_pool=$(sed -n 's/^set gobo_partuuid_pool=\([0-9A-Fa-f-]*\)$/\1/p' "$BOOT/grub/grub.cfg" | head -n 1)
+   [ -n "$L_partuuid_pool" ] || die "grub.cfg has no gobo_partuuid_pool"
+}
+
+mount_pool() { # mounts the top level of GOBO_POOL at $TMP/pool (the subvolumes are folders there)
+   local dev
+   make_tmp
+   [ -n "$POOL" ] && return 0
+   dev=$(blkid -U "$POOL_UUID" 2>/dev/null) || true
+   [ -n "$dev" ] && [ -b "$dev" ] || die "the system pool (UUID $POOL_UUID) not found"
+   [ "$(blkid -s TYPE -o value "$dev")" = btrfs ] && [ "$(blkid -s LABEL -o value "$dev")" = GOBO_POOL ] ||
+      die "$dev is not the btrfs partition GOBO_POOL"
+   mkdir -p "$TMP/pool"
+   mount -t btrfs -o "subvolid=5,$POOL_OPTS" "$dev" "$TMP/pool" || die "cannot mount the system pool $dev"
+   POOL="$TMP/pool"
+}
+
+subvol_uuid() { # subvol_uuid PATH -> the btrfs UUID of the subvolume at PATH, or empty
+   { btrfs subvolume show "$1" 2>/dev/null || true; } | sed -n 's/^[[:space:]]*UUID:[[:space:]]*\([0-9a-f-]*\)$/\1/p' | head -n 1
 }
 
 env_get() { grub-editenv "$BOOT/grub/grubenv" list | sed -n "s/^$1=//p" | head -n 1; }
@@ -130,54 +166,27 @@ env_write() { # env_write set k=v ... | unset k ...   (several: env_write set a=
    log "grubenv: $(grub-editenv "$f" list | tr '\n' ' ')"
 }
 
-peek_slot_version() { # peek_slot_version LETTER -> version of a slot that is not running, or empty
-   local dev
-   make_tmp
-   dev=$(slot_device "$1") || return 0
-   [ -n "$dev" ] || return 0
-   mkdir -p "$TMP/peek"
-   if mount -t ext4 -o ro,noload "$dev" "$TMP/peek" 2>/dev/null
-   then
-      slot_version_in "$TMP/peek"
-      umount "$TMP/peek"
-   fi
-   return 0
-}
+human() { awk -v b="$1" 'BEGIN { if (b >= 1073741824) printf "%.1f GB", b / 1073741824; else printf "%d MB", b / 1048576 }'; }
 
-slot_device() { # slot_device LETTER -> block device, by PARTUUID from grub.cfg, checked by name
-   local pu dev
-   pu=$(eval echo "\$L_partuuid_$1")
-   dev=$(blkid -t PARTUUID="$pu" -o device 2>/dev/null | head -n 1) || true
-   [ -n "$dev" ] && [ -b "$dev" ] || return 1
-   [ "$(lsblk -no PARTLABEL "$dev" 2>/dev/null)" = "GOBO_$(letter_upper "$1")" ] || return 1
-   readlink -f "$dev"
-}
-
-is_mounted() { # is_mounted DEV: anywhere, under any of its names
-   local dev="$1" name mm
-   name=$(basename "$dev")
-   mm=$(lsblk -dno MAJ:MIN "$dev" | tr -d ' ')
-   grep -qE "^(/dev|/System/Kernel/Devices)/$name " /proc/mounts && return 0
-   [ -n "$(findmnt -rn -S "$dev" 2>/dev/null)" ] && return 0
-   awk -v mm="$mm" '$3 == mm { found = 1 } END { exit !found }' /proc/self/mountinfo && return 0
-   return 1
+pool_free() { # pool_free PATH -> estimated free bytes of the btrfs file system holding PATH
+   { btrfs filesystem usage -b "$1" 2>/dev/null || true; } | sed -n 's/^[[:space:]]*Free (estimated):[[:space:]]*\([0-9]*\).*/\1/p' | head -n 1
 }
 
 ### Update file ################################################################
 
-# The file is checked and then read a second time by unsquashfs. So that nobody can swap or change
-# it in between (without needing free space for a copy):
-#  - it is opened ONCE, as file descriptor 8; the check and unsquashfs both read that open file
-#    through /proc/self/fd/8 (a re-open of the same inode), so renaming, replacing or re-linking
-#    the path after the check has no effect;
+# The file is checked and then read a second time (mounted as a squashfs). So that nobody can swap or
+# change it in between (without needing free space for a copy):
+#  - it is opened ONCE, as file descriptor 8; the check and the loop device both use that open file
+#    through /proc/self/fd/8 (a re-open of the same inode), so renaming, replacing or re-linking the
+#    path after the check has no effect;
 #  - the open file must be a regular file owned by root or by the user who ran sudo, and not
 #    writable by group or others: then only root or that user (the administrator doing the update)
 #    could change its contents in place, and both are trusted anyway;
-#  - after unpacking, its size and modification time (taken from the open file) must be unchanged.
+#  - after copying, its size and modification time (taken from the open file) must be unchanged.
 # Not covered: someone with physical access rewriting a USB stick's sectors behind the kernel's back.
 UPD_FD=/proc/self/fd/8
 open_update() { # open_update FILE
-   local f="$1" owner mode mtime invoker
+   local f="$1" owner mode invoker
    [ -f "$f" ] && [ -r "$f" ] || die "cannot read $f"
    exec 8< "$f" || die "cannot open $f"
    [ -f "$UPD_FD" ] || die "$f is not a regular file"
@@ -196,13 +205,16 @@ update_unchanged() { # the open file has the same size and modification time as 
 }
 
 verify_update() { # verify_update DISPLAYNAME (reads the file opened by open_update): sets U_VERSION, U_IMAGE_SIZE, U_INSTALLED
-   local f="$UPD_FD" size sum expect   # $1 = the name shown in messages
+   local f="$UPD_FD" size sum expect first   # $1 = the name shown in messages
    [ -f "$PUBKEY" ] || die "public key $PUBKEY missing"
    make_tmp
    size=$(stat -L -c %s "$f")
    [ "$size" -gt $((TRAILER_SIZE * 2)) ] || die "$1 is too small to be an update"
    tail -c $TRAILER_SIZE "$f" > "$TMP/trailer"
-   [ "$(head -n 1 "$TMP/trailer" | tr -d '\000')" = "GOBOREFINED-UPDATE 1" ] || die "$1 is not a GoboRefined update file"
+   first=$(head -n 1 "$TMP/trailer" | tr -d '\000')
+   [ "$first" != "GOBOREFINED-UPDATE 1" ] ||
+      die "$1 is an update for GoboRefined 0.8-0.9.x (the ext4 layout); it cannot be installed on 0.10 or later"
+   [ "$first" = "$TRAILER_MAGIC" ] || die "$1 is not a GoboRefined update file (for this layout)"
    sed '/^-----BEGIN SIGNATURE-----$/,$d' "$TMP/trailer" > "$TMP/manifest"
    sed -n '/^-----BEGIN SIGNATURE-----$/,/^-----END SIGNATURE-----$/p' "$TMP/trailer" | sed '1d;$d' |
       openssl base64 -d -A > "$TMP/sig" 2>/dev/null || true
@@ -211,6 +223,7 @@ verify_update() { # verify_update DISPLAYNAME (reads the file opened by open_upd
       die "the signature does not match: the file was not made by GoboRefined or was changed"
    mf() { sed -n "s/^$1=//p" "$TMP/manifest" | head -n 1; }
    [ "$(mf name)" = GoboRefined ] || die "not a GoboRefined update"
+   [ "$(mf layout)" = btrfs ] || die "$1 is not made for the btrfs layout"
    U_VERSION=$(mf version)
    U_IMAGE_SIZE=$(mf image_size)
    U_INSTALLED=$(mf installed_bytes)
@@ -228,9 +241,9 @@ verify_update() { # verify_update DISPLAYNAME (reads the file opened by open_upd
 ### Boot menu ##################################################################
 # GRUB itself (BOOTX64.EFI / the BIOS core image and the modules on GOBO_BOOT) stays as installed:
 # it is never updated. Only grub.cfg can be: when the new system carries a boot menu template
-# (share/gobo-update/grub.cfg.in) with a higher "gobo-grub-template N" than the installed grub.cfg
-# (none = 0), grub.cfg is written from it with this computer's partition IDs, atomically (new file,
-# sync, rename); the previous one is kept as grub.cfg.old. The template must start both slots.
+# (share/gobo-update/grub.cfg.in) with a higher "gobo-grub-template N" than the installed grub.cfg,
+# grub.cfg is written from it with this computer's IDs, atomically (new file, sync, rename); the
+# previous one is kept as grub.cfg.old. The template must start both versions.
 
 template_version() { # template_version FILE -> N from "# gobo-grub-template N" in line 1, else 0
    local v
@@ -238,7 +251,7 @@ template_version() { # template_version FILE -> N from "# gobo-grub-template N" 
    echo "${v:-0}"
 }
 
-update_boot_menu() { # update_boot_menu NEWSLOTDIR (needs mount_boot)
+update_boot_menu() { # update_boot_menu NEWTREE (needs mount_boot)
    local tpl="$1/Programs/GoboSpin/Current/share/gobo-update/grub.cfg.in" cfg="$BOOT/grub/grub.cfg" vnew vold video
    [ -f "$tpl" ] || { log "boot menu: the new system has no template; grub.cfg kept"; return 0; }
    vnew=$(template_version "$tpl"); vold=$(template_version "$cfg")
@@ -250,17 +263,13 @@ update_boot_menu() { # update_boot_menu NEWSLOTDIR (needs mount_boot)
    elif grep -qx 'insmod vbe' "$cfg"; then video="insmod vbe"
    else say "    the installed boot menu is not recognised; it is kept as it is"; return 0
    fi
-   sed -e "s|@UUID_BOOT@|$BOOT_UUID|g" -e "s|@UUID_A@|$L_uuid_a|g" -e "s|@UUID_B@|$L_uuid_b|g" \
-       -e "s|@UUID_DATA@|$L_uuid_data|g" -e "s|@PARTUUID_A@|$L_partuuid_a|g" \
-       -e "s|@PARTUUID_B@|$L_partuuid_b|g" -e "s|@VIDEO@|$video|g" "$tpl" > "$cfg.new" ||
-      die "could not write the new boot menu"
+   sed -e "s|@UUID_BOOT@|$BOOT_UUID|g" -e "s|@UUID_POOL@|$POOL_UUID|g" -e "s|@PARTUUID_POOL@|$L_partuuid_pool|g" \
+       -e "s|@VIDEO@|$video|g" "$tpl" > "$cfg.new" || die "could not write the new boot menu"
    # Checks: all placeholders filled, this computer's IDs in it, GRUB's own syntax check, and no
-   # escaped "\$" (a template written through a shell here-document by mistake: GRUB then shows
-   # entries named "$ver_a" and starts nothing - seen in a test).
-   if grep -qE '@[A-Z_]+@' "$cfg.new" || ! grep -qx "set gobo_uuid_data=$L_uuid_data" "$cfg.new" ||
-      grep -qF '\$' "$cfg.new" ||
-      { command -v grub-script-check > /dev/null && ! grub-script-check "$cfg.new" > /dev/null 2>&1; } ||
-      ! grep -qx "set gobo_partuuid_$OTHER=$(eval echo "\$L_partuuid_$OTHER")" "$cfg.new"
+   # escaped "\$" (a template written through a shell here-document by mistake).
+   if grep -qE '@[A-Z_]+@' "$cfg.new" || ! grep -qx "set gobo_uuid_pool=$POOL_UUID" "$cfg.new" ||
+      ! grep -qx 'set gobo_layout=btrfs' "$cfg.new" || grep -qF '\$' "$cfg.new" ||
+      { command -v grub-script-check > /dev/null && ! grub-script-check "$cfg.new" > /dev/null 2>&1; }
    then
       rm -f "$cfg.new"
       say "    the new boot menu template does not fit this computer; the old boot menu is kept"
@@ -274,74 +283,134 @@ update_boot_menu() { # update_boot_menu NEWSLOTDIR (needs mount_boot)
    say "    boot menu updated (template $vold -> $vnew; the old one is kept as grub/grub.cfg.old)"
 }
 
+### Update #####################################################################
+
+tree_file() { # tree_file TREE LINK -> the file LINK (inside TREE) points to, as a path inside TREE
+   local p
+   p=$(chroot "$1" /System/Index/bin/readlink -f "$2" 2>/dev/null) || return 1
+   case "$p" in /Programs/?*|/System/Kernel/Boot/?*) ;; *) return 1 ;; esac
+   case "$p" in *..*) return 1 ;; esac
+   [ -f "$1$p" ] || return 1
+   echo "$p"
+}
+
 cmd_update() {
-   local file dev slotsize need
+   local file cur new cur_id dry free back need t kpath ipath reply
    file=$(readlink -f "$1")
    need_root; load_layout; lock
    [ "$MODE" = normal ] || die "started without the system changes: restart normally to update"
    open_update "$file"
    verify_update "$file"
-   mount_boot
-   dev=$(slot_device "$OTHER") || die "slot $(letter_upper "$OTHER") not found (PARTUUID $(eval echo "\$L_partuuid_$OTHER") with name GOBO_$(letter_upper "$OTHER"))"
-   # Never the running system: a second, independent check of what is about to be erased.
-   [ "$(readlink -f "$(blkid -U "$CUR_UUID")")" != "$dev" ] || die "$dev is the running slot"
-   is_mounted "$dev" && die "$dev is mounted; refusing to format it"
-   [ "$(findmnt -rn -o SOURCE /System/Slot 2>/dev/null | xargs -r readlink -f)" != "$dev" ] || die "$dev is the running slot"
-   [ "$(lsblk -no PKNAME "$dev")" = "$(lsblk -no PKNAME "$(blkid -U "$CUR_UUID")")" ] || die "$dev is not on the system disk"
-   slotsize=$(lsblk -bdno SIZE "$dev")
-   need=$((U_INSTALLED + U_INSTALLED / 20 + 268435456))
-   [ "$slotsize" -ge "$need" ] || die "the update needs $((need / 1048576)) MB, slot $(letter_upper "$OTHER") has $((slotsize / 1048576)) MB"
-
-   say "Running: slot $(letter_upper "$CUR") (GoboRefined ${CUR_VERSION:-?}). The update goes to slot $(letter_upper "$OTHER") ($dev)."
+   mount_boot; mount_pool
+   cur=$POOL/@system-$CUR new=$POOL/@system-$OTHER
+   # Never the running version: the subvolume at /System/Slot (by its btrfs UUID) must be @system-CUR
+   # and must not be @system-OTHER.
+   cur_id=$(subvol_uuid /System/Slot)
+   [ -n "$cur_id" ] || die "cannot identify the running version's subvolume"
+   [ "$(subvol_uuid "$cur")" = "$cur_id" ] || die "@system-$CUR is not the running version"
+   if [ -e "$new" ]
+   then
+      [ "$(subvol_uuid "$new")" != "$cur_id" ] || die "@system-$OTHER is the running version"
+      [ -n "$(subvol_uuid "$new")" ] || die "$new is not a btrfs subvolume; refusing to touch it"
+   fi
+   say "Running: $(letter_upper "$CUR") (GoboRefined ${CUR_VERSION:-?}). The update goes to $(letter_upper "$OTHER") (@system-$OTHER)."
    if [ "$ASSUME_YES" != 1 ] && [ -t 0 ]
    then
-      read -r -p "Install GoboRefined $U_VERSION into slot $(letter_upper "$OTHER")? Its old content is erased. [y/N] " reply
+      read -r -p "Install GoboRefined $U_VERSION as version $(letter_upper "$OTHER")? Its old content is deleted. [y/N] " reply
       case "$reply" in y|Y|yes) ;; *) die "nothing was changed" ;; esac
    fi
 
-   # From here on slot OTHER is incomplete: make sure nothing chooses it until it is done.
+   # The new image, read through the open file (fd 8): a loop device limited to the image part.
+   mkdir -p "$TMP/sq"
+   LOOP=$(losetup -r -f --show --sizelimit "$U_IMAGE_SIZE" "$UPD_FD") || die "could not attach the update file"
+   mount -t squashfs -o ro "$LOOP" "$TMP/sq" || die "cannot mount the update's image"
+
+   # Free space, before anything is changed: what rsync would write over a copy of the running version
+   # (dry run against the running version itself; the snapshot made below is identical to it) plus a
+   # margin, against the pool's free space plus what deleting the other version gives back.
+   step "Checking the free space"
+   t=$SECONDS
+   dry=$( { rsync -aHAX --numeric-ids --delete --dry-run --stats "$TMP/sq/" "$cur/" 2>> "$LOG" || true; } |
+         sed -n 's/^Total transferred file size: \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+   [[ "$dry" =~ ^[0-9]+$ ]] || die "could not work out the size of the update (rsync dry run)"
+   free=$(pool_free "$POOL"); [[ "$free" =~ ^[0-9]+$ ]] || die "could not read the free space of the pool"
+   back=0
+   if [ -e "$new" ]
+   then
+      back=$( { btrfs filesystem du -s --raw "$new" 2>/dev/null || true; } | awk 'NR == 2 { print $2 }')
+      [[ "$back" =~ ^[0-9]+$ ]] || back=0
+   fi
+   need=$((dry + MARGIN))
+   log "space: writes $dry bytes; free $free; deleting @system-$OTHER gives back about $back; dry run $((SECONDS - t)) s"
+   [ $((free + back)) -ge "$need" ] ||
+      die "not enough free space: the update writes up to $(human "$dry") (and keeps $(human "$MARGIN") free), the disk has $(human "$((free + back))") available; nothing was changed. Free some space (e.g. old files in /Users) and try again"
+   say "    writes about $(human "$dry"); $(human "$free") free"
+
+   # From here on version OTHER is incomplete: make sure nothing chooses it until it is done.
+   step "Setting $(letter_upper "$OTHER") aside"
    if [ "$(env_get try_slot)" = "$OTHER" ] || [ "$(env_get slot)" = "$OTHER" ]
    then env_write set "slot=$CUR" -- unset try_slot tries_left
    fi
+   rm -f "$BOOT/gobo/$OTHER/gobo-slot.env"
+   sync
+   rm -f "$BOOT/gobo/$OTHER/kernel" "$BOOT/gobo/$OTHER/initramfs" "$BOOT/gobo/$OTHER/"*.new
    echo "" > "$STATE/slot-$OTHER"
-
-   step "Formatting slot $(letter_upper "$OTHER")"
-   mkfs.ext4 -F -q -O ^orphan_file -L "GOBO_$(letter_upper "$OTHER")" -U "$(eval echo "\$L_uuid_$OTHER")" "$dev" >> "$LOG" 2>&1 ||
-      die "formatting $dev failed"
-   mkdir -p "$TMP/slot"
-   mount -t ext4 "$dev" "$TMP/slot" || die "cannot mount the new slot"
-   step "Unpacking GoboRefined $U_VERSION (a few minutes)"
-   local t0=$SECONDS
-   # unsquashfs reads the open, checked file (fd 8), not the path (see open_update).
-   if [ -t 1 ]
-   then unsquashfs -f -d "$TMP/slot" "$UPD_FD" || die "unpacking failed"
-   else unsquashfs -no-progress -f -d "$TMP/slot" "$UPD_FD" >> "$LOG" 2>&1 || die "unpacking failed"
+   if [ -e "$new" ]
+   then
+      btrfs property set -ts "$new" ro false >> "$LOG" 2>&1 || true
+      btrfs subvolume delete "$new" >> "$LOG" 2>&1 || die "cannot delete @system-$OTHER"
    fi
-   log "unpacked in $((SECONDS - t0)) s"
-   update_unchanged || die "the update file was changed while it was being installed; slot $(letter_upper "$OTHER") stays empty"
+   btrfs subvolume snapshot "$cur" "$new" >> "$LOG" 2>&1 || die "could not make a snapshot of @system-$CUR"
+   rm -f "$new/gobo-slot.env"
+   sync
+
+   step "Copying GoboRefined $U_VERSION (only the files that changed)"
+   t=$SECONDS
+   rsync -aHAX --numeric-ids --delete --stats "$TMP/sq/" "$new/" > "$TMP/rsync.out" 2>> "$LOG" || die "copying failed (rsync); version $(letter_upper "$OTHER") stays empty"
+   grep -E '^(Number of regular files transferred|Number of deleted files|Total transferred file size)' "$TMP/rsync.out" | sed "s/^/    /" | tee -a "$LOG" || true
+   log "copied in $((SECONDS - t)) s"
+   umount "$TMP/sq"; losetup -d "$LOOP"; LOOP=""
+   update_unchanged || die "the update file was changed while it was being installed; version $(letter_upper "$OTHER") stays empty"
    exec 8<&-
+
    step "Checking the new system"
    for p in System/Kernel/Boot/kernel System/Kernel/Boot/initramfs System/Index/bin/gobo-update Programs/Scripts
-   do [ -e "$TMP/slot/$p" ] || die "the new system has no $p"
+   do [ -e "$new/$p" ] || [ -L "$new/$p" ] || die "the new system has no $p"
    done
-   [ "$(head -n 1 "$TMP/slot/Programs/GoboSpin/Current/share/spin-version" | tr -dc '0-9A-Za-z.-')" = "$U_VERSION" ] ||
+   [ "$(head -n 1 "$new/Programs/GoboSpin/Current/share/spin-version" | tr -dc '0-9A-Za-z.-')" = "$U_VERSION" ] ||
       die "the new system's version does not match the update file"
-   update_boot_menu "$TMP/slot"
+   kpath=$(tree_file "$new" /System/Kernel/Boot/kernel) || die "the new system's kernel was not found"
+   ipath=$(tree_file "$new" /System/Kernel/Boot/initramfs) || die "the new system's initramfs was not found"
+   update_boot_menu "$new"
+
+   step "Kernel and initramfs to the boot partition"
+   mkdir -p "$BOOT/gobo/$OTHER"
+   cp "$new$kpath" "$BOOT/gobo/$OTHER/kernel.new" && cp "$new$ipath" "$BOOT/gobo/$OTHER/initramfs.new" ||
+      die "could not copy the kernel to the boot partition (full?)"
    sync
-   # Written last: GRUB and the initramfs treat a slot without this file as empty.
-   grub-editenv "$TMP/slot/gobo-slot.env" create
-   grub-editenv "$TMP/slot/gobo-slot.env" set "slot_version=$U_VERSION"
+   mv -f "$BOOT/gobo/$OTHER/kernel.new" "$BOOT/gobo/$OTHER/kernel"
+   mv -f "$BOOT/gobo/$OTHER/initramfs.new" "$BOOT/gobo/$OTHER/initramfs"
+   # The initramfs reads the version's own gobo-slot.env; then the subvolume becomes read-only.
+   grub-editenv "$new/gobo-slot.env" create
+   grub-editenv "$new/gobo-slot.env" set "slot_version=$U_VERSION"
    sync
-   say "    $(df -h --output=used,avail "$TMP/slot" | tail -n 1 | awk '{print $1 " used, " $2 " free"}') in slot $(letter_upper "$OTHER")"
-   umount "$TMP/slot"
+   btrfs property set -ts "$new" ro true >> "$LOG" 2>&1 || die "cannot make @system-$OTHER read-only"
+   # Written last: GRUB offers the new version from here on.
+   grub-editenv "$BOOT/gobo/$OTHER/gobo-slot.env.new" create
+   grub-editenv "$BOOT/gobo/$OTHER/gobo-slot.env.new" set "slot_version=$U_VERSION"
+   sync
+   mv -f "$BOOT/gobo/$OTHER/gobo-slot.env.new" "$BOOT/gobo/$OTHER/gobo-slot.env"
+   sync
    echo "$U_VERSION" > "$STATE/slot-$OTHER"
 
    env_write set "try_slot=$OTHER" "tries_left=2"
+   say "    $(human "$(pool_free "$POOL")") free on the disk"
    umount "$BOOT"; BOOT=""
+   umount "$POOL"; POOL=""
    step "Done"
-   say "GoboRefined $U_VERSION is ready in slot $(letter_upper "$OTHER"). It starts at the next restart."
+   say "GoboRefined $U_VERSION is ready as version $(letter_upper "$OTHER"). It starts at the next restart."
    say "If it does not start, the computer goes back to ${CUR_VERSION:-the current version} by itself."
-   log "update to $U_VERSION in slot $OTHER finished in $SECONDS s"
+   log "update to $U_VERSION in $OTHER finished in $SECONDS s"
    if [ "$ASSUME_YES" != 1 ] && [ -t 0 ]
    then
       read -r -p "Restart now? [y/N] " reply
@@ -352,44 +421,46 @@ cmd_update() {
 ### Status, rollback, reset ####################################################
 
 cmd_status() {
-   local v_cur v_other def try left rb name
+   local v def try left rb name free
    need_root; load_layout; mount_boot
-   v_cur="$CUR_VERSION"
-   v_other=$(peek_slot_version "$OTHER")
    def=$(env_get slot); [ "$def" = b ] || def=a
    try=$(env_get try_slot); left=$(env_get tries_left); rb=$(env_get rollback_from)
-   echo "GoboRefined system slots"
+   echo "GoboRefined system versions"
    for s in a b
    do
-      if [ "$s" = "$CUR" ]; then name="${v_cur:-?}"; else name="${v_other:-empty}"; fi
-      printf '  slot %s  %-14s' "$(letter_upper $s)" "$name"
+      v=$(boot_version "$s")
+      if [ "$s" = "$CUR" ]; then name="${CUR_VERSION:-${v:-?}}"; else name="${v:-empty}"; fi
+      printf '  %s  %-14s' "$(letter_upper $s)" "$name"
       [ "$s" = "$CUR" ] && printf ' [running%s]' "$([ "$MODE" = safe ] && echo ', WITHOUT system changes')"
       [ "$s" = "$def" ] && printf ' [default]'
       [ "$s" = "$try" ] && printf ' [new: being tried, %s tries left]' "${left:-0}"
       echo
    done
    if [ "$try" = a ] || [ "$try" = b ]
-   then echo "  next start: slot $(letter_upper "$try") (if it does not start: slot $(letter_upper "$def"))"
-   else echo "  next start: slot $(letter_upper "$def")"
+   then echo "  next start: $(letter_upper "$try") (if it does not start: $(letter_upper "$def"))"
+   else echo "  next start: $(letter_upper "$def")"
    fi
-   [ -n "$rb" ] && echo "  slot $(letter_upper "$rb") did not start and was set aside (rollback)"
+   [ -n "$rb" ] && echo "  $(letter_upper "$rb") did not start and was set aside (rollback)"
    if [ -f "$STATE/notice" ] && grep -q '^kind=rolled-back' "$STATE/notice"
    then echo "  last rollback: $(sed -n 's/^failed_version=//p' "$STATE/notice") did not start ($(sed -n 's/^date=//p' "$STATE/notice"))"
    fi
    if [ -d "$OVERLAY/upper" ]
-   then
-      echo "  system changes since the install: $(du -sh "$OVERLAY/upper" 2>/dev/null | cut -f1)$([ -e "$OVERLAY/reset-requested" ] && echo ' (will be removed at the next start)')"
-      echo "  data partition: $(df -h --output=avail /System/Data | tail -n 1 | tr -d ' ') free"
+   then echo "  system changes since the install: $(du -sh "$OVERLAY/upper" 2>/dev/null | cut -f1)$([ -e "$OVERLAY/reset-requested" ] && echo ' (will be removed at the next start)')"
+   fi
+   free=$(pool_free /System/Data)
+   if [[ "$free" =~ ^[0-9]+$ ]]
+   then echo "  free on the disk (system versions and your files share it): $(human "$free")"
    fi
 }
 
 cmd_rollback() {
    local v
-   need_root; load_layout; lock; mount_boot
-   v=$(peek_slot_version "$OTHER")
-   [ -n "$v" ] || die "slot $(letter_upper "$OTHER") is empty or incomplete: nothing to go back to"
+   need_root; load_layout; lock; mount_boot; mount_pool
+   v=$(boot_version "$OTHER")
+   [ -n "$v" ] && [ -f "$POOL/@system-$OTHER/gobo-slot.env" ] && [ -f "$BOOT/gobo/$OTHER/kernel" ] ||
+      die "version $(letter_upper "$OTHER") is empty or incomplete: nothing to go back to"
    env_write set "slot=$OTHER" -- unset try_slot tries_left
-   say "From the next restart on, slot $(letter_upper "$OTHER") (GoboRefined $v) starts."
+   say "From the next restart on, version $(letter_upper "$OTHER") (GoboRefined $v) starts."
 }
 
 cmd_reset() {
@@ -645,13 +716,36 @@ secure_accounts() {
    done
 }
 
+# 0.10: a power cut while the desktop ran leaves the X server's lock files in /tmp, which is kept
+# across restarts (/Data/Variable/tmp); X then refuses to start ("Server is already active for
+# display 0") and the login screen never comes. At boot no X server runs yet, so they are stale.
+clear_x_locks() {
+   local f
+   pidof Xorg X > /dev/null 2>&1 && return 0
+   for f in /tmp/.X[0-9]-lock /tmp/.X[0-9][0-9]-lock
+   do
+      if [ -f "$f" ] || [ -L "$f" ]; then rm -f "$f" && log "removed the stale X lock $f"; fi
+   done
+   # the socket folder only when it is root's own real folder (not a link someone put there)
+   if [ -d /tmp/.X11-unix ] && [ ! -L /tmp/.X11-unix ] && [ "$(stat -c %u /tmp/.X11-unix)" = 0 ]
+   then
+      for f in /tmp/.X11-unix/X[0-9] /tmp/.X11-unix/X[0-9][0-9]
+      do
+         if [ -S "$f" ] || [ -L "$f" ] || [ -f "$f" ]; then rm -f "$f" && log "removed the stale X socket $f"; fi
+      done
+   fi
+   return 0
+}
+
 cmd_boot_task() {
    [ "$(cmdline_arg root)" = gobo ] || return 0
-   need_root; load_layout
+   need_root
+   clear_x_locks || true
+   load_layout
    mkdir -p "$STATE"; chmod 755 "$STATE"
    secure_accounts || true
    if [ "$MODE" = safe ]
-   then log "started without the system changes: no first-start work, slot not marked"; return 0
+   then log "started without the system changes: no first-start work, version not marked"; return 0
    fi
    [ -f "$OVERLAY/first-boot-pending" ] && first_boot
    mark_good

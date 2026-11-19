@@ -2,16 +2,24 @@
 # gobo-install — installer of GoboRefined, an unofficial spin of GoboLinux 017.01,
 # for its live environment.
 #
-# Installs to one whole disk with the A/B layout of 0.8 (GPT): a boot partition with GRUB,
-# two system slots (A gets the system, B stays empty until the first gobo-update) and a data
-# partition for everything that survives updates. The system slot holds only the pristine
-# image; this computer's settings go into the overlay on the data partition.
+# Installs to one whole disk with the btrfs A/B layout of 0.10 (GPT, docs/ab-design.md):
+#   1 BIOSBOOT   1 MiB   GRUB core on BIOS
+#   2 GOBO_BOOT  1 GiB   FAT32 (EFI system partition): GRUB, grub.cfg, grubenv and, in gobo/a and
+#                        gobo/b, each system version's kernel, initramfs and gobo-slot.env
+#   3 GOBO_POOL  rest    btrfs (compress=zstd:3) with the subvolumes @system-a (the system,
+#                        read-only), @system-b (made by the first gobo-update), @data (overlay
+#                        layers, /Users, /Data/Variable) and @swap (the swap file, if any)
+# The system version holds only the pristine image; this computer's settings go into the overlay
+# in @data.
 #
 # Run as root from the live session:
 #     gobo-install                 # asks questions (menus on a terminal; --plain: line by line)
 #     gobo-install --answers FILE  # unattended; FILE sets the variables below
 
 set -euo pipefail
+# 0.10: the installed system's folders must not inherit a strict umask of the caller (found in 0.9.7:
+# with 077 every system folder came out 700 and no desktop login worked).
+umask 022
 
 ### Defaults (override with flags or an answers file) #########################
 
@@ -26,7 +34,7 @@ KEYMAP=""               # console keymap; default: same as the X layout if such 
 XKB_LAYOUT=""           # X keyboard layout; asked; default: the live session's
 AUTOLOGIN=0             # 1 = log USER_NAME in without a password
 LOGIN_SCREEN=1          # 1 = graphical login screen (LXDM) if the image has it; 0 = text login on tty1
-SWAP_MB=0               # size of a swap file on the data partition; 0 = none
+SWAP_MB=0               # size of the swap file (subvolume @swap); 0 = none
 CLOCK_MODE="GMT"        # hardware clock: GMT (UTC, the Linux norm) or LocalTime (dual boot with Windows)
 LOOK_DIR=""             # folder with the gobo11 look; default: found automatically
 SOURCE=""               # live image to install from; default: the live session's squashfs
@@ -34,10 +42,8 @@ ASSUME_YES=0
 PW_MIN=8                # 0.9.1: shortest password for the user (an administrator) and root
 
 MIN_DISK_BYTES=32000000000   # "32 GB"
-BIG_DISK_BYTES=48000000000   # from "48 GB" on, the slots are larger (room for more programs)
-SLOT_MIB_SMALL=12288         # each system slot on disks under 48 GB: 12 GiB
-SLOT_MIB_BIG=16384           # each system slot on disks of 48 GB and more: 16 GiB
-SLOT_MIB=""                  # set from the disk size (gobo-update reads the size from the device)
+BOOT_MIB=1024                # GOBO_BOOT: two versions' kernels and initramfs (about 75 MB each)
+POOL_OPTS=noatime,compress=zstd:3
 DEST=/Mount/GoboLinux
 LOG=/Data/Variable/log/gobo-install.log   # root-only folder (not a fixed name in the shared /tmp)
 PLAIN=0                  # 1 = line-by-line questions instead of the dialog menus
@@ -74,12 +80,12 @@ cleanup() {
    local rc=$?
    trap - EXIT
    set +e
-   for m in "$DEST" "${work:+$work/boot}" "${work:+$work/data}" "${work:+$work/slot}"
+   for m in "$DEST" "${work:+$work/boot}" "${work:+$work/pool}"
    do
       [ -n "$m" ] || continue
       mountpoint -q "$m" 2>/dev/null && { umount -R "$m" >> "$LOG" 2>&1 || umount -lR "$m" >> "$LOG" 2>&1; }
    done
-   [ -n "$work" ] && rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null
+   [ -n "$work" ] && rmdir "$work/boot" "$work/pool" "$work" 2>/dev/null
    [ -L /dev/root ] && [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
    gauge_close
    if [ $rc -ne 0 ]
@@ -104,7 +110,7 @@ Options:
   --xkb LAYOUT        X keyboard layout (default: same as the live session)
   --autologin         log the user in without a password
   --text-login        no graphical login screen: log in on the text console, the desktop starts after it
-  --swap MB           create a swap file of this size (on the data partition)
+  --swap MB           create a swap file of this size (in its own subvolume @swap)
   --firmware efi|bios install the bootloader for this firmware (default: what the live session booted with)
   --answers FILE      read settings (shell variables) from FILE
   --yes               do not ask anything; needs --disk and passwords from --answers
@@ -177,7 +183,7 @@ then
 fi
 [ -e "$SOURCE" ] || die "no such image: $SOURCE"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "--swap needs a size in MB"
-for tool in parted mkfs.ext4 mkfs.fat wipefs blkid lsblk findmnt openssl usermod grub-editenv grub-mkimage grub-install mksquashfs
+for tool in parted mkfs.fat mkfs.btrfs btrfs wipefs blkid lsblk findmnt openssl usermod grub-editenv grub-mkimage grub-install mksquashfs
 do command -v $tool > /dev/null || die "required tool not found: $tool"
 done
 
@@ -258,7 +264,7 @@ check_disk() { # check_disk DEV: a whole disk, big enough, not the one the live 
    [ -b "$1" ] || { echo "$1 is not a block device."; return 1; }
    [ "$(lsblk -dno TYPE "$1")" = disk ] || { echo "$1 is not a whole disk."; return 1; }
    [ "$(lsblk -bdno SIZE "$1")" -ge "$MIN_DISK_BYTES" ] ||
-      { echo "$1 has $(human "$(lsblk -bdno SIZE "$1")"); $SPIN_NAME needs a disk of at least 32 GB (two system slots and a data partition)."; return 1; }
+      { echo "$1 has $(human "$(lsblk -bdno SIZE "$1")"); $SPIN_NAME needs a disk of at least 32 GB."; return 1; }
    [ -z "$SOURCE_DISK" ] || [ "$(basename "$(readlink -f "$1")")" != "$SOURCE_DISK" ] ||
       { echo "$1 holds the system you started from (the installation medium). It cannot be erased."; return 1; }
    return 0
@@ -424,8 +430,9 @@ menu_questions() {
    dialog --backtitle "$BT" --title "Welcome" --yes-label "Start" --no-label "Quit" --yesno \
 "\nThis installs $SPIN_LABEL, an unofficial spin of GoboLinux 017.01.\n\n\
 It uses one WHOLE disk of at least 32 GB. Everything on that disk is erased.\n\n\
-The disk gets two system slots (A and B) for safe system updates, and a data\n\
-partition for your files, accounts and settings, which updates keep.\n\n\
+The disk keeps two versions of the system (A and B) for safe system updates,\n\
+next to your files, accounts and settings, which updates keep (one shared,\n\
+compressed space: no fixed sizes).\n\n\
 A few questions follow; nothing is changed before the summary at the end.\n\
 Esc or Cancel at any question offers to quit." 17 80 || menu_quit
    while true
@@ -502,10 +509,6 @@ why=$(check_hostname "$HOSTNAME_NEW") || die "invalid computer name '$HOSTNAME_N
    die "a password is shorter than $PW_MIN characters"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "--swap needs a size in MB"
 disk_bytes=$(lsblk -bdno SIZE "$DISK")
-if [ "$disk_bytes" -ge "$BIG_DISK_BYTES" ]
-then SLOT_MIB=$SLOT_MIB_BIG
-else SLOT_MIB=$SLOT_MIB_SMALL
-fi
 if [ -z "$KEYMAP" ]
 then
    if find -L /System/Index/share/keymaps /Programs/KBD/Current -name "$XKB_LAYOUT.map*" 2>/dev/null | grep -q .
@@ -514,7 +517,7 @@ then
    fi
 fi
 
-data_gib=$(( (disk_bytes / 1048576 - 514 - 2 * SLOT_MIB) / 1024 ))
+pool_gib=$(( (disk_bytes / 1048576 - 2 - BOOT_MIB) / 1024 ))
 # Same test as in step 4 (there on the copied system, here on the running one).
 if [ "$LOGIN_SCREEN" = 1 ] && [ -x /System/Index/sbin/lxdm-binary ] && [ -f /Programs/LXDM/Settings/lxdm/lxdm.conf ]
 then
@@ -530,7 +533,7 @@ else
 fi
 summary() {
    echo "  disk      $DISK ($(disk_model "$DISK"), $(human "$disk_bytes")) - EVERYTHING ON IT WILL BE ERASED"
-   echo "  layout    two system slots of $((SLOT_MIB / 1024)) GB (A and B, for updates), data partition ${data_gib} GB"
+   echo "  layout    boot partition 1 GB; ${pool_gib} GB btrfs (compressed) shared by the system versions A/B and your files"
    echo "  firmware  $FIRMWARE"
    echo "  hostname  $HOSTNAME_NEW"
    echo "  user      $USER_NAME ($USER_FULLNAME)"
@@ -540,7 +543,7 @@ summary() {
    fi
    echo "  timezone  $TIMEZONE, keyboard $XKB_LAYOUT"
    echo "  login     $login_method"
-   if [ "$SWAP_MB" -gt 0 ]; then echo "  swap      ${SWAP_MB} MB swap file on the data partition"; else echo "  swap      none"; fi
+   if [ "$SWAP_MB" -gt 0 ]; then echo "  swap      ${SWAP_MB} MB swap file"; else echo "  swap      none"; fi
 }
 if [ "$UI" = menu ]
 then
@@ -569,7 +572,7 @@ fi
 trap cleanup EXIT
 t_start=$SECONDS
 work=$(mktemp -d /tmp/gobo-install.XXXXXX)
-mkdir -p "$work/slot" "$work/data" "$work/boot"
+mkdir -p "$work/pool" "$work/boot"
 
 ### 1. Partition and format ####################################################
 
@@ -583,70 +586,69 @@ do dev_is_mounted "/dev/$part" && die "/dev/$part is still in use (the live medi
 done
 run wipefs -a "$DISK"
 
-a_end=$((514 + SLOT_MIB)); b_end=$((a_end + SLOT_MIB))
 run parted -s "$DISK" mklabel gpt \
    mkpart BIOSBOOT 1MiB 2MiB set 1 bios_grub on \
-   mkpart GOBO_BOOT fat32 2MiB 514MiB set 2 esp on \
-   mkpart GOBO_A ext4 514MiB ${a_end}MiB \
-   mkpart GOBO_B ext4 ${a_end}MiB ${b_end}MiB \
-   mkpart GOBO_DATA ext4 ${b_end}MiB 100%
+   mkpart GOBO_BOOT fat32 2MiB $((2 + BOOT_MIB))MiB set 2 esp on \
+   mkpart GOBO_POOL btrfs $((2 + BOOT_MIB))MiB 100%
 run partprobe "$DISK" || true
 run udevadm settle || true
-BOOT_PART=$(part_dev 2); A_PART=$(part_dev 3); B_PART=$(part_dev 4); DATA_PART=$(part_dev 5)
+BOOT_PART=$(part_dev 2); POOL_PART=$(part_dev 3)
 
 step "Formatting"
 check_part "$BOOT_PART" GOBO_BOOT; run mkfs.fat -F 32 -n GOBO_BOOT "$BOOT_PART"
-check_part "$A_PART" GOBO_A;       run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_A "$A_PART"
-check_part "$B_PART" GOBO_B;       run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_B "$B_PART"
-check_part "$DATA_PART" GOBO_DATA; run mkfs.ext4 -F -q -O ^orphan_file -L GOBO_DATA "$DATA_PART"
+check_part "$POOL_PART" GOBO_POOL; run mkfs.btrfs -f -L GOBO_POOL "$POOL_PART"
 run udevadm settle || true
 
 uuid()     { blkid -s UUID -o value "$1"; }
 partuuid() { blkid -s PARTUUID -o value "$1"; }
-UUID_BOOT=$(uuid "$BOOT_PART"); UUID_A=$(uuid "$A_PART"); UUID_B=$(uuid "$B_PART"); UUID_DATA=$(uuid "$DATA_PART")
-PARTUUID_A=$(partuuid "$A_PART"); PARTUUID_B=$(partuuid "$B_PART")
-for v in UUID_BOOT UUID_A UUID_B UUID_DATA PARTUUID_A PARTUUID_B
+UUID_BOOT=$(uuid "$BOOT_PART"); UUID_POOL=$(uuid "$POOL_PART"); PARTUUID_POOL=$(partuuid "$POOL_PART")
+for v in UUID_BOOT UUID_POOL PARTUUID_POOL
 do [ -n "${!v}" ] || die "could not read $v"
 done
+grep -qw btrfs /proc/filesystems || modprobe btrfs || die "the kernel has no btrfs"
+run mount -t btrfs -o "subvolid=5,$POOL_OPTS" "$POOL_PART" "$work/pool"
+for s in @system-a @data @swap
+do run btrfs subvolume create "$work/pool/$s"
+done
+SYS="$work/pool/@system-a"   # the system version A
+DAT="$work/pool/@data"       # data: overlay layers, Users, Variable
 
-### 2. The system: slot A ######################################################
+### 2. The system: version A (@system-a) ######################################
 
-run mount "$A_PART" "$work/slot"
-step "Copying the system into slot A (this takes a few minutes)"
+step "Copying the system (this takes a few minutes)"
 if [ "$GAUGE" = 1 ]
 then
    # gobo-make-system prints "\r    N/TOTAL program": turned into the gauge (8 % .. 75 %).
-   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" 2>> "$LOG" |
+   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$SYS" 2>> "$LOG" |
       awk -v RS='\r' '{ gsub(/\033\[[0-9;]*[A-Za-z]/, "") }
          match($0, /[0-9]+\/[0-9]+/) { split(substr($0, RSTART, RLENGTH), a, "/")
-         if (a[2] > 0) { printf "XXX\n%d\nCopying the system into slot A: %s\nXXX\n", 8 + 67 * a[1] / a[2], $NF; fflush() } }' >&4 ||
+         if (a[2] > 0) { printf "XXX\n%d\nCopying the system: %s\nXXX\n", 8 + 67 * a[1] / a[2], $NF; fflush() } }' >&4 ||
       die "the system copy failed"
 else
-   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$work/slot" || die "the system copy failed"
+   "$MAKE_SYSTEM" --log "$LOG" "$SOURCE" "$SYS" || die "the system copy failed"
 fi
-grub-editenv "$work/slot/gobo-slot.env" create
-grub-editenv "$work/slot/gobo-slot.env" set "slot_version=${SPIN_VERSION:-unknown}"
+grub-editenv "$SYS/gobo-slot.env" create
+grub-editenv "$SYS/gobo-slot.env" set "slot_version=${SPIN_VERSION:-unknown}"
 sync
-run mount -o remount,ro "$work/slot"
+run btrfs property set -ts "$SYS" ro true
 
-### 3. The data partition and the overlay ######################################
+### 3. The data and the overlay ################################################
 
-step "Preparing the data partition"
-run mount "$DATA_PART" "$work/data"
-mkdir -p "$work/data/System-Overlay/install" "$work/data/System-Overlay/upper" \
-         "$work/data/System-Overlay/work" "$work/data/System-Overlay/work-install"
-cp -a "$work/slot/Users" "$work/data/Users"
-cp -a "$work/slot/Data/Variable" "$work/data/Variable"
-echo "${SPIN_VERSION:-unknown}" > "$work/data/System-Overlay/booted-version"
-mkdir -p "$work/data/Variable/lib/gobo-update"
-echo "${SPIN_VERSION:-unknown}" > "$work/data/Variable/lib/gobo-update/slot-a"
+step "Preparing the data"
+mkdir -p "$DAT/System-Overlay/install" "$DAT/System-Overlay/upper" \
+         "$DAT/System-Overlay/work" "$DAT/System-Overlay/work-install"
+cp -a "$SYS/Users" "$DAT/Users"
+cp -a "$SYS/Data/Variable" "$DAT/Variable"
+echo "${SPIN_VERSION:-unknown}" > "$DAT/System-Overlay/booted-version"
+mkdir -p "$DAT/Variable/lib/gobo-update"
+echo "${SPIN_VERSION:-unknown}" > "$DAT/Variable/lib/gobo-update/slot-a"
 
 # Assemble the new system the way its initramfs will, but with the install layer on top, so
-# everything below lands in System-Overlay/install (settings) or on the data partition (homes).
+# everything below lands in System-Overlay/install (settings) or in @data (homes).
 mkdir -p "$DEST"
-run mount -t overlay gobo-install -o "lowerdir=$work/slot,upperdir=$work/data/System-Overlay/install,workdir=$work/data/System-Overlay/work-install,redirect_dir=off,index=off,metacopy=off" "$DEST"
-run mount --bind "$work/data/Users" "$DEST/Users"
-run mount --bind "$work/data/Variable" "$DEST/Data/Variable"
+run mount -t overlay gobo-install -o "lowerdir=$SYS,upperdir=$DAT/System-Overlay/install,workdir=$DAT/System-Overlay/work-install,redirect_dir=off,index=off,metacopy=off" "$DEST"
+run mount --bind "$DAT/Users" "$DEST/Users"
+run mount --bind "$DAT/Variable" "$DEST/Data/Variable"
 for d in proc sys dev
 do run mount --rbind /$d "$DEST/$d"
 done
@@ -668,12 +670,12 @@ bootopts="$DEST/Programs/BootScripts/Settings/BootOptions"
 mv "$bootopts.new" "$bootopts"
 echo "127.0.0.1 localhost.localdomain localhost $HOSTNAME_NEW" > "$DEST/System/Settings/hosts"
 
-# fstab: "/" is put together by the initramfs (system slot + overlay), so it is not listed.
+# fstab: "/" is put together by the initramfs (system version + overlay), so it is not listed.
 {
    cat <<EOF
 # Generated by gobo-install on $(date)
-# GoboRefined A/B layout: "/" = slot GOBO_A or GOBO_B (read-only) + overlay on GOBO_DATA,
-# /Users and /Data/Variable from GOBO_DATA - all mounted by the initramfs, not from here.
+# GoboRefined btrfs A/B layout: "/" = subvolume @system-a or @system-b of GOBO_POOL (read-only) + overlay in @data,
+# /Users and /Data/Variable from @data, @swap at /Data/Variable/swap - all mounted by the initramfs, not from here.
 
 proc      /proc                  proc      defaults 0 0
 none      /sys                   sysfs     defaults 0 0
@@ -695,17 +697,18 @@ EOF
    if [ "$SWAP_MB" -gt 0 ]
    then
       echo
-      echo "# Swap file (on the data partition)."
-      echo "/Data/Variable/swap none swap pri=1 0 0"
+      echo "# Swap file (subvolume @swap, mounted at /Data/Variable/swap by the initramfs)."
+      echo "/Data/Variable/swap/swapfile none swap pri=1 0 0"
    fi
 } > "$DEST/System/Settings/fstab"
 
+# The swap file's subvolume is mounted here by the initramfs (empty when there is no swap file).
+mkdir -p "$DAT/Variable/swap"
 if [ "$SWAP_MB" -gt 0 ]
 then
+   # btrfs swap files: no copy-on-write, no compression (mkswapfile sets that up)
    step "Creating a ${SWAP_MB} MB swap file"
-   run dd if=/dev/zero of="$DEST/Data/Variable/swap" bs=1M count="$SWAP_MB"
-   chmod 600 "$DEST/Data/Variable/swap"
-   run mkswap "$DEST/Data/Variable/swap"
+   run btrfs filesystem mkswapfile --size "${SWAP_MB}m" "$work/pool/@swap/swapfile"
 fi
 
 # Timezone
@@ -847,7 +850,7 @@ done
 umount "$DEST/Data/Variable" "$DEST/Users" >> "$LOG" 2>&1
 umount "$DEST" >> "$LOG" 2>&1 || die "could not unmount the new system"
 
-### 6. Bootloader (on GOBO_BOOT) ###############################################
+### 6. Bootloader, kernel and boot menu (on GOBO_BOOT) #########################
 
 step "Installing the GRUB bootloader ($FIRMWARE)"
 run mount -t vfat "$BOOT_PART" "$work/boot"
@@ -859,62 +862,82 @@ then
    # detect the partition table and produces a loader that cannot read the disk. Build the
    # loader image directly instead, with a small embedded script that finds the boot
    # partition by UUID. It goes to the removable-media path, which firmware boots without
-   # needing a boot entry.
-   moddir="$work/slot/Programs/GRUB-EFI/Current/lib/grub/x86_64-efi"
+   # needing a boot entry. GRUB reads only GOBO_BOOT (FAT), never btrfs.
+   moddir="$SYS/Programs/GRUB-EFI/Current/lib/grub/x86_64-efi"
    [ -d "$moddir" ] || die "GRUB EFI modules not found in $moddir"
    mkdir -p "$grubdir/x86_64-efi" "$work/boot/EFI/BOOT"
    cp "$moddir"/*.mod "$moddir"/*.lst "$grubdir/x86_64-efi/"
-   cat > "$work/grub-early.cfg" <<EOF
+   cat > "$work/grub-early.cfg" <<EOC
 search --no-floppy --fs-uuid --set=root $UUID_BOOT
 set prefix=(\$root)/grub
 configfile \$prefix/grub.cfg
-EOF
+EOC
    echo "+ grub-mkimage (efi)" >> "$LOG"
    grub-mkimage -d "$moddir" -O x86_64-efi \
       -o "$work/boot/EFI/BOOT/BOOTX64.EFI" -c "$work/grub-early.cfg" -p /grub \
-      part_gpt part_msdos fat ext2 normal configfile search search_fs_uuid linux loadenv \
+      part_gpt part_msdos fat normal configfile search search_fs_uuid linux loadenv \
       test echo sleep all_video efi_gop efi_uga gfxterm font ls >> "$LOG" 2>&1 || die "grub-mkimage failed"
    rm -f "$work/grub-early.cfg"
    [ -s "$work/boot/EFI/BOOT/BOOTX64.EFI" ] || die "the EFI loader was not written"
    # Also register a named boot entry where the firmware allows it (optional).
-   run efibootmgr -c -d "$DISK" -p 2 -L GoboLinux -l '\EFI\BOOT\BOOTX64.EFI' || true
+   run efibootmgr -c -d "$DISK" -p 2 -L GoboRefined -l '\EFI\BOOT\BOOTX64.EFI' || true
    video="insmod all_video"
 else
    # GRUB's core image goes into the BIOS boot partition (1), its files to GOBO_BOOT.
    if [ ! -e /dev/root ]
-   then ln -s "$A_PART" /dev/root; made_dev_root=1
+   then ln -s "$BOOT_PART" /dev/root; made_dev_root=1
    fi
    echo "+ grub-install (bios)" >> "$LOG"
    timeout 300 grub-install --target=i386-pc --no-floppy --boot-directory="$work/boot" \
-      --modules="part_gpt fat ext2 biosdisk search search_fs_uuid normal configfile loadenv test" \
+      --modules="part_gpt fat biosdisk search search_fs_uuid normal configfile loadenv test" \
       "$DISK" >> "$LOG" 2>&1 || die "grub-install failed"
    [ -f "$grubdir/i386-pc/normal.mod" ] || die "GRUB's BIOS modules were not installed"
    video="insmod vbe"
 fi
 
 step "Writing the boot menu"
+# Kernel and initramfs of version A to GOBO_BOOT/gobo/a (GRUB loads them from there).
+kpath=$(chroot "$SYS" /System/Index/bin/readlink -f /System/Kernel/Boot/kernel)
+ipath=$(chroot "$SYS" /System/Index/bin/readlink -f /System/Kernel/Boot/initramfs)
+case "$kpath:$ipath" in /System/Kernel/Boot/?*:/System/Kernel/Boot/?*|/Programs/?*:/Programs/?*) ;; *) die "kernel '$kpath' / initramfs '$ipath' not found in the new system" ;; esac
+[ -f "$SYS$kpath" ] && [ -f "$SYS$ipath" ] || die "the new system has no kernel or initramfs"
+mkdir -p "$work/boot/gobo/a"
+cp "$SYS$kpath" "$work/boot/gobo/a/kernel" && cp "$SYS$ipath" "$work/boot/gobo/a/initramfs" ||
+   die "could not copy the kernel to the boot partition"
 # From the template of the system just installed (the same file gobo-update uses when an update
 # brings a newer template); a checkout of the installer falls back to the copy next to it.
 GRUB_TEMPLATE=""
-for f in "$work/slot/Programs/GoboSpin/Current/share/gobo-update/grub.cfg.in" "$self_dir/grub.cfg.in"          "$self_dir/../spin/ab/grub.cfg.in"
+for f in "$SYS/Programs/GoboSpin/Current/share/gobo-update/grub.cfg.in" "$self_dir/grub.cfg.in" "$self_dir/../spin/ab/grub.cfg.in"
 do [ -z "$GRUB_TEMPLATE" ] && [ -f "$f" ] && GRUB_TEMPLATE="$f"
 done
 [ -n "$GRUB_TEMPLATE" ] || die "boot menu template grub.cfg.in not found"
-sed -e "s|@UUID_BOOT@|$UUID_BOOT|g" -e "s|@UUID_A@|$UUID_A|g" -e "s|@UUID_B@|$UUID_B|g"     -e "s|@UUID_DATA@|$UUID_DATA|g" -e "s|@PARTUUID_A@|$PARTUUID_A|g" -e "s|@PARTUUID_B@|$PARTUUID_B|g"     -e "s|@VIDEO@|$video|g" "$GRUB_TEMPLATE" > "$grubdir/grub.cfg.new"
+sed -e "s|@UUID_BOOT@|$UUID_BOOT|g" -e "s|@UUID_POOL@|$UUID_POOL|g" -e "s|@PARTUUID_POOL@|$PARTUUID_POOL|g" \
+    -e "s|@VIDEO@|$video|g" "$GRUB_TEMPLATE" > "$grubdir/grub.cfg.new"
 ! grep -qE "@[A-Z_]+@" "$grubdir/grub.cfg.new" || die "the boot menu template has unknown placeholders"
-grep -q "^set gobo_uuid_data=$UUID_DATA$" "$grubdir/grub.cfg.new" || die "the boot menu was not written correctly"
+grep -qx "set gobo_uuid_pool=$UUID_POOL" "$grubdir/grub.cfg.new" && grep -qx 'set gobo_layout=btrfs' "$grubdir/grub.cfg.new" ||
+   die "the boot menu was not written correctly (not the btrfs template?)"
+if command -v grub-script-check > /dev/null
+then grub-script-check "$grubdir/grub.cfg.new" >> "$LOG" 2>&1 || die "the boot menu has a syntax error"
+fi
 mv "$grubdir/grub.cfg.new" "$grubdir/grub.cfg"
 grub-editenv "$grubdir/grubenv" create
 grub-editenv "$grubdir/grubenv" set slot=a
+# Written last: GRUB offers version A from here on.
 sync
+grub-editenv "$work/boot/gobo/a/gobo-slot.env.new" create
+grub-editenv "$work/boot/gobo/a/gobo-slot.env.new" set "slot_version=${SPIN_VERSION:-unknown}"
+sync
+mv "$work/boot/gobo/a/gobo-slot.env.new" "$work/boot/gobo/a/gobo-slot.env"
+sync
+{ echo "+ space:"; btrfs filesystem usage "$work/pool" 2>&1 | sed -n '1,12p'; df -h "$work/boot" | tail -n 1; } >> "$LOG" 2>&1 || true
 
 ### Done #######################################################################
 
 step "Unmounting"
 sync
 trap - EXIT
-umount "$work/boot" "$work/data" "$work/slot" >> "$LOG" 2>&1 || true
-rmdir "$work/boot" "$work/data" "$work/slot" "$work" 2>/dev/null || true
+umount "$work/boot" "$work/pool" >> "$LOG" 2>&1 || true
+rmdir "$work/boot" "$work/pool" "$work" 2>/dev/null || true
 [ "${made_dev_root:-0}" = 1 ] && rm -f /dev/root
 echo "+ install time $((SECONDS - t_start)) s" >> "$LOG"
 
@@ -928,13 +951,13 @@ if [ "$UI" = menu ]
 then
    gauge_close
    if dialog --backtitle "$BT" --title "Done" --yes-label "Restart now" --no-label "Later" --yesno \
-      "\n$SPIN_NAME is installed on $DISK.\n(System slot A; slot B is filled by the first system update.)\n\n$next\n\n'$USER_NAME' is an administrator. More people (standard accounts, or Simple accounts for a child, a grandparent or a guest): Settings > Accounts > Add a person.\n\nDetails of the installation: $LOG" 17 80
+      "\n$SPIN_NAME is installed on $DISK.\n(System version A; version B is made by the first system update.)\n\n$next\n\n'$USER_NAME' is an administrator. More people (standard accounts, or Simple accounts for a child, a grandparent or a guest): Settings > Accounts > Add a person.\n\nDetails of the installation: $LOG" 17 80
    then clear; exec reboot
    fi
    clear
 fi
 echo
-echo "${c_cyan}$SPIN_NAME is installed on $DISK (system slot A; slot B is filled by the first update).${c_off}"
+echo "${c_cyan}$SPIN_NAME is installed on $DISK (system version A; version B is made by the first update).${c_off}"
 echo "$next"
 echo "'$USER_NAME' is an administrator. More people (standard or Simple accounts): Settings > Accounts > Add a person."
 echo "Full log: $LOG"

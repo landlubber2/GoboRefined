@@ -1,12 +1,18 @@
--- Updates: the running version, both system slots (gobo-update --status), install an update
--- file, go back to the previous version, restart. All through gobo-settings-helper.
+-- Updates: the running version, both system versions (gobo-update --status), the free space of the
+-- disk, install an update file, go back to the previous version, restart. All through
+-- gobo-settings-helper. 0.10: one btrfs pool holds both versions and the user's files, so the free
+-- space shown is the pool's (shared), not a fixed slot's.
 local P = { id = "updates", title = "Updates", icon = "system-software-update" }
 
 function P.build(C)
    local outer, box = C.page("Updates")
    local version = C.trim(C.read("/Programs/GoboSpin/Current/share/spin-version") or "?"):match("^[^\n]*")
    box:pack_start(C.text("This computer runs GoboRefined " .. version .. " (based on GoboLinux 017.01).", "gobo-value"), false, false, 0)
-   box:pack_start(C.text("GoboRefined keeps two copies of the system (slots A and B). An update is installed into the copy that is not running; the computer starts it after the next restart. If it does not start, the computer goes back to the other copy by itself.", "dim-label"), false, false, 0)
+   box:pack_start(C.text("GoboRefined keeps two versions of the system (A and B). An update becomes the version that is not running; the computer starts it after the next restart. If it does not start, the computer goes back to the other version by itself. Files that did not change are shared by both versions, so the second version takes little space.", "dim-label"), false, false, 0)
+   local avail = C.pread("df -h --output=avail /System/Data"):match("\n%s*(%S+)")
+   if avail then
+      box:pack_start(C.text("Free on the disk: about " .. avail .. " (shared by the system versions and your files)", "dim-label"), false, false, 0)
+   end
 
    local scroll, append, clear = C.output_view(200)
    local busy = false
@@ -24,8 +30,8 @@ function P.build(C)
       end, function(line) append(line .. "\n") end)
    end
 
-   local status = C.button("Show both system slots", function()
-      run({ "update-status" }, "Asking for the system slots...")
+   local status = C.button("Show both system versions", function()
+      run({ "update-status" }, "Asking for the system versions...")
    end)
    local install = C.button("Install update from file...", function()
       local file = C.choose_file("Choose an update file", "GoboRefined updates (*.update)", { "*.update" }, C.HOME .. "/Downloads")
@@ -42,7 +48,7 @@ function P.build(C)
       end)
    end, "suggested-action")
    local rollback = C.button("Go back to the previous version...", function()
-      if not C.confirm("Start the other system copy (the previous version) from the next restart on?\nYour files and settings are kept.", "Go back") then return end
+      if not C.confirm("Start the other system version (the previous one) from the next restart on?\nYour files and settings are kept.", "Go back") then return end
       run({ "update-rollback" }, "Choosing the previous version...", function(ok)
          if ok then restart_btn.sensitive = true end
       end)

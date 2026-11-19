@@ -1,26 +1,26 @@
 #!/bin/sh
-# GoboRefined A/B (0.8): assemble the root file system in the initramfs.
+# GoboRefined A/B: assemble the root file system in the initramfs (0.8; btrfs layout since 0.10).
 #
-#   goboab-root NEWROOT SLOT SLOTDEV DATADEV normal|safe [LAYOUT]
+#   goboab-root NEWROOT SLOT POOLDEV POOLDEV normal|safe btrfs
 #
-# LAYOUT (gobo.layout= on the kernel command line): empty or "ext4" = the 0.8 layout (slots GOBO_A,
-# GOBO_B and GOBO_DATA are partitions); "btrfs" = the 0.10 layout (prototype, docs/ab-btrfs-plan.md):
-# SLOTDEV and DATADEV are both the GOBO_POOL partition; the slot is subvolume @system-SLOT (read-only),
-# the data subvolume @data (holds the same folders as GOBO_DATA).
+# The 0.10 layout (docs/ab-design.md): one btrfs partition GOBO_POOL holds the two system versions
+# (subvolumes @system-a, @system-b; read-only), the data (@data: the folders GOBO_DATA held in the
+# 0.8 layout) and the swap file (@swap). The ext4 layout of 0.8-0.9.x (partitions GOBO_A, GOBO_B,
+# GOBO_DATA) is not started by this initramfs: those computers are reinstalled.
 #
 # Layers of "/" (overlayfs), top to bottom:
-#   upper    GOBO_DATA:/System-Overlay/upper   every change made to system files after the install
+#   upper    @data:/System-Overlay/upper     every change made to system files after the install
 #            (a throw-away tmpfs instead in "safe" mode = "without my system changes")
-#   install  GOBO_DATA:/System-Overlay/install the machine's own settings written by gobo-install
+#   install  @data:/System-Overlay/install   the machine's own settings written by gobo-install
 #            (accounts, hostname, fstab, keyboard, login screen); read-only here
-#   slot     GOBO_A or GOBO_B                  the pristine system image; read-only
-# Mounted on top: GOBO_DATA:/Users -> /Users, GOBO_DATA:/Variable -> /Data/Variable;
-# the data partition itself -> /System/Data, the slot -> /System/Slot (both for gobo-update).
+#   system   @system-a or @system-b          the pristine system image; read-only
+# Mounted on top: @data:/Users -> /Users, @data:/Variable -> /Data/Variable, @swap ->
+# /Data/Variable/swap; @data itself -> /System/Data, the version -> /System/Slot (for gobo-update).
 #
 # Also done here, before anything uses the overlay:
 #   - "gobo-update --reset-system-changes" (flag file): upper -> previous-upper, new empty upper
 #     that keeps only the account files;
-#   - first boot of a different system version: generated caches listed in the slot's
+#   - first boot of a different system version: generated caches listed in the version's
 #     share/gobo-update/generated-caches are removed from the overlay layers (the booted system
 #     regenerates them: gobo-update --boot-task).
 # All paths removed here are fixed names below $G or validated list entries; nothing is derived
@@ -31,7 +31,7 @@ SLOT="$2"
 SLOTDEV="$3"
 DATADEV="$4"
 MODE="$5"
-LAYOUT="${6:-ext4}"
+LAYOUT="${6:-}"
 
 G=/goboab
 O=$G/data/System-Overlay
@@ -44,50 +44,32 @@ fail() { say "$*"; exit 1; }
 
 case "$SLOT" in a|b) ;; *) fail "gobo.slot must be a or b (got '$SLOT')" ;; esac
 case "$MODE" in normal|safe) ;; *) fail "unknown mode '$MODE'" ;; esac
-case "$LAYOUT" in ext4|btrfs) ;; *) fail "unknown layout '$LAYOUT'" ;; esac
-[ -b "$SLOTDEV" ] || fail "slot device $SLOTDEV not found"
-[ -b "$DATADEV" ] || fail "data device $DATADEV not found"
+[ "$LAYOUT" = btrfs ] || fail "this system starts only from the btrfs layout of 0.10 (gobo.layout=btrfs; got '$LAYOUT')"
+[ -b "$SLOTDEV" ] || fail "pool device $SLOTDEV not found"
+[ -b "$DATADEV" ] || fail "pool device $DATADEV not found"
 [ -n "$NEWROOT" ] && [ -d "$NEWROOT" ] || fail "no NEWROOT"
 
 modprobe -q overlay 2>/dev/null
-modprobe -q ext4 2>/dev/null
-mkdir -p $G/slot $G/data $G/mem
+modprobe -q btrfs 2>/dev/null
+mkdir -p $G/slot $G/data $G/mem $G/swap
 
-if [ "$LAYOUT" = btrfs ]
-then
-   # 0.10 (prototype): one btrfs pool. Copy-on-write, so no check before mounting (a power cut
-   # leaves the last committed state). @data read-write first (the compression option applies to
-   # the whole file system), then the slot's subvolume read-only (it also has the btrfs ro flag).
-   modprobe -q btrfs 2>/dev/null
-   mount -t btrfs -o rw,noatime,compress=zstd:3,subvol=@data "$DATADEV" $G/data || fail "cannot mount subvolume @data of $DATADEV"
-   mount -t btrfs -o ro,noatime,subvol=@system-$SLOT "$SLOTDEV" $G/slot || fail "cannot mount slot $SLOT (subvolume @system-$SLOT of $SLOTDEV)"
-   # The swap file lives in its own subvolume (no copy-on-write, no compression: btrfs needs that
-   # for swap files); mounted at /Data/Variable/swap below. The boot scripts only "mount -a -f".
-   SWAPVOL=""
-   mkdir -p $G/swap
-   if mount -t btrfs -o rw,noatime,subvol=@swap "$DATADEV" $G/swap 2>/dev/null
-   then SWAPVOL=1
-   else say "no subvolume @swap (no swap file)"
-   fi
-else
-# Data partition: e2fsck in preen mode before mounting. After a power cut it replays the journal
-# itself ("recovering journal"; the kernel would do the same at mount, which is normal ext4
-# behaviour) and repairs the inconsistencies that preen mode may fix safely. Every line it prints
-# goes to the kernel log (dmesg | grep GoboRefined), so a check that did something is visible.
-fsck_out=$(e2fsck -p "$DATADEV" 2>&1)
-rc=$?
-printf '%s\n' "$fsck_out" | while IFS= read -r line
-do [ -n "$line" ] && say "  e2fsck: $line"
-done
-say "data partition check: e2fsck exit $rc"
-[ $rc -ge 4 ] && say "the data partition has errors e2fsck could not fix; trying anyway"
-mount -t ext4 -o rw,noatime "$DATADEV" $G/data || fail "cannot mount the data partition $DATADEV"
-mount -t ext4 -o ro "$SLOTDEV" $G/slot || fail "cannot mount slot $SLOT ($SLOTDEV)"
+# One btrfs pool. Copy-on-write, so no check before mounting (a power cut leaves the last committed
+# state). @data read-write first (the compression option applies to the whole file system), then the
+# version's subvolume read-only (it also carries the btrfs ro flag).
+mount -t btrfs -o rw,noatime,compress=zstd:3,subvol=@data "$DATADEV" $G/data || fail "cannot mount subvolume @data of $DATADEV"
+mount -t btrfs -o ro,noatime,subvol=@system-$SLOT "$SLOTDEV" $G/slot || fail "cannot mount version $SLOT (subvolume @system-$SLOT of $SLOTDEV)"
+# The swap file lives in its own subvolume (no copy-on-write, no compression: btrfs needs that for
+# swap files); mounted at /Data/Variable/swap below (the boot scripts only "mount -a -f", so an fstab
+# line for the subvolume would never be mounted).
+SWAPVOL=""
+if mount -t btrfs -o rw,noatime,subvol=@swap "$DATADEV" $G/swap 2>/dev/null
+then SWAPVOL=1
+else say "no subvolume @swap (no swap file)"
 fi
 if [ ! -f $G/slot/gobo-slot.env ]
 then
    umount $G/slot
-   fail "slot $SLOT is empty or was not written completely; start the other slot"
+   fail "version $SLOT is empty or was not written completely; start the other one"
 fi
 mkdir -p $O/install $O/upper $O/work
 
@@ -147,7 +129,7 @@ fi
 # --- the overlay ----------------------------------------------------------------------------------
 if [ "$MODE" = safe ]
 then
-   say "starting slot $SLOT WITHOUT the system changes (changes go to memory and are lost)"
+   say "starting version $SLOT WITHOUT the system changes (changes go to memory and are lost)"
    mount -t tmpfs -o mode=0755 goboab-mem $G/mem || fail "cannot mount a tmpfs"
    mkdir -p $G/mem/upper/System/Settings $G/mem/work
    # The accounts as they are now, so the user can log in (passwords changed after the install).
@@ -177,5 +159,5 @@ fi
 # For gobo-update (status, reset flag, booted version) and for looking at the slot itself.
 [ -d "$NEWROOT/System/Data" ] && mount --move $G/data "$NEWROOT/System/Data"
 [ -d "$NEWROOT/System/Slot" ] && mount --move $G/slot "$NEWROOT/System/Slot"
-say "root assembled: slot $SLOT (${version:-?}), $MODE mode"
+say "root assembled: version $SLOT (${version:-?}), $MODE mode"
 exit 0

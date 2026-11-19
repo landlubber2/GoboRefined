@@ -22,7 +22,15 @@ disk_of() {   # disk_of SYSFS_DIR -> kernel name of the whole disk
 data_disk() {
    majmin=$(awk '$5 == "/System/Data" { print $3; exit }' /proc/self/mountinfo 2>/dev/null)
    [ -n "$majmin" ] || return 1
-   dir=$(readlink -f "/sys/dev/block/$majmin") || return 1
+   case "$majmin" in
+      0:*)  # 0.10: btrfs (subvolume @data) reports an anonymous device number; use its source device
+         src=$(awk '$5 == "/System/Data" { for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 2); exit } }' /proc/self/mountinfo 2>/dev/null)
+         case "$src" in /*) ;; *) return 1 ;; esac
+         name=$(basename "$(readlink -f "$src" 2>/dev/null || echo "$src")")
+         case "$name" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; esac
+         dir=$(readlink -f "/sys/class/block/$name") || return 1 ;;
+      *) dir=$(readlink -f "/sys/dev/block/$majmin") || return 1 ;;
+   esac
    [ -d "$dir" ] || return 1
    disk_of "$dir"
 }

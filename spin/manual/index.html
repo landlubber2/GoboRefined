@@ -85,7 +85,7 @@
 
 <h2 id="updates">Updates and going back</h2>
 <ul>
-  <li>GoboRefined keeps <b>two copies of the system</b> (slots A and B). An update is installed into the copy that is not running and is used from the next restart. Your files and settings are on a separate data partition and are kept.</li>
+  <li>GoboRefined keeps <b>two versions of the system</b> (A and B). An update becomes the version that is not running and is used from the next restart; files that did not change are shared by both, so the second version takes little space. Your files and settings are kept by every update.</li>
   <li>Install an update: <b>Settings &gt; Software &gt; Updates &gt; Install update from file...</b>, or in a terminal <code>sudo gobo-update /path/to/GoboRefined-&lt;version&gt;.update</code>, then restart. Only update files signed by the GoboRefined project are accepted.</li>
   <li>Go back to the previous version: the same page, or <code>sudo gobo-update --rollback</code>, then restart. If an updated system does not start, the computer goes back to the other copy by itself.</li>
   <li><code>sudo gobo-update --status</code> shows both copies and which one starts next.</li>

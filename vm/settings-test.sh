@@ -48,7 +48,7 @@ ok "autologin tester" "$(H autologin tester; H autologin-status)" "^tester$"
 ok "autologin off" "$(H autologin off; H autologin-status)" "^off$"
 ok "ssh status off by default" "$(H ssh-status)" "^off"
 ok "report: kernel messages and slots" "$(H report | grep -c -E '^=== (Last kernel|gobo-update --status)')" "^2$"
-ok "update-status" "$(H update-status)" "slot A"
+ok "update-status" "$(H update-status)" "GoboRefined system versions"   # 0.10: versions A/B (was "slot A")
 # 0.8.2 part 2: Bluetooth and hotspot sub-commands (the VM has neither Bluetooth nor Wi-Fi)
 ok "refused: bluetooth-boot bad word" "$(H bluetooth-boot maybe)" "say on or off"
 ok "bluetooth-boot off -> flag" "$(H bluetooth-boot off; S 'ls /Data/Variable/lib/gobo-settings/')" "bluetooth-off-at-boot"

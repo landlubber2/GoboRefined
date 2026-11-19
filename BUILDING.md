@@ -100,7 +100,9 @@ linux-firmware collection (kernel.org), Sound Open Firmware (sof-bin), the SBC c
 PulseAudio 13.0 source (only its Bluetooth modules are built and added to the stock PulseAudio),
 and (0.9.7) the GNU C library 2.38 (`glibc-2.38.tar.xz`, with the fixes of its stable branch from
 `spin/patches/glibc-2.38-branch-*.patch`; step `glibc`, about 10 minutes on 6 CPUs, installed next to the build
-root's own 2.30, which the build keeps using; the image step makes 2.38 the system's C library).
+root's own 2.30, which the build keeps using; the image step makes 2.38 the system's C library), and (0.10)
+btrfs-progs 7.3 and rsync 3.5.2 (steps `btrfs-progs`, `rsync`; the installer makes the btrfs pool, `gobo-update` snapshots
+and copies with rsync).
 A file whose sha256 differs is refused. Patches we apply are in `spin/patches/`; licences and
 redistribution notes are in `docs/third-party.md`.
 
@@ -148,3 +150,10 @@ redistribution notes are in `docs/third-party.md`.
 
 Our own scripts, look files and tools are licensed GPL-2.0-or-later (see `LICENSE`). Third-party
 components keep their own licences; they are listed in `docs/third-party.md`.
+
+## Update file format (0.10)
+
+The update file ends with an 8 KiB signed trailer whose first line is `GOBOREFINED-UPDATE 2` (0.10, the
+btrfs layout; the manifest also says `layout=btrfs`). Format 1 was 0.8-0.9.x (ext4 slots): a 0.9.x
+`gobo-update` refuses format 2 files, and 0.10 refuses format 1 files, so neither layout can be given the
+other's system by mistake. Installed 0.8-0.9.x systems are reinstalled for 0.10.

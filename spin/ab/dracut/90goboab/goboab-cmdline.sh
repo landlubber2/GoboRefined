@@ -1,5 +1,5 @@
 #!/bin/sh
-# GoboRefined A/B: root=gobo gobo.slot=a|b gobo.root=UUID=<slot fs> gobo.data=UUID=<data fs>
+# GoboRefined A/B: root=gobo gobo.layout=btrfs gobo.slot=a|b gobo.root=UUID=<pool> gobo.data=UUID=<pool>
 #                  [gobo.system-changes=off]
 # Written by GRUB's menu (grub.cfg on GOBO_BOOT, made by gobo-install).
 

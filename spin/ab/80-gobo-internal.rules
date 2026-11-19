@@ -4,11 +4,12 @@
 # 0.8.2: also BIOS boot partitions (by GPT name and by GPT type; the real PC logged "FAT-fs
 # (sdc1): Directory bread failed" each time devmon tried the unlabelled 1 MB partition) and
 # every partition of the disk that holds the running system's data partition (gobo-system-disk).
+# 0.10: + GOBO_POOL (btrfs layout).
 # Installed as /Programs/GoboSpin/Current/lib/udev/rules.d/80-gobo-internal.rules.
 SUBSYSTEM!="block", GOTO="gobo_internal_end"
 ACTION=="remove", GOTO="gobo_internal_end"
-ENV{ID_PART_ENTRY_NAME}=="BIOSBOOT|GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
-ENV{ID_FS_LABEL}=="GOBO_BOOT|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+ENV{ID_PART_ENTRY_NAME}=="BIOSBOOT|GOBO_BOOT|GOBO_POOL|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
+ENV{ID_FS_LABEL}=="GOBO_BOOT|GOBO_POOL|GOBO_A|GOBO_B|GOBO_DATA", GOTO="gobo_internal_set"
 ENV{ID_PART_ENTRY_TYPE}=="21686148-6449-6e6f-744e-656564454649", GOTO="gobo_internal_set"
 # 0.8.4: helper partitions of USB sticks are never offered as drives either: Ventoy's VTOYEFI and
 # EFI system partitions in general (GPT type, or MBR type 0xef); the stick's main partition still mounts.
