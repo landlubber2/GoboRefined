@@ -715,6 +715,18 @@ fi
 in_target ln -sfn "/System/Index/share/zoneinfo/$TIMEZONE" /Programs/Glibc/Settings/localtime
 in_target ln -sfn "/System/Index/share/zoneinfo/$TIMEZONE" /System/Settings/localtime
 
+# 0.10.3: this computer's own random ID (/etc/machine-id, read by Chrome/Electron and others;
+# 017.01 never wrote it) and D-Bus's copy on the data partition: the same new ID, made here
+# once per installation. /etc/machine-id lands in the install layer, so updates never change it.
+MACHINE_ID=$(tr -d '-' < /proc/sys/kernel/random/uuid)
+[[ "$MACHINE_ID" =~ ^[0-9a-f]{32}$ ]] || die "could not make a machine ID"
+rm -f "$DEST/System/Settings/machine-id" "$DAT/Variable/lib/dbus/machine-id"
+printf '%s\n' "$MACHINE_ID" > "$DEST/System/Settings/machine-id"
+mkdir -p "$DAT/Variable/lib/dbus"
+printf '%s\n' "$MACHINE_ID" > "$DAT/Variable/lib/dbus/machine-id"
+chmod 444 "$DEST/System/Settings/machine-id"
+chmod 644 "$DAT/Variable/lib/dbus/machine-id"
+
 ### 5. Users ###################################################################
 
 step "Creating users"

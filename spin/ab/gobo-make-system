@@ -179,6 +179,13 @@ then
    sed -i 's|^\(Exec "Starting Bluetooth daemon\.\.\."\)|Exec "Setting the Bluetooth name..."           /System/Index/bin/gobo-settings-helper boot-bluetooth-name\n\1|' "$bootup"
    grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup" || die "could not add the Bluetooth name step to BootUp"
 fi
+# 0.10.3: /etc/machine-id (the same ID as D-Bus's, written into the install layer) before the
+# message bus starts
+if ! grep -q 'gobo-settings-helper boot-machine-id' "$bootup"
+then
+   sed -i 's|^\(Exec "Starting message bus\.\.\."\)|Exec "Checking the machine ID..."             /System/Index/bin/gobo-settings-helper boot-machine-id\n\1|' "$bootup"
+   grep -q 'gobo-settings-helper boot-machine-id' "$bootup" || die "could not add the machine ID step to BootUp"
+fi
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 

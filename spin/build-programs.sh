@@ -917,6 +917,65 @@ rsync)
    SymlinkProgram Rsync $V | tail -n 1
    $P/bin/rsync --version | head -n 3
    ;;
+libva)
+   # 0.10.3: LibVA 2.24.1 (VA-API 1.24) instead of 017.01's 2.7.0 (VA-API 1.7): Chromium/Electron
+   # (Chrome, Electron AppImages) refuse VA-API below 1.17 ("Installed VAAPI version is too old").
+   # Same library names (libva.so.2, -drm, -x11, -glx), same driver folder (/usr/lib/dri, where
+   # 017.01's Mesa 19.3 VA drivers are: nouveau, r600, radeonsi; they still load, VA-API keeps the
+   # old driver entry points) and the same /etc/libva.conf as the stock build. No Wayland (017.01
+   # has none). The newest release still ships configure (autotools; meson does not work here).
+   # Installed and linked in the build root too (libva-utils builds against it); the image step
+   # drops 2.7.0 (only FFmpeg 4.2 links libva, through the unchanged sonames).
+   V=2.24.1 P=/Programs/LibVA/2.24.1
+   unpack libva-$V.tar.bz2 libva-$V
+   rm -rf $P
+   ./configure --prefix=$P --sysconfdir=/etc --disable-static --enable-drm --enable-x11 --enable-glx \
+      --disable-wayland --with-drivers-path=/usr/lib/dri > /Data/Build/libva-configure.log 2>&1 ||
+      { tail -n 30 /Data/Build/libva-configure.log; exit 1; }
+   grep -q 'Extra window systems .*: drm x11 glx' /Data/Build/libva-configure.log || { tail -n 12 /Data/Build/libva-configure.log; echo "libva: drm/x11/glx not all found"; exit 1; }
+   make -j$(nproc) > /Data/Build/libva-make.log 2>&1 || { grep -m 5 -B 3 -A 3 'error' /Data/Build/libva-make.log; tail -n 30 /Data/Build/libva-make.log; exit 1; }
+   make install > /Data/Build/libva-install.log 2>&1 || { tail -n 30 /Data/Build/libva-install.log; exit 1; }
+   rm -f $P/lib/*.la
+   mkdir -p $P/Resources $P/doc
+   install -m 644 COPYING $P/doc/
+   echo x86_64 > $P/Resources/Architecture
+   printf 'LibDRM\nLibX11\nLibXext\nLibXfixes\nLibGLVnd\n' > $P/Resources/Dependencies
+   printf '[Name] LibVA\n[Summary] %s\n[License] MIT\n[Homepage] https://github.com/intel/libva\n' \
+      "Video Acceleration API (VA-API) library" > $P/Resources/Description
+   echo "[File] https://github.com/intel/libva/releases/download/$V/libva-$V.tar.bz2" > $P/Resources/PackageSource
+   chown -R root:root $P
+   # the stock 2.7.0's index links go first, so that nothing is left pointing at it
+   find /System/Index -xdev -lname '/Programs/LibVA/2.7.0/*' -print0 > /Data/Build/libva-old-links
+   xargs -0 -r rm -f < /Data/Build/libva-old-links
+   ln -sfn $V /Programs/LibVA/Current
+   SymlinkProgram LibVA $V | tail -n 1
+   [ "$(readlink -f /System/Index/lib/libva.so.2)" = "$P/lib/libva.so.2.2400.0" ] || { echo "libva.so.2 is not $V's"; exit 1; }
+   grep -q 'VA_MINOR_VERSION *24' $P/include/va/va_version.h || { echo "not VA-API 1.24"; exit 1; }
+   ;;
+libva-utils)
+   # 0.10.3: vainfo (and the VA-API test programs of libva-utils) to check video acceleration:
+   # "vainfo" shows the driver and what it can decode. Built against LibVA 2.24.1 (step libva).
+   V=2.24.0 P=/Programs/LibVA-Utils/2.24.0
+   [ "$(readlink /Programs/LibVA/Current)" = 2.24.1 ] || { echo "LibVA 2.24.1 is not built (step libva)"; exit 1; }
+   unpack libva-utils-$V.tar.bz2 libva-utils-$V
+   rm -rf $P
+   ./configure --prefix=$P --enable-drm --enable-x11 --disable-wayland --disable-tests \
+      > /Data/Build/libva-utils-configure.log 2>&1 || { tail -n 30 /Data/Build/libva-utils-configure.log; exit 1; }
+   make -j$(nproc) > /Data/Build/libva-utils-make.log 2>&1 || { grep -m 5 -B 3 -A 3 'error' /Data/Build/libva-utils-make.log; tail -n 30 /Data/Build/libva-utils-make.log; exit 1; }
+   make install > /Data/Build/libva-utils-install.log 2>&1 || { tail -n 30 /Data/Build/libva-utils-install.log; exit 1; }
+   ln -sfn $V /Programs/LibVA-Utils/Current
+   mkdir -p $P/Resources $P/doc
+   install -m 644 COPYING $P/doc/
+   echo x86_64 > $P/Resources/Architecture
+   printf 'LibVA >= 2.24.1\nLibDRM\nLibX11\n' > $P/Resources/Dependencies
+   printf '[Name] LibVA-Utils\n[Summary] %s\n[License] MIT\n[Homepage] https://github.com/intel/libva-utils\n' \
+      "VA-API tools: vainfo (video acceleration driver and profiles) and test programs" > $P/Resources/Description
+   echo "[File] https://github.com/intel/libva-utils/releases/download/$V/libva-utils-$V.tar.bz2" > $P/Resources/PackageSource
+   chown -R root:root $P
+   SymlinkProgram LibVA-Utils $V | tail -n 1
+   lib=$(ldd $P/bin/vainfo | awk '$1 == "libva.so.2" { print $3 }')
+   [ -n "$lib" ] && [ "$(readlink -f "$lib")" = /Programs/LibVA/2.24.1/lib/libva.so.2.2400.0 ] || { ldd $P/bin/vainfo; echo "vainfo does not use LibVA 2.24.1"; exit 1; }
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"

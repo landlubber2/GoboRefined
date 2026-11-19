@@ -41,10 +41,11 @@ KREL=$KVER-Gobo
 # 0.9.1: + linux (before rtl8852au, which is built against it), intel-microcode, firefox, ca-bundle
 # 0.9.7: + glibc (the C library 2.38; installed next to the build root's 2.30, which stays in use)
 # 0.10: + btrfs-progs, rsync (the btrfs A/B layout: mkfs.btrfs, snapshots; gobo-update copies with rsync)
+# 0.10.3: + libva, libva-utils (VA-API 1.24 for Chromium/Electron; vainfo)
 STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavucontrol lxrandr
        lxdm udevil usb-modeswitch linux rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
-       sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle glibc btrfs-progs rsync"
-LAST_STEP=rsync
+       sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle glibc btrfs-progs rsync libva libva-utils"
+LAST_STEP=libva-utils
 
 say() { echo "== $*"; }
 die() { echo "build.sh: ERROR: $*" >&2; exit 1; }

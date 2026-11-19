@@ -102,7 +102,8 @@ and (0.9.7) the GNU C library 2.38 (`glibc-2.38.tar.xz`, with the fixes of its s
 `spin/patches/glibc-2.38-branch-*.patch`; step `glibc`, about 10 minutes on 6 CPUs, installed next to the build
 root's own 2.30, which the build keeps using; the image step makes 2.38 the system's C library), and (0.10)
 btrfs-progs 7.3 and rsync 3.5.2 (steps `btrfs-progs`, `rsync`; the installer makes the btrfs pool, `gobo-update` snapshots
-and copies with rsync).
+and copies with rsync), and (0.10.3) libva 2.24.1 and libva-utils 2.24.0 (steps `libva`, `libva-utils`: VA-API 1.24
+instead of 017.01's libva 2.7.0, which Chromium/Electron refuse as too old; `vainfo`; a few seconds each).
 A file whose sha256 differs is refused. Patches we apply are in `spin/patches/`; licences and
 redistribution notes are in `docs/third-party.md`.
 

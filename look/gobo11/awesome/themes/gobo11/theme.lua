@@ -218,15 +218,20 @@ theme.mode_icon = glyph(function(cr)
    cr:arc(24, 24, 14, -math.pi / 2, math.pi / 2); cr:line_to(24, 10); cr:fill()
 end)
 
--- Fallback icon for windows that do not provide one (e.g. the terminal).
+-- Fallback icon for windows that do not provide one and that no icon theme knows.
+-- 0.10.3: a generic program window (title bar + content), no longer a terminal prompt: such
+-- windows (AppImages) looked like a second terminal button in the taskbar.
 theme.default_app_icon = surface(48, 48, function(cr)
    cr:translate(6, 9)
    gears.shape.rounded_rect(cr, 36, 30, 5)
    set_color(cr, MODE == "dark" and "#3a3a3a" or "#ffffff"); cr:fill_preserve()
    set_color(cr, p.fg_dim); cr:set_line_width(1.5); cr:stroke()
-   set_color(cr, p.accent); cr:set_line_width(2.5)
-   cr:move_to(8, 10); cr:line_to(14, 15); cr:line_to(8, 20); cr:stroke()
-   cr:move_to(17, 21); cr:line_to(27, 21); cr:stroke()
+   set_color(cr, p.accent)
+   gears.shape.partially_rounded_rect(cr, 36, 8, true, true, false, false, 5); cr:fill()
+   set_color(cr, p.fg_dim)
+   cr:rectangle(6, 13, 10, 11); cr:fill()
+   cr:rectangle(19, 13, 11, 3); cr:fill()
+   cr:rectangle(19, 19, 8, 3); cr:fill()
 end)
 
 -- Menus -----------------------------------------------------------------

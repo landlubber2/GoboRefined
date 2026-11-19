@@ -56,3 +56,7 @@ glibc           2.38          glibc-2.38.tar.xz                            fb829
 # GoboFiles (spin/gobofiles/) is the project's own code and is built from the checkout.
 btrfs-progs     7.3           btrfs-progs-v7.3.tar.xz                      d37b63403d25fe025704c758e6a3da0979ae50c30c5f02aa78e4410e7b346e3a  GPL-2.0-only         https://mirrors.edge.kernel.org/pub/linux/kernel/people/kdave/btrfs-progs/btrfs-progs-v7.3.tar.xz
 rsync           3.5.2         rsync-3.5.2.tar.gz                           a10d591825251e070f74c98df3daad195def4ed81b4a2de16169026aea33f6c8  GPL-3.0-or-later     https://download.samba.org/pub/rsync/src/rsync-3.5.2.tar.gz
+
+# 0.10.3 (downloaded 2026-11-19 from the GitHub releases of intel/libva and intel/libva-utils):
+libva           2.24.1        libva-2.24.1.tar.bz2                         eec6050b52876f229bd35e9df17cd31a06785e18e6f7990c445b584628483d67  MIT                  https://github.com/intel/libva/releases/download/2.24.1/libva-2.24.1.tar.bz2
+libva-utils     2.24.0        libva-utils-2.24.0.tar.bz2                   7f066b33f369bdfb5d8f7644d623b4263acc230a438ee380473450d687e3faa8  MIT                  https://github.com/intel/libva-utils/releases/download/2.24.0/libva-utils-2.24.0.tar.bz2

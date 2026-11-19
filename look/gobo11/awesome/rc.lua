@@ -569,8 +569,50 @@ mytasklist.buttons = awful.util.table.join(
 -- icon theme by window class, so they do not all show the generic icon.
 local class_icon_alias = { urxvt = "utilities-terminal", xterm = "utilities-terminal", zenity = "gnome-info" }
 local class_icons = {}
+-- 0.10.3: an icon that draws nothing (0x0) counts as no icon
+local function usable(icon)
+   if not icon then return nil end
+   local ok, w, h = pcall(function() return gears.surface.get_size(gears.surface(icon)) end)
+   if ok and w and h and w > 0 and h > 0 then return icon end
+   return nil
+end
+-- 0.10.3: AppImages (Flutter apps such as AppImage Pool, many Electron apps) often set no
+-- window icon and a class no icon theme knows: their taskbar button showed the generic
+-- fallback, easy to take for the terminal they were started from. The AppImage's own icon is
+-- .DirIcon in its mounted folder ($APPDIR in the program's environment).
+local appimage_icons = {}           -- APPDIR -> surface, or false
+local client_fallback = setmetatable({}, { __mode = "k" })
+local function appimage_icon(c)
+   if not c.pid or c.pid <= 0 then return nil end
+   local f = io.open("/proc/" .. c.pid .. "/environ", "rb")
+   if not f then return nil end
+   local env = f:read("a") or ""
+   f:close()
+   local appdir, pos = nil, 1
+   while pos <= #env do
+      local e = env:find("\0", pos, true) or (#env + 1)
+      if env:sub(pos, pos + 6) == "APPDIR=" then appdir = env:sub(pos + 7, e - 1); break end
+      pos = e + 1
+   end
+   if not appdir or appdir == "" or appdir:find("\n", 1, true) then return nil end
+   if appimage_icons[appdir] == nil then
+      local icon = false
+      for _, name in ipairs({ ".DirIcon", (c.instance or ""):lower() .. ".png", (c.instance or ""):lower() .. ".svg" }) do
+         if name ~= ".png" and name ~= ".svg" then
+            local s = usable(gears.surface.load_silently(appdir .. "/" .. name, false))
+            if s then icon = s; break end
+         end
+      end
+      appimage_icons[appdir] = icon
+   end
+   return appimage_icons[appdir] or nil
+end
 local function client_icon(c)
-   if c.icon then return c.icon end
+   local own = usable(c.icon)
+   if own then return own end
+   if client_fallback[c] then return client_fallback[c] end
+   local from_appimage = appimage_icon(c)
+   if from_appimage then client_fallback[c] = from_appimage; return from_appimage end
    local class = (c.class or ""):lower()
    if class_icons[class] == nil then
       local names = {}

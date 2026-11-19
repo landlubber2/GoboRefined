@@ -80,7 +80,7 @@ grep -q "PRIVATE KEY" "$PUBKEY" && { echo "$PUBKEY holds a private key"; exit 1;
 echo "== adding programs to the live image"
 EXTRA="XRandR-Tool Inter JetBrains-Mono Papirus-Icon-Theme Menu-Cache LibFM PCManFM PaVuControl LxRandr LXDM
        Udevil USB-ModeSwitch OnlyOffice CopyQ GoboFiles L3afpad Dnsmasq Linux-Firmware SOF-Firmware SBC
-       Intel-Microcode Firefox Btrfs-Progs Rsync"   # 0.8.5: + SBC (Bluetooth audio codec); 0.9.1: + Intel-Microcode, Firefox ESR (replaces the stock 136.0); 0.10: + Btrfs-Progs, Rsync (btrfs layout)
+       Intel-Microcode Firefox Btrfs-Progs Rsync LibVA LibVA-Utils"   # 0.8.5: + SBC (Bluetooth audio codec); 0.9.1: + Intel-Microcode, Firefox ESR (replaces the stock 136.0); 0.10: + Btrfs-Progs, Rsync (btrfs layout); 0.10.3: + LibVA 2.24.1 (replaces the stock 2.7.0), LibVA-Utils (vainfo)
 # kernel modules are not linked by SymlinkProgram (/System/Index/lib/modules is a link into Linux)
 MODULES="RTL8852AU"
 # 0.9.1: the kernel is built by the step "linux" (spin/build-programs.sh); its version is the one
@@ -95,8 +95,8 @@ do
 done
 # 0.8.4: these two replace stock programs of the same name; the build root still has the stock
 # version next to the new one (20250309-GIT, 1.4.2): keep only the new version (Current)
-# (0.9.1: the same for Firefox: ESR instead of the stock 136.0_bin)
-for prog in Linux-Firmware SOF-Firmware Firefox
+# (0.9.1: the same for Firefox: ESR instead of the stock 136.0_bin; 0.10.3: LibVA 2.24.1 instead of 2.7.0)
+for prog in Linux-Firmware SOF-Firmware Firefox LibVA
 do
    cur=$(readlink $R/Programs/$prog/Current)
    [ -n "$cur" ] && [ -d "$R/Programs/$prog/$cur" ] || { echo "$prog: no Current version"; exit 1; }
@@ -291,9 +291,25 @@ for d in bin share/applications share/icons
 do find $R/System/Index/$d -maxdepth 1 -lname '/Programs/Firefox/*' -print0
 done > $B/old-firefox-links
 xargs -0 -r rm -f < $B/old-firefox-links
+# 0.10.3: the same for the stock LibVA 2.7.0 (libraries, headers, pkg-config files; its folder was dropped above)
+find $R/System/Index -xdev -lname '/Programs/LibVA/2.7.0/*' -print0 > $B/old-libva-links
+echo "index links into LibVA 2.7.0: $(tr -cd '\0' < $B/old-libva-links | wc -c)"
+xargs -0 -r rm -f < $B/old-libva-links
 for prog in $EXTRA
 do chroot $R SymlinkProgram $prog | tail -n 1
 done
+# 0.10.3: VA-API 1.24 for Chromium/Electron; FFmpeg (the only stock user) still finds every libva symbol
+[ "$(chroot $R readlink -f /System/Index/lib/libva.so.2)" = "/Programs/LibVA/2.24.1/lib/libva.so.2.2400.0" ] ||
+   { echo "libva.so.2 is not LibVA 2.24.1's"; exit 1; }
+left=$(find $R/System/Index -xdev -lname '/Programs/LibVA/2.7.0/*' | head -n 3)
+[ -z "$left" ] || { echo "links into LibVA 2.7.0 left: $left"; exit 1; }
+for f in $R/Programs/FFmpeg/*/lib/libav*.so.*.*
+do
+   [ -f "$f" ] && [ ! -L "$f" ] || continue
+   bad=$(chroot $R ldd -r "${f#$R}" 2>&1 | grep -E 'libva.*not found|undefined symbol: va' | head -n 3)
+   [ -z "$bad" ] || { echo "FFmpeg with LibVA 2.24.1: $bad"; exit 1; }
+done
+chroot $R ldd /System/Index/bin/vainfo | grep -q 'not found' && { echo "vainfo misses a library"; exit 1; }
 # 0.9.1: Firefox ESR is the browser; Intel microcode where dracut looks for it; nothing in the
 # index or the boot folder still points at the old kernel
 [ "$(chroot $R readlink -f /System/Index/bin/firefox)" = "/Programs/Firefox/$(readlink $R/Programs/Firefox/Current)/bin/firefox" ] ||

@@ -37,6 +37,7 @@
 #   bluetooth-boot on|off            Bluetooth switched on at every start (stock) or off
 #   boot-bluetooth                   (boot scripts) apply bluetooth-boot off
 #   boot-bluetooth-name              (boot scripts) Bluetooth name = host name (main.conf)
+#   boot-machine-id                  (boot scripts, 0.10.3) /etc/machine-id = D-Bus's ID, in the install layer
 #   hotspot-set                      hotspot name on stdin line 1, password on line 2
 #   hotspot on|off                   Wi-Fi hotspot (client Wi-Fi on that adapter is stopped)
 #   device-start pci|usb ADDRESS     load the driver the kernel names for that device (0.9.2)
@@ -894,6 +895,53 @@ case "$cmd" in
       tmp=$(mktemp /System/Settings/bluetooth/.main.conf.XXXXXX) || die "cannot write $conf"
       printf '%s\n' "$want" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$conf" || { rm -f "$tmp"; die "cannot write $conf"; }
       log "bluetooth name: $host" ;;
+
+   boot-machine-id)
+      # (boot scripts, before "MessageBus Start") 0.10.3: /etc/machine-id (= /System/Settings/
+      # machine-id), the computer's own random ID that Chrome/Electron and other programs read.
+      # 017.01 never wrote it (Chrome: "contains 0 characters (32 were expected)"). It is the
+      # same ID D-Bus already keeps on the data partition (/Data/Variable/lib/dbus/machine-id,
+      # made once per installation), or a new one if that is missing. Written into the overlay's
+      # "install" layer (the machine's own settings): system updates never change it, and
+      # "start without my system changes" keeps it. Every start: does nothing once both agree.
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "boot-machine-id is for the boot scripts"
+      etc_id=/System/Settings/machine-id
+      dbus_id=/Data/Variable/lib/dbus/machine-id
+      layer=/System/Data/System-Overlay/install
+      valid_id() { [[ "$1" =~ ^[0-9a-f]{32}$ ]] && [ "$1" != 00000000000000000000000000000000 ]; }
+      # write_id FILE ID: whole file at once (temporary file in the same folder, then rename)
+      write_id() {
+         local dir tmp
+         dir=$(dirname "$1")
+         [ -d "$dir" ] && [ ! -L "$1" ] || return 1
+         tmp=$(mktemp "$dir/.machine-id.XXXXXX") || return 1
+         printf '%s\n' "$2" > "$tmp" && chmod 444 "$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; return 1; }
+      }
+      cur=$(head -c 33 "$etc_id" 2>/dev/null | head -n 1)
+      dbid=$(head -c 33 "$dbus_id" 2>/dev/null | head -n 1)
+      if valid_id "$cur"; then id=$cur
+      elif valid_id "$dbid"; then id=$dbid
+      else id=$(tr -d '-' < /proc/sys/kernel/random/uuid)
+      fi
+      valid_id "$id" || die "could not make a machine ID"
+      if [ "$dbid" != "$id" ]
+      then
+         mkdir -p "$(dirname "$dbus_id")"
+         write_id "$dbus_id" "$id" || die "cannot write $dbus_id"
+      fi
+      if [ "$cur" != "$id" ]
+      then
+         # installed A/B system: into the install layer (a lower layer of "/"; a new file there
+         # shows through at once unless the name was looked up before, so check and, if needed,
+         # also write it the normal way: the same content in the upper layer)
+         if [ -d "$layer/System/Settings" ] && [ ! -L "$layer/System/Settings" ] &&
+            findmnt -n -o OPTIONS / 2>/dev/null | grep -q "lowerdir=[^,]*System-Overlay/install"
+         then write_id "$layer/System/Settings/machine-id" "$id" || die "cannot write the machine ID into the install layer"
+         fi
+         [ "$(head -c 33 "$etc_id" 2>/dev/null | head -n 1)" = "$id" ] || write_id "$etc_id" "$id" || die "cannot write $etc_id"
+         log "machine ID written to /etc/machine-id"
+      fi ;;
 
    hotspot-set)
       # name on stdin line 1 (1-32 bytes), password on line 2 (8-63 printable ASCII characters)
