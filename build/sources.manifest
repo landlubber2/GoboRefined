@@ -54,3 +54,5 @@ glibc           2.38          glibc-2.38.tar.xz                            fb829
 #     https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-2026.09.03.tar.xz
 #     sha256 b22e0901227b820cd1c280abe681a15b773a5103a5e10dc442e94ebb34cbf58d
 # GoboFiles (spin/gobofiles/) is the project's own code and is built from the checkout.
+btrfs-progs     7.3           btrfs-progs-v7.3.tar.xz                      d37b63403d25fe025704c758e6a3da0979ae50c30c5f02aa78e4410e7b346e3a  GPL-2.0-only         https://mirrors.edge.kernel.org/pub/linux/kernel/people/kdave/btrfs-progs/btrfs-progs-v7.3.tar.xz
+rsync           3.5.2         rsync-3.5.2.tar.gz                           a10d591825251e070f74c98df3daad195def4ed81b4a2de16169026aea33f6c8  GPL-3.0-or-later     https://download.samba.org/pub/rsync/src/rsync-3.5.2.tar.gz

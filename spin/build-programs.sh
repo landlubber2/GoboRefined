@@ -863,6 +863,60 @@ glibc)
       { echo "the build root's own C library changed"; exit 1; }
    du -sh $P $P/lib/locale
    ;;
+btrfs-progs)
+   # 0.10: the btrfs tools (mkfs.btrfs, btrfs subvolume/property/filesystem, btrfs check) for the
+   # btrfs A/B layout (docs/ab-btrfs-plan.md): the installer makes the pool and its subvolumes,
+   # gobo-update snapshots and sets subvolumes read-only. The kernel's btrfs is a module of the
+   # 6.12 kernel already. Needs libuuid/libblkid (Util-Linux), zlib, LZO, Zstd (all on 017.01);
+   # checksums use the built-in code (no crypto library). Zoned support detects itself off
+   # (Linux-Headers 5.4 is older than the 5.10 it needs). No btrfs-convert, no Python module,
+   # no documentation (would need sphinx). Its udev rules stay inside the program.
+   V=7.3 P=/Programs/Btrfs-Progs/7.3
+   unpack btrfs-progs-v$V.tar.xz btrfs-progs-v$V
+   rm -rf $P
+   ./configure --prefix=$P --disable-convert --disable-documentation --disable-python \
+      --disable-static --disable-libudev > /Data/Build/btrfs-progs-configure.log 2>&1 ||
+      { tail -n 30 /Data/Build/btrfs-progs-configure.log; exit 1; }
+   make -j$(nproc) > /Data/Build/btrfs-progs-make.log 2>&1 || { grep -m 5 -B 3 -A 3 'error' /Data/Build/btrfs-progs-make.log; tail -n 30 /Data/Build/btrfs-progs-make.log; exit 1; }
+   make install udevdir=$P/lib/udev > /Data/Build/btrfs-progs-install.log 2>&1 || { tail -n 30 /Data/Build/btrfs-progs-install.log; exit 1; }
+   ln -sfn $V /Programs/Btrfs-Progs/Current
+   mkdir -p $P/Resources $P/doc
+   install -m 644 COPYING $P/doc/
+   echo x86_64 > $P/Resources/Architecture
+   printf 'Util-Linux\nZLib\nLZO\nZstd\n' > $P/Resources/Dependencies
+   printf '[Name] Btrfs-Progs\n[Summary] %s\n[License] GPL-2.0-only (libbtrfsutil: LGPL-2.1-or-later)\n[Homepage] https://btrfs.readthedocs.io/\n' \
+      "Btrfs file system tools: mkfs.btrfs, btrfs (subvolumes, snapshots, check)" > $P/Resources/Description
+   echo "[File] https://mirrors.edge.kernel.org/pub/linux/kernel/people/kdave/btrfs-progs/btrfs-progs-v$V.tar.xz" > $P/Resources/PackageSource
+   chown -R root:root $P
+   SymlinkProgram Btrfs-Progs $V | tail -n 1
+   $P/bin/btrfs --version
+   $P/bin/mkfs.btrfs --version | head -n 1
+   ;;
+rsync)
+   # 0.10: rsync, for gobo-update on the btrfs layout (the new version's files are copied over a
+   # snapshot of the running one, so files that did not change stay shared). Uses the image's
+   # popt, zlib, zstd, lz4, OpenSSL 1.1, ACL and attr libraries; no xxhash (not on 017.01), no man
+   # pages (they need a Markdown tool).
+   V=3.5.2 P=/Programs/Rsync/3.5.2
+   unpack rsync-$V.tar.gz rsync-$V
+   rm -rf $P
+   ./configure --prefix=$P --sysconfdir=/Programs/Rsync/Settings --disable-xxhash --disable-md2man \
+      --without-included-popt --without-included-zlib > /Data/Build/rsync-configure.log 2>&1 ||
+      { tail -n 30 /Data/Build/rsync-configure.log; exit 1; }
+   make -j$(nproc) > /Data/Build/rsync-make.log 2>&1 || { tail -n 30 /Data/Build/rsync-make.log; exit 1; }
+   make install > /Data/Build/rsync-install.log 2>&1 || { tail -n 30 /Data/Build/rsync-install.log; exit 1; }
+   ln -sfn $V /Programs/Rsync/Current
+   mkdir -p $P/Resources $P/doc
+   install -m 644 COPYING $P/doc/
+   echo x86_64 > $P/Resources/Architecture
+   printf 'Popt\nZLib\nZstd\nLZ4\nOpenSSL\nACL\nAttr\n' > $P/Resources/Dependencies
+   printf '[Name] Rsync\n[Summary] %s\n[License] GPL-3.0-or-later\n[Homepage] https://rsync.samba.org/\n' \
+      "Fast incremental file copy (used by gobo-update on the btrfs layout)" > $P/Resources/Description
+   echo "[File] https://download.samba.org/pub/rsync/src/rsync-$V.tar.gz" > $P/Resources/PackageSource
+   chown -R root:root $P
+   SymlinkProgram Rsync $V | tail -n 1
+   $P/bin/rsync --version | head -n 3
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"

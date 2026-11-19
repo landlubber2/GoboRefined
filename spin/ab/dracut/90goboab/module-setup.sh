@@ -15,7 +15,7 @@ depends() {
 }
 
 installkernel() {
-    hostonly="" instmods overlay ext4 vfat
+    hostonly="" instmods overlay ext4 vfat btrfs   # btrfs: the 0.10 layout (prototype)
 }
 
 install() {

@@ -1,7 +1,12 @@
 #!/bin/sh
 # GoboRefined A/B (0.8): assemble the root file system in the initramfs.
 #
-#   goboab-root NEWROOT SLOT SLOTDEV DATADEV normal|safe
+#   goboab-root NEWROOT SLOT SLOTDEV DATADEV normal|safe [LAYOUT]
+#
+# LAYOUT (gobo.layout= on the kernel command line): empty or "ext4" = the 0.8 layout (slots GOBO_A,
+# GOBO_B and GOBO_DATA are partitions); "btrfs" = the 0.10 layout (prototype, docs/ab-btrfs-plan.md):
+# SLOTDEV and DATADEV are both the GOBO_POOL partition; the slot is subvolume @system-SLOT (read-only),
+# the data subvolume @data (holds the same folders as GOBO_DATA).
 #
 # Layers of "/" (overlayfs), top to bottom:
 #   upper    GOBO_DATA:/System-Overlay/upper   every change made to system files after the install
@@ -26,6 +31,7 @@ SLOT="$2"
 SLOTDEV="$3"
 DATADEV="$4"
 MODE="$5"
+LAYOUT="${6:-ext4}"
 
 G=/goboab
 O=$G/data/System-Overlay
@@ -38,6 +44,7 @@ fail() { say "$*"; exit 1; }
 
 case "$SLOT" in a|b) ;; *) fail "gobo.slot must be a or b (got '$SLOT')" ;; esac
 case "$MODE" in normal|safe) ;; *) fail "unknown mode '$MODE'" ;; esac
+case "$LAYOUT" in ext4|btrfs) ;; *) fail "unknown layout '$LAYOUT'" ;; esac
 [ -b "$SLOTDEV" ] || fail "slot device $SLOTDEV not found"
 [ -b "$DATADEV" ] || fail "data device $DATADEV not found"
 [ -n "$NEWROOT" ] && [ -d "$NEWROOT" ] || fail "no NEWROOT"
@@ -46,6 +53,23 @@ modprobe -q overlay 2>/dev/null
 modprobe -q ext4 2>/dev/null
 mkdir -p $G/slot $G/data $G/mem
 
+if [ "$LAYOUT" = btrfs ]
+then
+   # 0.10 (prototype): one btrfs pool. Copy-on-write, so no check before mounting (a power cut
+   # leaves the last committed state). @data read-write first (the compression option applies to
+   # the whole file system), then the slot's subvolume read-only (it also has the btrfs ro flag).
+   modprobe -q btrfs 2>/dev/null
+   mount -t btrfs -o rw,noatime,compress=zstd:3,subvol=@data "$DATADEV" $G/data || fail "cannot mount subvolume @data of $DATADEV"
+   mount -t btrfs -o ro,noatime,subvol=@system-$SLOT "$SLOTDEV" $G/slot || fail "cannot mount slot $SLOT (subvolume @system-$SLOT of $SLOTDEV)"
+   # The swap file lives in its own subvolume (no copy-on-write, no compression: btrfs needs that
+   # for swap files); mounted at /Data/Variable/swap below. The boot scripts only "mount -a -f".
+   SWAPVOL=""
+   mkdir -p $G/swap
+   if mount -t btrfs -o rw,noatime,subvol=@swap "$DATADEV" $G/swap 2>/dev/null
+   then SWAPVOL=1
+   else say "no subvolume @swap (no swap file)"
+   fi
+else
 # Data partition: e2fsck in preen mode before mounting. After a power cut it replays the journal
 # itself ("recovering journal"; the kernel would do the same at mount, which is normal ext4
 # behaviour) and repairs the inconsistencies that preen mode may fix safely. Every line it prints
@@ -59,6 +83,7 @@ say "data partition check: e2fsck exit $rc"
 [ $rc -ge 4 ] && say "the data partition has errors e2fsck could not fix; trying anyway"
 mount -t ext4 -o rw,noatime "$DATADEV" $G/data || fail "cannot mount the data partition $DATADEV"
 mount -t ext4 -o ro "$SLOTDEV" $G/slot || fail "cannot mount slot $SLOT ($SLOTDEV)"
+fi
 if [ ! -f $G/slot/gobo-slot.env ]
 then
    umount $G/slot
@@ -144,6 +169,11 @@ do mkdir -p $G/data/$d
 done
 mount --bind $G/data/Users "$NEWROOT/Users" || fail "cannot mount /Users"
 mount --bind $G/data/Variable "$NEWROOT/Data/Variable" || fail "cannot mount /Data/Variable"
+if [ -n "${SWAPVOL:-}" ]
+then
+   mkdir -p "$NEWROOT/Data/Variable/swap"
+   mount --move $G/swap "$NEWROOT/Data/Variable/swap" || say "cannot mount @swap at /Data/Variable/swap"
+fi
 # For gobo-update (status, reset flag, booted version) and for looking at the slot itself.
 [ -d "$NEWROOT/System/Data" ] && mount --move $G/data "$NEWROOT/System/Data"
 [ -d "$NEWROOT/System/Slot" ] && mount --move $G/slot "$NEWROOT/System/Slot"

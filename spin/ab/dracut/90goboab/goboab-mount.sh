@@ -11,7 +11,7 @@ _gmode=normal
 
 if goboab-root "$NEWROOT" "$(getarg gobo.slot=)" \
         "$(label_uuid_to_dev "$(getarg gobo.root=)")" \
-        "$(label_uuid_to_dev "$(getarg gobo.data=)")" "$_gmode"; then
+        "$(label_uuid_to_dev "$(getarg gobo.data=)")" "$_gmode" "$(getarg gobo.layout=)"; then
     : > /goboab/done
 else
     # rd.emergency=reboot is passed by GRUB on the first tries of a new slot, so a slot that
