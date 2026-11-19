@@ -21,3 +21,11 @@
 !/docs/third-party.md
 !/docs/software-install.md
 # dist/README.md is release notes for local ISO users (kept next to the files; not required on GitHub)
+
+# Lab and build leftovers (local only)
+/dist/*.build.log
+/dist/*.update-signing.pub.pem
+/vm/serve/*.png
+/vm/serve/run-*.sh
+/vm/lab-ssh-cmd.sh
+/vm/scratch/
