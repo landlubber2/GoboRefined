@@ -81,6 +81,7 @@ ok "refused: administrator password of 6 characters" "$(HIN "printf 'Adm\nabcdef
 ok "refused: standard password of 7 characters" "$(HIN "printf 'Std\nabcdefg\n'" add-user std7 standard)" "too short: at least 8"
 ok "refused: unknown kind" "$(HIN "printf 'X\nabcdefgh\n'" add-user xkind superuser)" "kind must be"
 ok "add a Simple account (kid, larger text)" "$(HIN "printf 'Kid Test\n'; cat $D/kidpw; echo" add-user kid simple large-text)" "added kid"
+ok "new Simple account: USB on, no internal disks, not in disk" "$(S 'id -Gn kid | tr " " "\n" | grep -x -e gobo-usb -e "gobo-disk-.*" -e disk | tr "\n" " "')" "^gobo-usb $"
 ok "kid is in simple, not in sys" "$(S 'id -Gn kid | tr " " "\n" | grep -x -e simple -e sys | tr "\n" " "')" "^simple $"
 ok "kid's home is private (700)" "$(S 'stat -c %a /Users/kid')" "^700$"
 ok "kid: larger text marker" "$(S 'ls /Users/kid/.config/goborefined/')" "large-text"
@@ -129,6 +130,45 @@ ok "kid -> simple (leaves sys and remote)" "$(H set-kind kid simple; S 'id -Gn k
 ok "refused: lab makes itself Simple" "$(H set-kind lab simple)" "your own administrator"
 ok "refused: program list with a bad name" "$(HIN "printf 'firefox.desktop\n../x.desktop\n'" simple-apps kid)" "not a program name"
 ok "program list saved (readable, root-owned)" "$(HIN "printf 'firefox.desktop\npcmanfm.desktop\nl3afpad.desktop\n'" simple-apps kid; S 'stat -c "%a %U" /Data/Variable/lib/gobo-settings/simple-apps/kid')" "644 root"
+
+### 0.10.2: disks and USB drives per account ###############################################
+ok "nobody in the group disk" "$(S 'grep ^disk: /System/Settings/group')" "^disk:[^:]*:8:$"
+ok "AddUser no longer adds disk" "$(S 'grep -c "^usermod -g users -G .*disk" $(readlink -f /System/Index/bin/AddUser)')" "^0$"
+ok "group gobo-usb (969); udevil only for it" "$(S '{ grep ^gobo-usb: /System/Settings/group | cut -d: -f1,3; grep ^allowed_groups /System/Settings/udevil/udevil.conf; } | tr "\n" " "')" "gobo-usb:969 allowed_groups = gobo-usb"
+ok "NTFS helper of 0.10.2 installed" "$(S 'grep -c "remount,rw" /System/Index/sbin/mount.ntfs')" "^1$"
+ok "lab and tester always in gobo-usb" "$(S 'for u in lab tester; do id -Gn $u | tr " " "\n" | grep -x gobo-usb; done | wc -l')" "^2$"
+ok "refused: USB switch for a standard account" "$(HIN "printf 'usb off\n'" disk-access tester)" "only Simple accounts"
+ok "refused: a line the helper does not know" "$(HIN "printf 'usb maybe\n'" disk-access kid)" "not understood"
+ok "refused: unknown disk" "$(HIN "printf 'abcdef on\n'" disk-access kid)" "no such disk"
+ok "refused for kid (sudo): disk-access" "$(AS kid $D/kidask disk-access lab)" "not allowed\|may not run"
+ok "refused for tester (sudo): disk-access" "$(AS tester $D/task disk-access kid)" "not allowed\|may not run"
+ok "helper itself refuses kid: disk-access" "$(CALLER kid disk-access lab)" "only an administrator"
+ok "helper itself refuses kid: boot-disks" "$(CALLER kid boot-disks)" "boot scripts"
+ok "kid: USB off" "$(HIN "printf 'usb off\n'" disk-access kid; S 'id -Gn kid | tr " " "\n" | grep -c -x gobo-usb')" "^0$"
+if S 'test -b /dev/sdc1 && ! grep -q "^[^ ]*sdc1 " /proc/mounts'; then
+   ok "kid with USB off cannot mount a USB stick" "$(S "cd /tmp; su kid -c 'udevil mount /dev/sdc1' 2>&1")" "not in allowed groups"
+   HIN "printf 'usb on\n'" disk-access kid > /dev/null
+   ok "kid with USB on mounts it" "$(S "cd /tmp; su kid -c 'udevil mount /dev/sdc1' 2>&1; su kid -c 'udevil umount /dev/sdc1' 2>&1")" "Mounted"
+else
+   HIN "printf 'usb on\n'" disk-access kid > /dev/null
+   echo "(no unmounted USB stick sdc1: USB mount checks skipped)"
+fi
+ok "kid: USB on again" "$(S 'id -Gn kid | tr " " "\n" | grep -c -x gobo-usb')" "^1$"
+disks=$(S 'cut -f1,3 /Data/Variable/run/gobo-disks.list 2>/dev/null | tr "\t\n" ": "')
+if [ -n "$disks" ]; then
+   for dk in $disks; do
+      id=${dk%%:*} name=${dk#*:}
+      ok "disk $name: lab (administrator) is a member" "$(S "id -Gn lab | tr ' ' '\n' | grep -c -x gobo-disk-$id")" "^1$"
+      ok "disk $name: refused to take it from lab" "$(HIN "printf '$id off\n'" disk-access lab)" "administrators always"
+      ok "disk $name: kid off -> cannot open" "$(HIN "printf '$id off\n'" disk-access kid; S "su kid -c 'ls /Mount/Disks/$name' 2>&1")" "Permission denied"
+      ok "disk $name: kid on -> can open" "$(HIN "printf '$id on\n'" disk-access kid; S "su kid -c 'ls -d /Mount/Disks/$name/.' 2>&1")" "/Mount/Disks/$name/.$"
+      ok "disk $name: tester off -> cannot open" "$(HIN "printf '$id off\n'" disk-access tester; S "su tester -c 'ls /Mount/Disks/$name' 2>&1")" "Permission denied"
+      ok "disk $name: tester on -> can open" "$(HIN "printf '$id on\n'" disk-access tester; S "su tester -c 'ls -d /Mount/Disks/$name/.' 2>&1")" "/Mount/Disks/$name/.$"
+      HIN "printf '$id off\n'" disk-access kid > /dev/null
+   done
+else
+   echo "(no other internal disks: per-disk checks skipped)"
+fi
 
 ### automatic login, remote access, firewall ###############################################
 ok "refused: automatic login of an administrator without confirmation" "$(H autologin lab)" "needs the confirmation"

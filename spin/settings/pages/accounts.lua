@@ -131,6 +131,91 @@ function P.build(C)
       end)
    end
 
+   -- 0.10.2: which internal disks (and, for a Simple account, USB drives) a person may open.
+   -- The list comes from "gobo-settings-helper boot-disks" (written at every start).
+   local DISKS_LIST = "/Data/Variable/run/gobo-disks.list"
+   local function read_disks()
+      local list = {}
+      for line in (C.read(DISKS_LIST) or ""):gmatch("[^\n]+") do
+         local f = {}
+         for v in (line .. "\t"):gmatch("([^\t]*)\t") do table.insert(f, v) end
+         if f[1] and f[1]:match("^%x%x%x%x%x%x$") and f[2] == "gobo-disk-" .. f[1] then
+            table.insert(list, { id = f[1], group = f[2], name = f[3] or "?", fstype = f[4] or "",
+                                 size = tonumber(f[5]) or 0, state = f[6] or "", dev = f[7] or "" })
+         end
+      end
+      return list
+   end
+   local FS_NAMES = { ntfs = "Windows (NTFS)", vfat = "FAT", exfat = "exFAT", ext2 = "Linux (ext2)",
+                      ext3 = "Linux (ext3)", ext4 = "Linux (ext4)", btrfs = "Linux (btrfs)", xfs = "Linux (XFS)" }
+   local function choose_disks(p)
+      local disks = read_disks()
+      local d = Gtk.Dialog { title = "Disks of " .. p.login, transient_for = C.window, modal = true,
+                             destroy_with_parent = true }
+      d:add_button("Cancel", Gtk.ResponseType.CANCEL)
+      d:add_button("Save", Gtk.ResponseType.OK)
+      local vbox = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 8, margin = 16 }
+      local function note(text)
+         local l = C.text(text, "dim-label")
+         l.max_width_chars = 70
+         vbox:pack_start(l, false, false, 0)
+      end
+      note(string.format("Which disks of this computer %s may open (in the file manager: /Mount/Disks). " ..
+         "A change applies from the next login of %s.", p.login, p.login))
+      local checks, usb = {}, nil
+      if #disks == 0 then
+         vbox:pack_start(C.text("This computer has no other disks or partitions (besides GoboRefined's own)."), false, false, 0)
+      end
+      local members = {}
+      for _, dk in ipairs(disks) do
+         members = C.group_members(dk.group)
+         local label = string.format("%s  (%s, %.1f GB)%s", dk.name, FS_NAMES[dk.fstype] or dk.fstype, dk.size / 1e9,
+            dk.state == "ro" and " - read-only: Windows did not shut down fully" or
+            (dk.state == "unmounted" and " - could not be opened" or ""))
+         local c = Gtk.CheckButton { label = label, active = p.admin or members[p.login] == true }
+         if p.admin then c.sensitive = false end
+         checks[dk.id] = c
+         vbox:pack_start(c, false, false, 0)
+      end
+      if p.admin and #disks > 0 then
+         note("Administrators can always open every disk.")
+      end
+      if p.kind == "simple" then
+         vbox:pack_start(C.heading("USB sticks and external drives"), false, false, 0)
+         usb = Gtk.CheckButton { label = "May use USB sticks and external drives",
+                                 active = C.group_members("gobo-usb")[p.login] == true }
+         vbox:pack_start(usb, false, false, 0)
+      end
+      if #disks > 0 then
+         note("Only a whole disk partition can be allowed or not: hiding just the Windows user folders " ..
+            "(C:\\Users) while showing the rest is not reliable, because a partition is opened the same way " ..
+            "for everyone. Windows usually keeps the users' files on C: and other data often on D:, so " ..
+            "allowing D: but not C: is the usual choice. A Windows disk shows as read-only after Windows " ..
+            "was hibernated or started with Fast Startup: shut Windows down with Shift + Shut down.")
+      end
+      d:get_content_area():pack_start(vbox, true, true, 0)
+      vbox:show_all()
+      local r = d:run()
+      local lines = {}
+      if r == Gtk.ResponseType.OK then
+         for _, dk in ipairs(disks) do
+            local want = checks[dk.id].active
+            local had = C.group_members(dk.group)[p.login] == true
+            if not p.admin and want ~= had then
+               table.insert(lines, dk.id .. (want and " on" or " off"))
+            end
+         end
+         if usb and usb.active ~= (C.group_members("gobo-usb")[p.login] == true) then
+            table.insert(lines, usb.active and "usb on" or "usb off")
+         end
+      end
+      d:destroy()
+      if r ~= Gtk.ResponseType.OK or #lines == 0 then return end
+      C.helper({ "disk-access", p.login }, table.concat(lines, "\n") .. "\n", function(ok, out)
+         done_msg(ok, out, string.format("Saved. This applies from the next login of %s.", p.login))
+      end)
+   end
+
    local function kind_choices()
       return { { "admin", "Administrator" }, { "standard", "Standard" }, { "simple", "Simple" } }
    end
@@ -184,6 +269,7 @@ function P.build(C)
             if p.kind == "simple" then
                line:pack_start(C.button("Programs...", function() choose_programs(p) end), false, false, 0)
             end
+            line:pack_start(C.button("Disks...", function() choose_disks(p) end), false, false, 0)
             line:pack_start(pw, false, false, 0)
             line:pack_start(rm, false, false, 0)
          end

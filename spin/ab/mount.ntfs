@@ -1,0 +1,62 @@
+#!/bin/sh
+# mount.ntfs — GoboRefined (0.10.2): NTFS through the kernel's ntfs3 driver, read-write when safe.
+#
+# mount(8) runs this helper for "-t ntfs" (blkid's name for NTFS):
+#   mount.ntfs DEVICE DIR [-s] [-f] [-n] [-v] [-o OPTIONS]
+# Callers: udevil/devmon (USB drives, as the user through the setuid udevil) and
+# "gobo-settings-helper boot-disks" (internal partitions at start).
+#
+# Like other distributions do: a volume that Windows left hibernated (also "Fast Startup") or
+# not cleanly shut down ("dirty") is mounted READ-ONLY and never forced read-write (writing
+# could destroy files of the hibernated Windows session or damage the volume further).
+# Order: mount read-only, look for an active hibernation file, then switch to read-write
+# (ntfs3 itself refuses read-write for a dirty volume). The desktop and Settings show a
+# read-only NTFS volume with the plain-words explanation.
+# Installed by spin/build-iso.sh over Udevil's own /Programs/Udevil/<v>/sbin/mount.ntfs.
+export PATH=/System/Index/bin:/System/Index/sbin
+[ $# -ge 2 ] || { echo "usage: mount.ntfs DEVICE DIR [-o OPTIONS]" >&2; exit 1; }
+dev=$1 dir=$2
+shift 2
+opts="" flags=""
+while [ $# -gt 0 ]
+do
+   case "$1" in
+      -o) [ $# -ge 2 ] || exit 1; opts="${opts:+$opts,}$2"; shift ;;
+      -o?*) opts="${opts:+$opts,}${1#-o}" ;;
+      -s|-f|-n|-v) flags="$flags $1" ;;
+      -t|-N) shift ;;     # the type is ntfs3; namespaces are not used here
+      *) ;;
+   esac
+   shift
+done
+want_ro=0 base=""
+old_ifs=$IFS; IFS=,
+for o in $opts
+do
+   case "$o" in
+      ro) want_ro=1 ;;
+      rw|'') ;;
+      *) base="${base:+$base,}$o" ;;
+   esac
+done
+IFS=$old_ifs
+
+# shellcheck disable=SC2086
+mount -i -t ntfs3 $flags -o "ro${base:+,$base}" "$dev" "$dir" || exit $?
+[ "$want_ro" = 1 ] && exit 0
+
+# Windows hibernated (or shut down with Fast Startup): hiberfil.sys starts with "hibr"/"wake"
+# (any case) while that session waits to be resumed; a cleared file starts with zeros.
+if [ -f "$dir/hiberfil.sys" ]
+then
+   sig=$(head -c 4 "$dir/hiberfil.sys" 2>/dev/null | tr 'A-Z' 'a-z')
+   case "$sig" in
+      hibr|wake)
+         echo "mount.ntfs: $dev: Windows is hibernated (Fast Startup): mounted read-only" >&2
+         exit 0 ;;
+   esac
+fi
+if ! mount -i -o remount,rw "$dir" 2>/dev/null
+then echo "mount.ntfs: $dev: Windows did not shut down fully (volume marked dirty): mounted read-only" >&2
+fi
+exit 0

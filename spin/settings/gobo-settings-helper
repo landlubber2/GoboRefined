@@ -48,6 +48,10 @@
 #   app-remove NAME VERSION          remove a program that app-install installed
 #   boot-apps                        (boot scripts) drop missing apps.list rows; refresh MIME
 #                                    (mimeinfo.cache + system mimeapps.list for Apps packages)
+#   boot-disks                       (boot scripts, 0.10.2) internal disks: groups, mounts,
+#                                    /Mount/Disks, the list for Settings; nobody in "disk"
+#   disk-access LOGIN                which disks LOGIN may open: "<id> on|off" lines on stdin,
+#                                    and "usb on|off" for a Simple account (USB drives)
 #   report                           root-only parts of the system report: last 400 kernel
 #                                    messages, gobo-update --status, the system logs of the spin
 #
@@ -440,6 +444,173 @@ devices_kmsg() {
       mv "$out.new" "$out" && chmod 644 "$out"
 }
 
+### disks (0.10.2) ##############################################################
+# Raw disk access: nobody is in the group "disk" any more (it bypasses every file permission);
+# administrators reach everything through sudo. Internal partitions that are not GoboRefined's
+# own (Windows C:, D:, another Linux) are mounted at start by "boot-disks", each with its own
+# group gobo-disk-<id> (id = first 6 hex digits of the file system UUID: group names have at
+# most 16 characters): the mount sits in
+# /Mount/Disks/.access/<id>/disk below a folder 0750 root:<group> (NTFS/FAT/exFAT also with
+# gid=<group> and no rights for others), /Mount/Disks/<name> links to it. Administrators are
+# always members; new partitions and new standard accounts get access, Simple accounts do not
+# (Settings > Accounts > Disks changes it; group changes apply from the next login).
+# USB drives (udevil/devmon): udevil.conf allowed_groups = gobo-usb; administrators and standard
+# accounts are always members, Simple accounts by their switch (on for new ones).
+DISK_GROUP=disk
+USB_GROUP=gobo-usb                   # gid 969 (the image brings it; ensure_group otherwise)
+DISKS_BASE=/Mount/Disks
+DISKS_ACCESS=/Mount/Disks/.access
+DISKS_LIST=/Data/Variable/run/gobo-disks.list   # for the Settings page (644)
+DISK_MIN_BYTES=1073741824            # smaller partitions (Windows "System Reserved", tools) are left out
+
+people_logins() { awk -F: '$3 >= 1000 && $3 < 60000 && $1 ~ /^[a-z_][a-z0-9_-]*$/ { print $1 }' "$PASSWD"; }
+disk_groups() { awk -F: '$1 ~ /^gobo-disk-[0-9a-f]{6}$/ { print $1 }' "$GROUP"; }
+valid_disk_id() { [[ "$1" =~ ^[0-9a-f]{6}$ ]]; }
+group_add() { in_group "$1" "$2" || gpasswd -a "$2" "$1" > /dev/null 2>&1; }
+group_del() { ! in_group "$1" "$2" || gpasswd -d "$2" "$1" > /dev/null 2>&1; }
+free_system_gid() {   # a gid between 900 and 968 that nobody uses
+   local g
+   for g in $(seq 968 -1 900)
+   do awk -F: -v g="$g" '$3 == g { f = 1 } END { exit !f }' "$GROUP" || { echo "$g"; return 0; }
+   done
+   return 1
+}
+# the groups a person gets: on creation (new=1) and when the kind changes (new=0)
+disk_defaults() {   # disk_defaults LOGIN admin|standard|simple 0|1
+   local g
+   group_del "$DISK_GROUP" "$1"
+   ensure_group "$USB_GROUP" 969
+   case "$2" in
+      admin)    group_add "$USB_GROUP" "$1"
+                for g in $(disk_groups); do group_add "$g" "$1"; done ;;
+      standard) group_add "$USB_GROUP" "$1"
+                if [ "$3" = 1 ]; then for g in $(disk_groups); do group_add "$g" "$1"; done; fi ;;
+      simple)   if [ "$3" = 1 ]; then group_add "$USB_GROUP" "$1"; fi ;;
+   esac
+}
+# internal partitions that are not GoboRefined's own, one per line:
+#   ID<TAB>DEVICE<TAB>FSTYPE<TAB>SIZE<TAB>LABEL (label as lsblk escapes it: \xNN)
+internal_partitions() {
+   local busy line re d rm tran name type fstype label uuid ptype size id
+   # partitions mounted anywhere else (GoboRefined's own pool and boot partition, anything mounted by
+   # hand) are left alone; the system disk itself is not skipped (Windows may share it)
+   busy=" $(awk -v a="$DISKS_ACCESS/" 'index($2, a) != 1 { n = split($1, p, "/"); print p[n] }' /proc/mounts | tr '\n' ' ') "
+   re='^NAME="([^"]*)" TYPE="([^"]*)" RM="([^"]*)" TRAN="([^"]*)"$'
+   while IFS= read -r line
+   do
+      [[ "$line" =~ $re ]] || continue
+      d=${BASH_REMATCH[1]} type=${BASH_REMATCH[2]} rm=${BASH_REMATCH[3]} tran=${BASH_REMATCH[4]}
+      [ "$type" = disk ] && [ "$rm" = 0 ] || continue
+      case "$tran" in usb|ieee1394|mmc) continue ;; esac    # devmon's (USB drives, card readers)
+      [[ "$d" =~ ^[a-z][a-z0-9]{1,30}$ ]] || continue
+      lsblk -n -P -b -o NAME,TYPE,FSTYPE,UUID,PARTTYPE,SIZE,LABEL "/dev/$d" 2>/dev/null | while IFS= read -r p
+      do
+         [[ "$p" =~ ^NAME=\"([^\"]*)\"\ TYPE=\"([^\"]*)\"\ FSTYPE=\"([^\"]*)\"\ UUID=\"([^\"]*)\"\ PARTTYPE=\"([^\"]*)\"\ SIZE=\"([0-9]*)\"\ LABEL=\"([^\"]*)\"$ ]] || continue
+         name=${BASH_REMATCH[1]} type=${BASH_REMATCH[2]} fstype=${BASH_REMATCH[3]} uuid=${BASH_REMATCH[4]}
+         ptype=${BASH_REMATCH[5]} size=${BASH_REMATCH[6]} label=${BASH_REMATCH[7]}
+         [ "$type" = part ] || { [ "$type" = disk ] && [ -n "$fstype" ]; } || continue
+         [[ "$name" =~ ^[a-z][a-z0-9]{1,40}$ ]] || continue
+         [[ "$busy" != *" $name "* ]] || continue
+         case "$fstype" in ntfs|vfat|exfat|ext2|ext3|ext4|btrfs|xfs) ;; *) continue ;; esac
+         case "$label" in GOBO_*) continue ;; esac
+         # EFI system, Microsoft reserved, Windows recovery, BIOS boot; MBR: EFI, hidden recovery
+         case "${ptype,,}" in
+            c12a7328-f81f-11d2-ba4b-00a0c93ec93b|e3c9e316-0b5c-4db8-817d-f92df00215ae|\
+            de94bba4-06d1-4d40-a16a-bfd50179d6ac|21686148-6449-6e6f-744e-656564454649|0xef|0x27) continue ;;
+         esac
+         [ -n "$size" ] && [ "$size" -ge "$DISK_MIN_BYTES" ] || continue
+         id=$(printf '%s' "${uuid,,}" | tr -dc '0-9a-f' | cut -c1-6)
+         [ "${#id}" = 6 ] || continue
+         printf '%s\t/dev/%s\t%s\t%s\t%s\n' "$id" "$name" "$fstype" "$size" "$label"
+      done
+   done < <(lsblk -d -n -P -o NAME,TYPE,RM,TRAN 2>/dev/null)
+}
+# a safe folder name for /Mount/Disks from a label (lsblk's \xNN decoded, odd characters -> _)
+disk_link_name() {   # disk_link_name LABEL ID
+   local n
+   n=$(printf '%b' "$1" 2>/dev/null | LC_ALL=C tr -c 'A-Za-z0-9._ -' '_' | cut -c1-40)
+   while [[ "$n" == [.\ ]* ]]; do n=${n#?}; done
+   while [[ "$n" == *' ' ]]; do n=${n%?}; done
+   [ -n "${n//[_ .-]/}" ] || n="Disk-$2"
+   printf '%s' "$n"
+}
+boot_disks() {
+   local g u k id dev fstype size label gid name dir state opts used="" ids="" tmp
+   # once (0.10.2): nobody stays in "disk" (the owner: administrators too)
+   mkdir -p "$STATE"; chmod 755 "$STATE"
+   if [ ! -e "$STATE/disk-group-emptied-0.10.2" ] && grep -q "^$DISK_GROUP:" "$GROUP"
+   then
+      if [ -n "$(awk -F: -v g="$DISK_GROUP" '$1 == g { print $4 }' "$GROUP")" ]
+      then gpasswd -M "" "$DISK_GROUP" > /dev/null 2>&1 && log "accounts: nobody is in the group disk any more"
+      fi
+      : > "$STATE/disk-group-emptied-0.10.2"
+   fi
+   # USB drives: administrators and standard accounts always; once, everyone who was there before
+   ensure_group "$USB_GROUP" 969
+   if [ ! -e "$STATE/usb-group-filled-0.10.2" ]
+   then
+      for u in $(people_logins); do group_add "$USB_GROUP" "$u"; done
+      : > "$STATE/usb-group-filled-0.10.2"
+   fi
+   for u in $(people_logins)
+   do
+      k=$(kind_of "$u")
+      [ "$k" = simple ] || group_add "$USB_GROUP" "$u"
+   done
+   # internal partitions
+   mkdir -p "$DISKS_ACCESS" && chmod 755 "$DISKS_BASE" "$DISKS_ACCESS" || return 1
+   # links of earlier starts (only links into .access; nothing else is touched)
+   for name in "$DISKS_BASE"/*
+   do
+      [ -L "$name" ] || continue
+      case "$(readlink "$name")" in .access/*) rm -f "$name" ;; esac
+   done
+   tmp=$(mktemp "$DISKS_LIST.XXXXXX") || return 1
+   while IFS=$'\t' read -r id dev fstype size label
+   do
+      case " $ids " in *" $id "*) log "disks: $dev has the same id $id as another partition (a copy?): left out"; continue ;; esac
+      ids="$ids $id"
+      g="gobo-disk-$id"
+      if ! grep -q "^$g:" "$GROUP"
+      then
+         gid=$(free_system_gid) || { log "disks: no free group id for $dev"; continue; }
+         groupadd -g "$gid" "$g" || { log "disks: could not create the group $g"; continue; }
+         # a new partition: administrators and standard accounts may open it
+         for u in $(people_logins)
+         do [ "$(kind_of "$u")" = simple ] || group_add "$g" "$u"
+         done
+         log "disks: new partition $dev ($fstype, label '$label'): group $g"
+      fi
+      for u in $(admins); do group_add "$g" "$u"; done
+      dir="$DISKS_ACCESS/$id"
+      mkdir -p "$dir/disk"
+      chown root:"$g" "$dir" && chmod 750 "$dir" || continue
+      if ! awk -v d="$dir/disk" '$2 == d { f = 1 } END { exit !f }' /proc/mounts
+      then
+         gid=$(awk -F: -v g="$g" '$1 == g { print $3 }' "$GROUP")
+         case "$fstype" in
+            ntfs)  opts="uid=0,gid=$gid,fmask=0117,dmask=0007,iocharset=utf8,windows_names,nosuid,nodev,noatime" ;;
+            vfat)  opts="uid=0,gid=$gid,fmask=0117,dmask=0007,utf8,nosuid,nodev,noatime" ;;
+            exfat) opts="uid=0,gid=$gid,fmask=0117,dmask=0007,iocharset=utf8,nosuid,nodev,noatime" ;;
+            *)     opts="nosuid,nodev,noatime" ;;
+         esac
+         mount -t "$fstype" -o "$opts" "$dev" "$dir/disk" 2>> "$LOG" || log "disks: could not mount $dev ($fstype)"
+      fi
+      state=unmounted
+      if awk -v d="$dir/disk" '$2 == d { f = 1 } END { exit !f }' /proc/mounts
+      then
+         state=rw
+         awk -v d="$dir/disk" '$2 == d && $4 ~ /^ro(,|$)/ { f = 1 } END { exit !f }' /proc/mounts && state=ro
+      fi
+      name=$(disk_link_name "$label" "$id")
+      case " $used " in *" $name "*) name="$name-$id" ;; esac
+      used="$used $name"
+      [ -e "$DISKS_BASE/$name" ] || [ -L "$DISKS_BASE/$name" ] || ln -s ".access/$id/disk" "$DISKS_BASE/$name"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$g" "$name" "$fstype" "$size" "$state" "$dev" >> "$tmp"
+   done < <(internal_partitions)
+   chmod 644 "$tmp"; mv -f "$tmp" "$DISKS_LIST"
+}
+
 ### sub-commands ###############################################################
 
 [ $# -ge 1 ] || die "no sub-command"
@@ -477,6 +648,7 @@ case "$cmd" in
       AddUser -f "${full:-$login}" -p '!' --skel "$login" > /dev/null 2>&1 || die "AddUser failed"
       grep -q "^$login:" "$PASSWD" || die "the account was not created"
       [ "$kind" = standard ] || set_kind "$login" "$kind"
+      disk_defaults "$login" "$kind" 1   # 0.10.2: out of "disk"; USB drives, internal disks
       set_password "$login"
       chmod 700 "/Users/$login"   # 0.9.1: private home (AddUser does it too)
       # 0.9.1: "Larger text and icons" (Simple accounts): read by ~/.xinitrc at login
@@ -510,7 +682,7 @@ case "$cmd" in
       ! grep -q "^$1:" "$PASSWD" || die "the account was not removed"
       rm -f "$SIMPLE_APPS/$1"
       # userdel takes the login out of every group; make sure of the spin's own groups
-      for g in "$ADMIN_GROUP" "$SIMPLE_GROUP" "$REMOTE_GROUP" lpadmin
+      for g in "$ADMIN_GROUP" "$SIMPLE_GROUP" "$REMOTE_GROUP" lpadmin "$USB_GROUP" $(disk_groups)
       do in_group "$g" "$1" && gpasswd -d "$1" "$g" > /dev/null 2>&1
       done
       log "user removed: $1 ($2)"
@@ -548,6 +720,7 @@ case "$cmd" in
       fi
       old=$(kind_of "$1")
       set_kind "$1" "$new"
+      disk_defaults "$1" "$new" 0   # 0.10.2: an administrator opens every disk and USB drive
       [ "$old" = "$new" ] || reapply_look "$1"
       log "kind of $1: $old -> $new" ;;
 
@@ -880,6 +1053,45 @@ case "$cmd" in
       apps_list_prune
       apps_mime_refresh
       ;;
+
+   # --- 0.10.2: disks and USB drives per account ------------------------------------------
+   boot-disks)   # (boot scripts) groups of the disks, mounts, /Mount/Disks, the list for Settings
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "boot-disks is for the boot scripts"
+      boot_disks || die "could not set up the internal disks" ;;
+
+   disk-access)
+      # which disks LOGIN may open: lines "<disk id> on|off" (ids from the list of boot-disks)
+      # and, for a Simple account, "usb on|off" (USB sticks and external drives) on stdin
+      nargs 1 "$@"; need_admin_caller; check_person "$1"
+      who="$1"; kind=$(kind_of "$who"); n=0; changes=""
+      while IFS= read -r line || [ -n "$line" ]
+      do
+         [ -n "$line" ] || continue
+         n=$((n + 1)); [ "$n" -le 64 ] || die "too many lines"
+         [[ "$line" =~ ^([0-9a-f]{6}|usb)\ (on|off)$ ]] || die "not understood: $line"
+         changes+="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"$'\n'
+      done
+      # check everything before changing anything
+      while read -r what onoff
+      do
+         [ -n "$what" ] || continue
+         if [ "$what" = usb ]
+         then [ "$kind" = simple ] || die "only Simple accounts have the USB switch (the others may always use USB drives)"
+         else
+            grep -q "^gobo-disk-$what:" "$GROUP" || die "no such disk: $what"
+            [ "$kind" != admin ] || [ "$onoff" = on ] || die "administrators always have access to every disk"
+         fi
+      done <<< "$changes"
+      while read -r what onoff
+      do
+         [ -n "$what" ] || continue
+         if [ "$what" = usb ]; then g="$USB_GROUP"; ensure_group "$USB_GROUP" 969; else g="gobo-disk-$what"; fi
+         if [ "$onoff" = on ]; then group_add "$g" "$who"; else group_del "$g" "$who"; fi
+         if [ "$onoff" = on ]; then in_group "$g" "$who"; else ! in_group "$g" "$who"; fi || die "could not change $g for $who"
+         log "access of $who: $g $onoff"
+      done <<< "$changes"
+      echo "saved" ;;
 
    report)
       nargs 0 "$@"

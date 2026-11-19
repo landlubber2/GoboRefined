@@ -68,6 +68,7 @@ for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 bash -n ab/gobo-firewall && sh -n gobo11/apply.sh   # 0.9.1
 for f in ab/dracut/90goboab/goboab-*.sh; do sh -n $f; done
+sh -n ab/mount.ntfs   # 0.10.2
 # boot menu template (0.8): numbered first line, no shell-escaped "\$" left in it
 head -n 1 ab/grub.cfg.in | grep -q '^# gobo-grub-template [0-9]' && ! grep -qF '\$' ab/grub.cfg.in &&
    grep -qx 'set gobo_layout=btrfs' ab/grub.cfg.in ||
@@ -386,6 +387,9 @@ chroot $R update-mime-database /System/Index/share/mime
 chmod 4755 $R/Programs/GoboNet/Current/bin/gobonet_backend
 # udevil mounts USB drives for normal users: setuid root (cp -a keeps it; make sure)
 chmod 4755 $R/Programs/Udevil/Current/bin/udevil
+# 0.10.2: its NTFS helper (mount(8) runs /sbin/mount.ntfs for "-t ntfs"): ntfs3, read-only when
+# Windows is hibernated or the volume is dirty (spin/ab/mount.ntfs; also used by boot-disks)
+install -m 755 ab/mount.ntfs $R/Programs/Udevil/Current/sbin/mount.ntfs
 # 0.6: the desktop session may run the Wi-Fi adapter switch (gobo-wifi-switch, in USB-ModeSwitch)
 # as root, with exactly this argument and nothing else. The live user is root; installed users
 # are in group "users". The installer's ProfileInstall replaces every program's Settings with

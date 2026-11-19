@@ -166,6 +166,13 @@ grep -q 'gobo-settings-helper boot-apps' "$bootup" || cat >> "$bootup" <<'BOOTUP
 # (mimeinfo.cache + system defaults); drop apps.list rows whose programs are gone.
 Exec "Refreshing Apps file types..." /System/Index/bin/gobo-settings-helper boot-apps
 BOOTUP
+grep -q 'gobo-settings-helper boot-disks' "$bootup" || cat >> "$bootup" <<'BOOTUP'
+
+# Added by GoboRefined (0.10.2): the other disks of this computer (Windows, another Linux) in
+# /Mount/Disks, each open only for the accounts allowed in Settings > Accounts > Disks; NTFS
+# read-write, read-only if Windows did not shut down fully. Nobody stays in the group "disk".
+Exec "Opening the other disks..." /System/Index/bin/gobo-settings-helper boot-disks
+BOOTUP
 # 0.8.4: the computer's Bluetooth name is its host name (main.conf, written before bluetoothd starts)
 if ! grep -q 'gobo-settings-helper boot-bluetooth-name' "$bootup"
 then
@@ -207,12 +214,26 @@ chroot "$T" visudo -c > /dev/null || die "the sudo configuration is not valid"
 # 0.9.1: the spin's account groups, with fixed ids below 1000 (gobo-update's first start adds
 # system groups of a new image to existing installs): "simple" = Simple accounts, "remote" = who
 # may log in over SSH (Settings > Remote access).
-for g in simple:970 remote:971
+for g in simple:970 remote:971 gobo-usb:969
 do
    if ! grep -q "^${g%%:*}:" "$T/System/Settings/group"
    then chroot "$T" groupadd -g "${g#*:}" "${g%%:*}" >> "$LOG" 2>&1 || die "could not create the group ${g%%:*}"
    fi
 done
+
+# 0.10.2: disks per account (gobo-settings-helper: boot-disks, disk-access). 017.01's AddUser
+# put every new account into "disk" (raw read access to every disk, past all file permissions):
+# not any more. USB drives through udevil only for the group gobo-usb (administrators and
+# standard accounts always; Simple accounts by their switch in Settings > Accounts > Disks).
+adduser=$(readlink -f "$T/System/Index/bin/AddUser" 2>/dev/null || true)
+case "$adduser" in "$T"/Programs/Scripts/*) ;; *) adduser=$(ls "$T"/Programs/Scripts/*/bin/AddUser 2>/dev/null | head -n 1) ;; esac
+[ -f "$adduser" ] || die "AddUser not found"
+sed -i 's/^\(usermod -g users -G tty,tape,floppy,\)disk,\(lp,\)/\1\2/' "$adduser"
+grep -q '^usermod -g users -G .*disk' "$adduser" && die "could not take the group disk out of AddUser"
+udevil_conf=$T/Programs/Udevil/Settings/udevil/udevil.conf
+[ -f "$udevil_conf" ] || die "udevil.conf not found"
+sed -i 's/^allowed_groups = .*/allowed_groups = gobo-usb/' "$udevil_conf"
+grep -qx 'allowed_groups = gobo-usb' "$udevil_conf" || die "could not limit udevil to the group gobo-usb"
 
 # 0.9.1: setuid audit (docs/security.md). The 1980s remote shell clients need no root rights on a
 # desktop (nothing here runs rshd/rlogind; ssh replaced them): the bit is taken away.

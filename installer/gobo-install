@@ -725,6 +725,12 @@ in_target usermod -aG sys,lpadmin "$USER_NAME"     # sys = may use sudo
 if grep -q '^remote:' "$DEST/System/Settings/group"
 then in_target usermod -aG remote "$USER_NAME"
 fi
+# 0.10.2: USB drives (udevil: group gobo-usb), never the raw-disk group "disk" (AddUser of
+# gobo-make-system's system no longer adds it; made sure here). Internal disks: first start.
+if grep -q '^gobo-usb:' "$DEST/System/Settings/group"
+then in_target usermod -aG gobo-usb "$USER_NAME"
+fi
+in_target gpasswd -d "$USER_NAME" disk > /dev/null 2>&1 || true
 chmod 700 "$DEST/Users/$USER_NAME"
 chroot "$DEST" visudo -c >> "$LOG" 2>&1 || die "the sudo configuration is not valid"
 
@@ -950,10 +956,18 @@ fi
 if [ "$UI" = menu ]
 then
    gauge_close
-   if dialog --backtitle "$BT" --title "Done" --yes-label "Restart now" --no-label "Later" --yesno \
-      "\n$SPIN_NAME is installed on $DISK.\n(System version A; version B is made by the first system update.)\n\n$next\n\n'$USER_NAME' is an administrator. More people (standard accounts, or Simple accounts for a child, a grandparent or a guest): Settings > Accounts > Add a person.\n\nDetails of the installation: $LOG" 17 80
-   then clear; exec reboot
-   fi
+   # 0.10.2 (owner's order): Power off (left, default) | Stay in the console | Restart now.
+   # dialog --yesno with an extra button (dialog 1.3 then labels the buttons OK/Cancel, so both
+   # names are set): left = 0, right = 1, extra (middle) = 3, Esc = 255 (stays).
+   rc=0
+   dialog --backtitle "$BT" --title "Done" --yes-label "Power off" --ok-label "Power off" \
+      --extra-button --extra-label "Stay in the console" \
+      --no-label "Restart now" --cancel-label "Restart now" --yesno \
+      "\n$SPIN_NAME is installed on $DISK.\n(System version A; version B is made by the first system update.)\n\n$next\n\n'$USER_NAME' is an administrator. More people (standard accounts, or Simple accounts for a child, a grandparent or a guest): Settings > Accounts > Add a person.\n\nPower off: remove the installation medium afterwards. Stay in the console: back to the shell of the live system.\n\nDetails of the installation: $LOG" 19 80 || rc=$?
+   case "$rc" in
+      0) clear; exec poweroff ;;
+      1) clear; exec reboot ;;
+   esac
    clear
 fi
 echo
