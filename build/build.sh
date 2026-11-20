@@ -9,12 +9,15 @@
 # Commands:  check | fetch | programs | image | all | unmount
 #   check     prerequisites only
 #   fetch     find/download and verify the stock ISO and every source in build/sources.manifest
-#   programs  build the added programs (spin/build-programs.sh steps) in a build root
+#   programs  build the added programs (spin/build-programs.sh steps): stage 1 in a build root
+#             over the stock image (glibc 2.30), then stage 2 in a build root on glibc 2.38
 #   image     make the ISO and update file (spin/build-iso.sh)
 #   unmount   undo the mounts a stopped run left behind
 #
 # Environment:
 #   WORK               work folder (absolute, no spaces)            [/Data/Build/GoboRefined]
+#   STAGE2             folder of the stage-2 build root (absolute, no spaces; may be on another
+#                      disk; LLVM alone needs several GB)           [$WORK/stage2]
 #   ISO                the stock GoboLinux-017.01-x86_64.iso, a file or a DVD device. If unset:
 #                      $WORK/sources, then the DVD drive (/dev/sr0), else it is downloaded.
 #   VERSION            version written into the image                [spin/build-iso.sh default]
@@ -23,9 +26,10 @@
 #                      If unset, a key pair is generated once in $WORK/keys and reused.
 #   REBUILD            program steps to build again even if done, e.g. REBUILD="libfm pcmanfm"
 #
-# The script is restartable: downloads, finished program steps and the build root are kept in
-# WORK; a later run skips what is done and still valid (a step is redone when its part of
-# spin/build-programs.sh, its sources or its repository files change). See BUILDING.md.
+# The script is restartable: downloads, finished program steps and the build roots are kept in
+# WORK (and STAGE2); a later run skips what is done and still valid (a step is redone when its part
+# of spin/build-programs.sh, its sources or its repository files change; every stage-2 step is
+# redone when anything in stage 1 changed). See BUILDING.md.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -46,13 +50,18 @@ STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavu
        lxdm udevil usb-modeswitch linux rtl8852au onlyoffice copyq gobofiles l3afpad dnsmasq linux-firmware sof-firmware
        sbc pulseaudio-bluetooth intel-microcode firefox ca-bundle glibc btrfs-progs rsync libva libva-utils"
 LAST_STEP=libva-utils
+# Stage 2 (build-environment jump, 2026-11-20): steps run after STEPS, in the stage-2 build root (the
+# stage-1 root with its C library switched to 2.38, as in the image), so current prebuilt tools run.
+# Build tools for 0.10.4's Mesa; nothing of stage 2 goes into the image yet.
+STEPS2="llvm cmake python ninja meson"
+STAGE2_SETUP=1   # change when the way the stage-2 root is made changes (remakes it)
 
 say() { echo "== $*"; }
 die() { echo "build.sh: ERROR: $*" >&2; exit 1; }
 
 case "$CMD" in
    check|fetch|programs|image|all|unmount) ;;
-   -h|--help|help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+   -h|--help|help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
    *) die "unknown command '$CMD' (check, fetch, programs, image, all, unmount)" ;;
 esac
 
@@ -63,10 +72,21 @@ esac
 [ -f "$MANIFEST" ] && [ -f "$REPO/spin/build-iso.sh" ] && [ -f "$REPO/spin/build-programs.sh" ] ||
    die "$REPO does not look like a GoboRefined checkout"
 case "$WORK/" in "$REPO"/*) die "WORK must not be inside the repository checkout" ;; esac
+STAGE2=${STAGE2:-$WORK/stage2}
+# (at least two path parts, no "..": its upper/, state/ ... are removed when stage 1 changes)
+[[ "$STAGE2" =~ ^/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$ ]] && [[ "$STAGE2" != *..* ]] && [[ "$STAGE2" != */ ]] ||
+   die "STAGE2 must be an absolute path of two or more parts without spaces or '..' (got '$STAGE2')"
+case "$STAGE2/" in
+   "$REPO"/*) die "STAGE2 must not be inside the repository checkout" ;;
+   "$WORK/") die "STAGE2 must not be WORK itself (default: \$WORK/stage2)" ;;
+   "$WORK"/buildroot/*|"$WORK"/image/*|"$WORK"/mnt/*|"$WORK"/sources/*|"$WORK"/state/*|"$WORK"/output/*|"$WORK"/logs/*)
+      die "STAGE2 must not be inside one of WORK's own folders" ;;
+esac
 
 SRCDIR=$WORK/sources
 STATE=$WORK/state
 BR=$WORK/buildroot/root           # the build root: overlay over the stock image
+S2ROOT=$STAGE2/root               # the stage-2 build root: overlay over stage 1's upper + the stock image
 IMG=$WORK/image
 OUTDIR=$WORK/output
 mkdir -p "$WORK" "$SRCDIR" "$STATE" "$WORK/logs" "$OUTDIR"
@@ -82,12 +102,17 @@ echo "GoboRefined build ($CMD), $(date -u +%Y-%m-%dT%H:%M:%SZ); repository $REPO
 
 ########## mounts ##########################################################################
 
-# every mount point below $WORK, deepest first
-unmount_all() {
+# umount_below <dir>: every mount point at or below <dir>, deepest first
+umount_below() {
    local m
-   awk -v w="$WORK/" 'index($2, w) == 1 { print $2 }' /proc/mounts | sort -r | while read -r m
+   awk -v d="$1" '$2 == d || index($2, d "/") == 1 { print $2 }' /proc/mounts | sort -r | while read -r m
    do umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || echo "could not unmount $m"
    done
+}
+# every mount point below $WORK and $STAGE2 (the stage-2 root first: stage 1's upper is its lower)
+unmount_all() {
+   umount_below "$STAGE2"
+   umount_below "$WORK"
 }
 TMPKEY=
 on_exit() {
@@ -127,7 +152,11 @@ check_prereqs() {
    # free space (first run: sources + build root + image; later runs: the image part)
    fs=$(stat -f -c %T "$WORK")
    case "$fs" in tmpfs|overlay|overlayfs|ramfs) missing+=("WORK on a real disk ($WORK is on '$fs', i.e. in memory; in the live session mount a scratch disk and set WORK to a folder on it)") ;; esac
-   if [ -e "$STATE/step-dnsmasq.done" ]; then need_gb=20; else need_gb=30; fi
+   # (after the first run: 20 GB for making the image, 10 GB for the other commands)
+   if [ ! -e "$STATE/step-dnsmasq.done" ]; then need_gb=30
+   elif [ "$CMD" = image ] || [ "$CMD" = all ]; then need_gb=20
+   else need_gb=10
+   fi
    free_kb=$(df -Pk "$WORK" | awk 'NR==2 { print $4 }')
    [ "$free_kb" -ge $((need_gb * 1024 * 1024)) ] ||
       missing+=("$need_gb GB free in $WORK (there are $((free_kb / 1024 / 1024)) GB)")
@@ -252,6 +281,7 @@ mount_stock() {
 
 mount_buildroot() {
    mount_stock
+   umount_below "$S2ROOT"     # the stage-2 root uses this root's upper as a lower layer
    mountpoint -q "$BR" && return 0
    mkdir -p "$WORK/buildroot/upper" "$WORK/buildroot/work" "$BR"
    mount -t overlay overlay \
@@ -259,22 +289,91 @@ mount_buildroot() {
       die "cannot mount the build root overlay"
 }
 
-bind_buildroot() {
-   local pair mp
+# bind_root <root>: /proc, /sys, /dev, the checkout and the sources (read-only) inside a build root
+bind_root() {
+   local root=$1 pair mp
    for pair in Status:/proc Objects:/sys Devices:/dev
    do
-      mp=$BR/System/Kernel/${pair%%:*}
+      mp=$root/System/Kernel/${pair%%:*}
       mountpoint -q "$mp" && continue
       mount --rbind "${pair#*:}" "$mp"
       mount --make-rslave "$mp"
    done
-   mkdir -p "$BR/Data/Build/repo" "$BR/Data/Build/src" "$BR/Data/Build/work"
-   if ! mountpoint -q "$BR/Data/Build/repo"
-   then mount --bind "$REPO" "$BR/Data/Build/repo" && mount -o remount,bind,ro "$BR/Data/Build/repo"
+   mkdir -p "$root/Data/Build/repo" "$root/Data/Build/src" "$root/Data/Build/work"
+   if ! mountpoint -q "$root/Data/Build/repo"
+   then mount --bind "$REPO" "$root/Data/Build/repo" && mount -o remount,bind,ro "$root/Data/Build/repo"
    fi
-   if ! mountpoint -q "$BR/Data/Build/src"
-   then mount --bind "$SRCDIR" "$BR/Data/Build/src" && mount -o remount,bind,ro "$BR/Data/Build/src"
+   if ! mountpoint -q "$root/Data/Build/src"
+   then mount --bind "$SRCDIR" "$root/Data/Build/src" && mount -o remount,bind,ro "$root/Data/Build/src"
    fi
+}
+
+# stage1_fingerprint: what the stage-2 root is made from (every stage-1 step stamp, the switch)
+stage1_fingerprint() {
+   local s
+   for s in $STEPS
+   do echo "$s $(cat "$STATE/step-$s.done" 2>/dev/null)"
+   done
+   cat "$REPO/spin/glibc-switch.sh"
+   echo "stage-2 root setup $STAGE2_SETUP"
+}
+
+# mount_stage2: mount the stage-2 build root; (re)make it when stage 1 changed. Sets S2FP.
+STAGE1_BUILT=no
+mount_stage2() {
+   local fp it fixed
+   mount_stock
+   umount_below "$BR"          # stage 1's upper is a lower layer here: it must not be in use
+   fp=$(stage1_fingerprint | sha256sum | cut -d' ' -f1)
+   if [ "$(cat "$STAGE2/stamp" 2>/dev/null)" != "$fp" ] || [ $STAGE1_BUILT = yes ]
+   then
+      umount_below "$S2ROOT"
+      ! grep -q " $STAGE2/" /proc/mounts || die "something is still mounted below $STAGE2 (run: build.sh unmount)"
+      if [ -e "$STAGE2/stamp" ]
+      then echo "stage 1 changed: the stage-2 build root is made again (every stage-2 step is redone)"
+      fi
+      rm -rf "$STAGE2/upper" "$STAGE2/ovl-work" "$STAGE2/state" "$STAGE2/tmp" "$STAGE2/stamp"
+   fi
+   mkdir -p "$STAGE2/upper" "$STAGE2/ovl-work" "$STAGE2/state" "$STAGE2/tmp" "$S2ROOT"
+   if ! mountpoint -q "$S2ROOT"
+   then
+      mount -t overlay overlay \
+         -o "lowerdir=$WORK/buildroot/upper:$WORK/mnt/stock,upperdir=$STAGE2/upper,workdir=$STAGE2/ovl-work" "$S2ROOT" ||
+         die "cannot mount the stage-2 build root overlay"
+   fi
+   bind_root "$S2ROOT"
+   if [ ! -e "$STAGE2/stamp" ]
+   then
+      say "making the stage-2 build root $S2ROOT (C library 2.38)"
+      bash "$REPO/spin/glibc-switch.sh" "$S2ROOT" "$S2ROOT" "$STAGE2/tmp" || die "the glibc switch failed in the stage-2 root"
+      # gcc 14.2's include-fixed holds fixincludes copies of 2.30's headers (bits/statx.h, floatn.h ...)
+      # that break compiles against 2.38's: gcc's own mkheaders makes them again from /usr/include
+      # (mkheaders runs fixinc.sh with $CONFIG_SHELL or $SHELL: bash, whatever the caller's shell is)
+      it=$(chroot "$S2ROOT" /usr/bin/env -i PATH=/System/Index/bin gcc -print-file-name=install-tools)
+      fixed=$(chroot "$S2ROOT" /usr/bin/env -i PATH=/System/Index/bin gcc -print-file-name=include-fixed)
+      [ -x "$S2ROOT$it/mkheaders" ] && [ -d "$S2ROOT$fixed" ] || die "gcc's mkheaders or include-fixed not found ($it, $fixed)"
+      chroot "$S2ROOT" /usr/bin/env -i PATH=/System/Index/bin:/bin:/usr/bin CONFIG_SHELL=/bin/bash SHELL=/bin/bash \
+         /bin/bash -c "cd '$it' && /bin/bash ./mkheaders" > "$WORK/logs/stage2-mkheaders.log" 2>&1 ||
+         { tail -n 20 "$WORK/logs/stage2-mkheaders.log"; die "mkheaders failed in the stage-2 root"; }
+      ! grep -Eq "No such file|shift count|not found|cannot|rror" "$WORK/logs/stage2-mkheaders.log" ||
+         { cat "$WORK/logs/stage2-mkheaders.log"; die "mkheaders reported errors (log: $WORK/logs/stage2-mkheaders.log)"; }
+      [ -f "$S2ROOT$fixed/limits.h" ] && [ -f "$S2ROOT$fixed/syslimits.h" ] || die "include-fixed has no limits.h/syslimits.h after mkheaders"
+      ! grep -rlq 'Copyright (C) 2018-2019' "$S2ROOT$fixed/bits" 2> /dev/null || die "include-fixed still has 2.30's headers"
+      echo "include-fixed made again for glibc 2.38: $(cd "$S2ROOT$fixed" && find . -type f | sort | tr '\n' ' ')"
+      mkdir -p "$S2ROOT/Data/Build/work"
+      printf '%s\n' '#ifndef _GNU_SOURCE' '#define _GNU_SOURCE' '#endif' '#include <sys/stat.h>' '#include <fcntl.h>' '#include <math.h>' \
+         '#include <stdio.h>' '#include <gnu/libc-version.h>' \
+         'int main(void) { struct statx s; if (statx(AT_FDCWD, "/", 0, STATX_BASIC_STATS, &s)) return 1;' \
+         '   printf("stage-2 gcc: glibc %s, statx ok, %.1f\n", gnu_get_libc_version(), sqrt(4.0)); return 0; }' \
+         > "$S2ROOT/Data/Build/work/s2test.c"
+      chroot "$S2ROOT" /usr/bin/env -i PATH=/System/Index/bin:/bin:/usr/bin \
+         /bin/bash -c 'cd /Data/Build/work && gcc -O2 -Wall -Werror -o s2test s2test.c -lm && ./s2test &&
+                       g++ -O2 -x c++ -include cmath -include cstdio -o s2testxx s2test.c && ./s2testxx' ||
+         die "the stage-2 root does not compile against glibc 2.38's headers"
+      rm -rf "$S2ROOT/Data/Build/work" && mkdir -p "$S2ROOT/Data/Build/work"
+      echo "$fp" > "$STAGE2/stamp"
+   fi
+   S2FP=$fp
 }
 
 # step_inputs <step>: everything a step depends on (its hash decides whether it is redone)
@@ -295,13 +394,15 @@ step_inputs() {
       lxdm)       find "$REPO/spin/lxdm" -type f | LC_ALL=C sort | xargs cat ;;
       gobofiles)  find "$REPO/spin/gobofiles" -type f | LC_ALL=C sort | xargs cat ;;
    esac
+   case " $STEPS2 " in *" $s "*) cat "$REPO/spin/stage2-lib.sh" ;; esac   # stage-2 helpers
 }
 
+# run_step <root> <step>: one step of spin/build-programs.sh, chrooted into <root>
 run_step() {
-   local s=$1 slog=$WORK/logs/step-$s.log
-   rm -rf "$BR/Data/Build/work" && mkdir -p "$BR/Data/Build/work"
+   local root=$1 s=$2 slog=$WORK/logs/step-$2.log
+   rm -rf "$root/Data/Build/work" && mkdir -p "$root/Data/Build/work"
    # a clean environment plus GoboLinux's own environment cache (as a root login has it)
-   if ! chroot "$BR" /usr/bin/env -i HOME=/Users/root USER=root LOGNAME=root TERM=dumb SHELL=/bin/bash \
+   if ! chroot "$root" /usr/bin/env -i HOME=/Users/root USER=root LOGNAME=root TERM=dumb SHELL=/bin/bash \
          PATH=/System/Index/bin:/System/Index/sbin:/bin:/usr/bin \
          SRC=/Data/Build/src WORK=/Data/Build/work SPIN=/Data/Build/repo/spin \
          /bin/bash -c '[ -f /System/Environment/Cache ] && . /System/Environment/Cache; cd /Data/Build/work &&
@@ -311,13 +412,13 @@ run_step() {
       die "program step '$s' failed (full log: $slog)"
    fi
    grep -q "^STEP-DONE $s\$" "$slog" || die "program step '$s' did not finish (log: $slog)"
-   rm -rf "$BR/Data/Build/work" && mkdir -p "$BR/Data/Build/work"
+   rm -rf "$root/Data/Build/work" && mkdir -p "$root/Data/Build/work"
 }
 
 build_programs() {
    say "programs (spin/build-programs.sh, inside the build root $BR)"
    mount_buildroot
-   bind_buildroot
+   bind_root "$BR"
    local s h t0 force=" ${REBUILD:-} "
    for s in $STEPS
    do
@@ -334,11 +435,47 @@ build_programs() {
       rm -f "$STATE/step-$s.done"
       t0=$(date +%s)
       echo "build   $s ..."
-      run_step "$s"
+      run_step "$BR" "$s"
+      STAGE1_BUILT=yes
       echo "$h" > "$STATE/step-$s.done"
       echo "done    $s ($(( $(date +%s) - t0 )) s)"
    done
    [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] || die "xorriso was not built"
+   build_stage2
+}
+
+# stage 2: STEPS2 in the stage-2 build root. A step's hash = its inputs + the stage-1 fingerprint +
+# the hash of the stage-2 step before it (a change redoes that step and every later one).
+build_stage2() {
+   [ -n "$STEPS2" ] || return 0
+   say "programs, stage 2 (inside the glibc 2.38 build root $S2ROOT)"
+   local fs free_kb
+   mkdir -p "$STAGE2"
+   fs=$(stat -f -c %T "$STAGE2")
+   case "$fs" in tmpfs|overlay|overlayfs|ramfs) die "STAGE2=$STAGE2 is on '$fs' (in memory); put it on a real disk" ;; esac
+   if [ ! -e "$STAGE2/state/step-llvm.done" ]
+   then
+      free_kb=$(df -Pk "$STAGE2" | awk 'NR==2 { print $4 }')
+      [ "$free_kb" -ge $((15 * 1024 * 1024)) ] ||
+         die "stage 2 needs 15 GB free in $STAGE2 (there are $((free_kb / 1024 / 1024)) GB; set STAGE2 to a folder on another disk)"
+   fi
+   mount_stage2
+   local s h prev=$S2FP t0 force=" ${REBUILD:-} "
+   for s in $STEPS2
+   do
+      h=$( { step_inputs "$s"; echo "stage 1: $S2FP"; echo "before: $prev"; } | sha256sum | cut -d' ' -f1)
+      prev=$h
+      if [ "$(cat "$STAGE2/state/step-$s.done" 2>/dev/null)" = "$h" ] && [[ "$force" != *" $s "* ]]
+      then echo "done    $s (stage 2)"; continue
+      fi
+      rm -f "$STAGE2/state/step-$s.done"
+      t0=$(date +%s)
+      echo "build   $s (stage 2) ..."
+      run_step "$S2ROOT" "$s"
+      echo "$h" > "$STAGE2/state/step-$s.done"
+      echo "done    $s (stage 2, $(( $(date +%s) - t0 )) s)"
+   done
+   umount_below "$S2ROOT"
 }
 
 ########## image ###########################################################################
@@ -431,7 +568,8 @@ case "$CMD" in
    all)      resolve_iso; fetch_sources; build_programs; build_image ;;
 esac
 T=$(( $(date +%s) - START ))
-say "finished '$CMD' in $((T / 60)) min $((T % 60)) s; disk use in $WORK:"
+say "finished '$CMD' in $((T / 60)) min $((T % 60)) s; disk use in $WORK (and $STAGE2):"
 { du -shx "$WORK"/* "$WORK/buildroot/upper" 2> /dev/null || true; } | sed 's/^/   /'
-df -h "$WORK" | sed 's/^/   /'
+[ -d "$STAGE2/upper" ] && { du -shx "$STAGE2/upper" 2> /dev/null || true; } | sed 's/^/   /'
+{ df -h "$WORK" "$STAGE2" 2> /dev/null || true; } | sed "s/^/   /"
 exit 0

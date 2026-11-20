@@ -48,6 +48,17 @@ The project's own scripts, look files and tools (`installer/`, `look/gobo11/`, `
 
 Used only to build, not shipped: GNU xorriso 1.5.6.pl02 (GPL-3.0-or-later), writes the ISO.
 
+Used only to build, not shipped (stage-2 build root on glibc 2.38, build-environment jump of 2026-11-20; build
+tools for the graphics stack of 0.10.4; pins in `build/sources.manifest`):
+
+| Component | Version | Licence (as stated upstream) | Source | Changed by us? |
+|---|---|---|---|---|
+| LLVM + clang, llvm.org's release build (`LLVM-23.1.6-Linux-X64`) | 23.1.6 | Apache-2.0 WITH LLVM-exception (parts of the bundled runtime libraries: see the LICENSE.TXT files in the archive) | https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | no (unpacked as `/Programs/LLVM/23.1.6`). 0.10.4 plans to ship its `libLLVM.so` in the image (with Mesa): then it moves to the table above |
+| CMake, Kitware's binary release | 3.31.12 | BSD-3-Clause (the binary bundles curl, OpenSSL, zlib and other libraries under their own licences: `doc/cmake-3.31/` in the archive) | https://github.com/Kitware/CMake/releases/download/v3.31.12/cmake-3.31.12-linux-x86_64.tar.gz | no |
+| Python | 3.13.18 | PSF-2.0 (Python Software Foundation License Version 2) | https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz | no (built without PGO, ensurepip and the test suite; installed as `python3.13` only) |
+| Ninja, the release's Linux binary | 1.13.2 | Apache-2.0 | https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip | no |
+| Meson | 1.12.1 | Apache-2.0 | https://github.com/mesonbuild/meson/releases/download/1.12.1/meson-1.12.1.tar.gz | no (run from its source tree by Python 3.13) |
+
 ## App packages (not in the image; offered on the website, installed through Settings › Apps)
 
 Built by `apps/<name>/build.sh` from the sources below (sha256 pinned in the script); the packages are in

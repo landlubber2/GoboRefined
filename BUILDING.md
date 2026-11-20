@@ -13,6 +13,9 @@ checked against a pinned sha256 (`build/sources.manifest`). One script does the 
   The from-scratch build of 2026-11-15 ended with 7.1 GB used (sources 0.4 GB, build root 1.5 GB,
   output 5.3 GB); while the image is made, the unpacked system tree (8.1 GB) and the packed images exist
   at the same time, so expect a peak of roughly 20 GB (estimated from those sizes, not measured).
+  **Since the stage-2 build root (2026-11-20) add 15 GB** (it holds LLVM, 12 GB unpacked): a 60 GB disk, or a
+  second disk for `STAGE2` (see "Stage 2" below). Later runs check 20 GB free in `WORK` for `image`/`all` and
+  10 GB for `programs`.
 - **Internet access** for the downloads (about 3.5 GB including the stock ISO, 1.1 GB without it; 0.8.4 added
   linux-firmware, 0.67 GB, and sof-bin, 17 MB).
 - **Time:** about 80 minutes on 2 virtual CPUs and 4 GB RAM in VirtualBox (2026-11-15): downloads a few
@@ -113,6 +116,21 @@ redistribution notes are in `docs/third-party.md`.
   are compiled inside a **build root**: an overlay over the stock image, used with `chroot`, so the
   machine the build runs on is not changed. Each step of `spin/build-programs.sh` installs into
   `/Programs/<Name>/<Version>` in the build root.
+- **Stage 2 (since 2026-11-20):** the stage-1 build root runs the stock glibc 2.30, on which current
+  ready-made tools (llvm.org's LLVM/clang, ...) refuse to run. After the stage-1 steps (`STEPS` in
+  `build/build.sh`), the stage-2 steps (`STEPS2`) run in a **second build root on glibc 2.38**, like the
+  shipped system: an overlay whose lower layers are stage 1's upper folder and the stock image (so it
+  has every stage-1 program without a copy), switched to Glibc 2.38 by `spin/glibc-switch.sh` (the same
+  script the image step uses), with gcc's `include-fixed` headers made again for the 2.38 headers
+  (gcc's `mkheaders`). It lives in `STAGE2` (default `WORK/stage2`; may be another disk). Stage 2 now
+  holds build tools only: LLVM/clang 23.1.6 (llvm.org's build), CMake 3.31.12 (Kitware's build),
+  Python 3.13.18, Ninja 1.13.2 and Meson 1.12.1; nothing of it goes into the image yet.
+  - A change in stage 1 (any stage-1 step redone) makes the stage-2 root again and redoes **every**
+    stage-2 step; a change in one stage-2 step redoes it and the stage-2 steps after it.
+  - Rebuild one stage-2 step: `REBUILD=meson build.sh programs` (stage-1 steps stay cached).
+  - Start stage 2 from scratch: `build.sh unmount`, then delete the `STAGE2` folder (only stage 2
+    is lost; it is made again by the next `build.sh programs`).
+  - Disk and time: see "Stage 2 numbers" below.
 - `spin/build-iso.sh` then takes a fresh overlay over the stock image, copies the built programs and
   the project files from the checkout into it (installer, look, A/B system, Settings app...), builds
   the initramfs, packs the live image, makes the update file with `gobo-make-system`, signs it, and
@@ -131,10 +149,22 @@ redistribution notes are in `docs/third-party.md`.
   root. A step is redone only when its inputs changed (`step_inputs` in `build/build.sh`); do not use
   `REBUILD=linux` unless the kernel itself must change.
 
+### Stage 2 numbers (measured 2026-11-20, VirtualBox, 6 vCPU, 8 GB RAM)
+
+- **Downloads:** +1.3 GB (LLVM 23.1.6 `.tar.zst` 1.2 GB, CMake 55 MB, Python 23 MB, Meson 2.5 MB, Ninja 0.1 MB).
+- **Disk:** the stage-2 root's upper folder is **12 GB** (LLVM unpacked 12 GB: llvm.org ships every tool and the
+  static libraries; CMake 175 MB, Python 103 MB). `build.sh` asks for 15 GB free in `STAGE2` before LLVM is unpacked.
+  The lab keeps `STAGE2` on its own 80 GB disk (`STAGE2=/Mount/Stage2/stage2`).
+- **Time:** making the root (glibc switch, gcc `mkheaders`, a compile test) about 1 minute; `llvm` 39 s (unpacking),
+  `cmake` 6 s, `python` 3 min, `ninja` and `meson` seconds; the whole `build.sh programs` with stage 1 cached and
+  stage 2 from scratch 4 min 43 s; with everything cached 22 s.
+- **Needs:** zstd unpacks llvm.org's archive only with `--memory=2048MB` (1 GiB window), so about 1.1 GB of RAM
+  for that step.
+
 ## Known limits
 
 - Only GoboLinux 017.01 (x86_64) is supported as the build system; the build compiles against the
-  libraries of the stock image, the kernel driver against the kernel the build compiles itself (0.9.1: the newest 6.12.y, version in
+  libraries of the stock image (stage 2: the same, but with the built Glibc 2.38 as the C library), the kernel driver against the kernel the build compiles itself (0.9.1: the newest 6.12.y, version in
   `spin/kernel-version` and `build/sources.manifest`; the compile adds 1-2 hours to the first run and about
   6 GB to the peak disk use; the image's default linker is gold, so the step passes `LD=ld.bfd`).
 - The output is functionally the same as the project's releases, not bit-identical (time stamps,

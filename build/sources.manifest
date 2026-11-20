@@ -60,3 +60,10 @@ rsync           3.5.2         rsync-3.5.2.tar.gz                           a10d5
 # 0.10.3 (downloaded 2026-11-19 from the GitHub releases of intel/libva and intel/libva-utils):
 libva           2.24.1        libva-2.24.1.tar.bz2                         eec6050b52876f229bd35e9df17cd31a06785e18e6f7990c445b584628483d67  MIT                  https://github.com/intel/libva/releases/download/2.24.1/libva-2.24.1.tar.bz2
 libva-utils     2.24.0        libva-utils-2.24.0.tar.bz2                   7f066b33f369bdfb5d8f7644d623b4263acc230a438ee380473450d687e3faa8  MIT                  https://github.com/intel/libva-utils/releases/download/2.24.0/libva-utils-2.24.0.tar.bz2
+# Build-environment jump (2026-11-20): stage-2 build tools (build root only, nothing in the image). sha256 as published
+# with each GitHub release asset (and python.org's release file list for Python); checked again after the download.
+llvm            23.1.6        LLVM-23.1.6-Linux-X64.tar.zst                59e14234f145927f982b50627e8bafaf2fca50151b7d973d6a0b40796ddcfe9a  Apache-2.0-WITH-LLVM-exception https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst
+cmake           3.31.12       cmake-3.31.12-linux-x86_64.tar.gz            0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c  BSD-3-Clause         https://github.com/Kitware/CMake/releases/download/v3.31.12/cmake-3.31.12-linux-x86_64.tar.gz
+python          3.13.18       Python-3.13.18.tar.xz                        abb0102e6d4ae027509bcb82327d9dd85515b44a3ba8ad538cfc5e9847029f68  PSF-2.0              https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz
+ninja           1.13.2        ninja-linux-1.13.2.zip                       5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6  Apache-2.0           https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip
+meson           1.12.1        meson-1.12.1.tar.gz                          ab0a6ca09f8ef70c564c8241fb5a23957886a0b53fb58412b5e07eaf07dba743  Apache-2.0           https://github.com/mesonbuild/meson/releases/download/1.12.1/meson-1.12.1.tar.gz

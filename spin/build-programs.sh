@@ -976,6 +976,187 @@ libva-utils)
    lib=$(ldd $P/bin/vainfo | awk '$1 == "libva.so.2" { print $3 }')
    [ -n "$lib" ] && [ "$(readlink -f "$lib")" = /Programs/LibVA/2.24.1/lib/libva.so.2.2400.0 ] || { ldd $P/bin/vainfo; echo "vainfo does not use LibVA 2.24.1"; exit 1; }
    ;;
+########## stage 2 ##########################################################################
+# The steps below run in build/build.sh's stage-2 build root (STEPS2): the stage-1 build root with
+# its C library switched to Glibc 2.38 (spin/glibc-switch.sh) and gcc's include-fixed made again for
+# the 2.38 headers. They are build tools for the graphics stack (0.10.4: Mesa); none is in the image.
+llvm)
+   # Build-environment jump: llvm.org's prebuilt LLVM + clang 23.1.6 (needs GLIBC_2.34, so stage 2 only).
+   # Mesa (0.10.4) needs LLVM >= 18 for radeonsi/radv and clang + libclang-cpp for its CLC shaders.
+   # (llvm.org packs it with a 1 GiB zstd window: zstd 1.4.4 needs --memory to unpack it.)
+   # Unpacked as a Gobo program; in this root the index links of the stock LLVM 9.0.1 make room for it
+   # (llvm-config, libLTO, headers), the 9.0.1 folder itself stays.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=23.1.6 P=/Programs/LLVM/23.1.6 T=LLVM-23.1.6-Linux-X64.tar.zst
+   need $T
+   top=$(zstd -dc --memory=2048MB $SRC/$T 2>/dev/null | tar tf - 2>/dev/null | head -n 1 || true)
+   [ "${top%%/*}" = LLVM-$V-Linux-X64 ] || { echo "unexpected first entry in $T: '$top'"; exit 1; }
+   rm -rf $P && mkdir -p $P
+   zstd -dcq --memory=2048MB $SRC/$T | tar xf - -C $P --strip-components=1 --no-same-owner
+   [ -x $P/bin/clang ] && [ -x $P/bin/llvm-config ] && [ -d $P/include/llvm ] || { ls $P $P/bin | head -n 30; echo "LLVM $V: clang/llvm-config/headers missing"; exit 1; }
+   stage2_resources LLVM $V "LLVM $V and clang (the llvm.org release build): compilers and libraries for building Mesa" \
+      "Apache-2.0 WITH LLVM-exception" https://llvm.org/ \
+      https://github.com/llvm/llvm-project/releases/download/llvmorg-$V/$T "Glibc >= 2.34" GCC
+   # The static LLVM wants a static zstd, which 017.01 does not have: "llvm-config --system-libs" names the
+   # build machine's /usr/lib/x86_64-linux-gnu/libzstd.a (compiled in), and LLVM's cmake files need the
+   # target zstd::libzstd_static (their Findzstd looks for libzstd.a). Two added files in the program, a
+   # linker script lib/libzstd.a and a link lib/x86_64-linux-gnu/libzstd.a to it, point both at 017.01's
+   # libzstd.so.1 (1.4.4; LLVM uses its 1.4 API): programs linking LLVM then need libzstd.so.1, which the
+   # image has. SymlinkProgram links them into the index of this root.
+   [ "$($P/bin/llvm-config --system-libs)" = "-lrt -ldl -lm -lz /usr/lib/x86_64-linux-gnu/libzstd.a -lxml2" ] ||
+      { $P/bin/llvm-config --system-libs; echo "llvm-config --system-libs changed: check the libzstd.a link script"; exit 1; }
+   [ -e /System/Index/lib/libzstd.so.1 ] && [ -e /System/Index/lib/libxml2.so ] || { echo "no libzstd.so.1 or libxml2.so in the root"; exit 1; }
+   [ ! -e /System/Index/lib/libzstd.a ] || { ls -la /System/Index/lib/libzstd.a; echo "a libzstd.a is already in the index"; exit 1; }
+   mkdir -p $P/lib/x86_64-linux-gnu
+   printf '/* GoboRefined: the llvm.org LLVM build wants a static zstd; use the system libzstd.so.1 */\nINPUT ( /usr/lib/libzstd.so.1 )\n' > $P/lib/libzstd.a
+   ln -sfn ../libzstd.a $P/lib/x86_64-linux-gnu/libzstd.a
+   stage2_unlink /Programs/LLVM/9.0.1/
+   ln -sfn $V /Programs/LLVM/Current
+   SymlinkProgram LLVM $V | tail -n 1
+   [ "$(readlink -f /usr/lib/x86_64-linux-gnu/libzstd.a)" = $P/lib/libzstd.a ] && [ "$(readlink -f /usr/lib/libzstd.a)" = $P/lib/libzstd.a ] ||
+      { ls -la /usr/lib/libzstd* /usr/lib/x86_64-linux-gnu/ 2>&1 | head; echo "the libzstd.a link script is not linked into the index"; exit 1; }
+   # checks
+   clang --version | head -n 1 | grep -q "clang version $V" || { clang --version; echo "clang is not $V"; exit 1; }
+   [ "$(llvm-config --version)" = $V ] || { echo "llvm-config is not $V"; exit 1; }
+   # llvm.org's Linux build is a STATIC LLVM: no libLLVM.so, the LLVM libraries are .a files (Mesa links
+   # them into its drivers: meson -Dshared-llvm=disabled). Shared: libclang-cpp.so (clang's C++ API, with
+   # its own copy of LLVM), libclang.so (C API), libLTO, liblldb.
+   [ "$(llvm-config --shared-mode)" = static ] || echo "NOTE: llvm-config --shared-mode says $(llvm-config --shared-mode)"
+   echo "llvm-config: $(llvm-config --shared-mode), libdir $(llvm-config --libdir), $(llvm-config --libs | wc -w) libraries in --libs, targets: $(llvm-config --targets-built)"
+   for c in core amdgpu x86 mcjit orcjit bitwriter ipo coroutines lto passes
+   do llvm-config --libs $c > /dev/null || { echo "llvm-config does not know the component $c"; exit 1; }
+   done
+   for f in libLLVMCore.a libLLVMAMDGPUCodeGen.a libLLVMX86CodeGen.a libclangCodeGen.a libclangFrontend.a libclang-cpp.so.23.1 libclang.so.23.1
+   do [ -e $P/lib/$f ] || { echo "LLVM $V: lib/$f missing"; exit 1; }
+   done
+   for f in $P/bin/clang-23 $P/bin/llvm-config $P/lib/libclang-cpp.so.23.1 $P/lib/libclang.so.23.1
+   do
+      ! ldd "$f" | grep -q 'not found' || { ldd "$f"; echo "$f misses libraries"; exit 1; }
+      ! ldd -r "$f" 2>&1 | grep -q 'undefined symbol' || { ldd -r "$f" 2>&1 | grep 'undefined symbol' | head; echo "$f: undefined symbols"; exit 1; }
+   done
+   echo "libclang-cpp.so.23.1 needs: $(ldd $P/lib/libclang-cpp.so.23.1 | awk '{ print $1 }' | tr '\n' ' ')"
+   echo "highest GLIBC_ and GLIBCXX_ versions the LLVM binaries need: $(objdump -T $P/bin/clang-23 $P/lib/libclang-cpp.so.23.1 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1) $(objdump -T $P/bin/clang-23 $P/lib/libclang-cpp.so.23.1 2>/dev/null | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -n 1)"
+   mkdir -p /Data/Build/work/llvmtest && cd /Data/Build/work/llvmtest
+   printf '#include <stdio.h>\n#include <gnu/libc-version.h>\nint main(void) { printf("C by clang, glibc %%s\\n", gnu_get_libc_version()); return 0; }\n' > hello.c
+   printf '#include <iostream>\n#include <vector>\n#include <string>\nint main() { std::vector<std::string> v{"C++", "by", "clang"}; for (auto &s : v) std::cout << s << " "; std::cout << __cplusplus << std::endl; }\n' > hello.cpp
+   clang -O2 -o hello hello.c && ./hello
+   clang++ -O2 -std=c++17 -o hellocpp hello.cpp && ./hellocpp
+   # a program linked against the static LLVM, as Mesa will be (llvm-config --libs core)
+   printf '#include <llvm/IR/LLVMContext.h>\n#include <llvm/IR/Module.h>\n#include <llvm/Config/llvm-config.h>\n#include <iostream>\nint main() { llvm::LLVMContext c; llvm::Module m("t", c); std::cout << "linked LLVM " << LLVM_VERSION_STRING << std::endl; }\n' > llvmapi.cpp
+   g++ -O1 $(llvm-config --cxxflags) -o llvmapi llvmapi.cpp $(llvm-config --ldflags --libs core --system-libs) && ./llvmapi
+   ls -la llvmapi
+   du -sh $P $P/bin $P/lib $P/include
+   du -ch $P/lib/libLLVM*.a | tail -n 1 | sed 's/total/static LLVM libraries (lib\/libLLVM*.a)/'
+   ;;
+cmake)
+   # The prebuilt CMake 3.31.12 from Kitware (017.01 has 3.16.4): the LLVM-based and Khronos builds for
+   # Mesa (SPIRV-Tools, SPIRV-LLVM-Translator, glslang) need >= 3.20. Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=3.31.12 P=/Programs/CMake/3.31.12 T=cmake-3.31.12-linux-x86_64.tar.gz
+   need $T
+   rm -rf $P && mkdir -p $P
+   tar xzf $SRC/$T -C $P --strip-components=1 --no-same-owner
+   [ -x $P/bin/cmake ] || { echo "no bin/cmake in $T"; exit 1; }
+   stage2_resources CMake $V "Cross-platform build system generator (the Kitware binary release)" \
+      "BSD-3-Clause" https://cmake.org/ https://github.com/Kitware/CMake/releases/download/v$V/$T
+   stage2_unlink /Programs/CMake/3.16.4/
+   ln -sfn $V /Programs/CMake/Current
+   SymlinkProgram CMake $V | tail -n 1
+   cmake --version | head -n 1 | grep -qx "cmake version $V" || { cmake --version; echo "cmake is not $V"; exit 1; }
+   # the way SPIRV-LLVM-Translator finds LLVM (0.10.4): find_package(LLVM CONFIG), link the static libraries
+   if [ -d /Programs/LLVM/23.1.6/lib/cmake/llvm ]
+   then
+      T=/Data/Build/work/cmaketest
+      rm -rf $T && mkdir -p $T && cd $T
+      printf 'cmake_minimum_required(VERSION 3.20)\nproject(t CXX)\nfind_package(LLVM 23.1 REQUIRED CONFIG)\nmessage(STATUS "LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")\ninclude_directories(${LLVM_INCLUDE_DIRS})\nllvm_map_components_to_libnames(L core support)\nadd_executable(t t.cpp)\ntarget_link_libraries(t ${L})\n' > CMakeLists.txt
+      printf '#include <llvm/IR/LLVMContext.h>\n#include <llvm/Config/llvm-config.h>\n#include <iostream>\nint main() { llvm::LLVMContext c; std::cout << "cmake + LLVM " << LLVM_VERSION_STRING << std::endl; }\n' > t.cpp
+      cmake -S . -B b > cmake.log 2>&1 || { tail -n 30 cmake.log; exit 1; }
+      grep 'LLVM 23' cmake.log
+      cmake --build b -j$(nproc) > build.log 2>&1 || { tail -n 30 build.log; exit 1; }
+      ./b/t
+   fi
+   du -sh $P
+   ;;
+python)
+   # Python 3.13.18 (017.01 has 3.8.1): meson >= 1.12 and Mesa 26 need Python >= 3.10. Installed with
+   # "altinstall" (python3.13 only): python3 stays the stock 3.8.1, which GoboLinux's own scripts use.
+   # Build root only. No PGO/LTO (build time); ensurepip off (packages come from pinned sources).
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=3.13.18 P=/Programs/Python/3.13.18
+   unpack Python-$V.tar.xz Python-$V
+   rm -rf $P
+   ./configure --prefix=$P --enable-shared --with-ensurepip=no --without-static-libpython \
+      LDFLAGS="-Wl,-rpath,$P/lib" > /Data/Build/python-configure.log 2>&1 || { tail -n 30 /Data/Build/python-configure.log; exit 1; }
+   make -j$(nproc) > /Data/Build/python-make.log 2>&1 || { grep -m 5 -B 3 -A 3 'error' /Data/Build/python-make.log; tail -n 30 /Data/Build/python-make.log; exit 1; }
+   grep -A 12 -i 'modules were not found\|failed to build\|could not build' /Data/Build/python-make.log | head -n 30 || true
+   make altinstall > /Data/Build/python-install.log 2>&1 || { tail -n 30 /Data/Build/python-install.log; exit 1; }
+   rm -rf $P/lib/python3.13/test $P/lib/python3.13/idlelib/idle_test
+   stage2_resources Python $V "The Python 3.13 interpreter (python3.13; build tool for meson and Mesa)" \
+      "PSF-2.0" https://www.python.org/ https://www.python.org/ftp/python/$V/Python-$V.tar.xz OpenSSL ZLib LibFFI
+   [ "$(readlink /Programs/Python/Current)" = 3.8.1 ] || ln -sfn 3.8.1 /Programs/Python/Current   # the stock interpreter stays the default
+   SymlinkProgram Python $V | tail -n 1
+   [ "$(readlink -f /System/Index/bin/python3)" = /Programs/Python/3.8.1/bin/python3.8 ] || { echo "python3 is no longer the stock 3.8.1"; exit 1; }
+   # (no _bz2: 017.01 has no libbz2 library, only the bzip2 program; no _tkinter: no Tk. Neither is needed here.)
+   python3.13 -c 'import sys, zlib, hashlib, json, ctypes, xml.etree.ElementTree, lzma, sqlite3, decimal; print("Python", sys.version.split()[0], "modules ok")'
+   python3.13 -c 'import ssl; print(ssl.OPENSSL_VERSION)' || echo "NOTE: python3.13 has no ssl module (not needed for meson/Mesa)"
+   du -sh $P
+   ;;
+ninja)
+   # The ninja build tool 1.13.2, the Linux binary of its release. The stock bin/ninja is a stub of a
+   # pip package that is not there (/System/Aliens/PIP/3.8): its index link is replaced. Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=1.13.2 P=/Programs/Ninja/1.13.2 T=ninja-linux-1.13.2.zip
+   need $T
+   rm -rf $P && mkdir -p $P/bin
+   unzip -q -o $SRC/$T -d $P/bin
+   chmod 755 $P/bin/ninja
+   stage2_resources Ninja $V "Small build system (the backend of meson)" "Apache-2.0" https://ninja-build.org/ \
+      https://github.com/ninja-build/ninja/releases/download/v$V/ninja-linux.zip
+   stage2_unlink /System/Aliens/PIP/3.8/bin/ninja
+   ln -sfn $V /Programs/Ninja/Current
+   SymlinkProgram Ninja $V | tail -n 1
+   [ "$(ninja --version)" = $V ] || { echo "ninja is not $V"; exit 1; }
+   ;;
+meson)
+   # Meson 1.12.1 (pure Python), run from its source tree by Python 3.13 (step python): no pip, no
+   # setuptools needed. Mesa 26 needs meson >= 1.5 (017.01 has none that works: bin/meson is a stub
+   # of a missing pip package, replaced here). Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=1.12.1 P=/Programs/Meson/1.12.1 PY=/Programs/Python/3.13.18/bin/python3.13
+   [ -x $PY ] || { echo "Python 3.13.18 is not built (step python)"; exit 1; }
+   [ -x /Programs/Ninja/1.13.2/bin/ninja ] || { echo "Ninja 1.13.2 is not there (step ninja)"; exit 1; }
+   unpack meson-$V.tar.gz meson-$V
+   rm -rf $P && mkdir -p $P/bin $P/lib/meson $P/doc
+   cp -a meson.py mesonbuild $P/lib/meson/
+   install -m 644 COPYING $P/doc/
+   $PY -m compileall -q $P/lib/meson/mesonbuild > /dev/null
+   printf '#!/bin/sh\n# Meson %s, run by Python 3.13 (GoboRefined stage-2 build root)\nexec %s %s/lib/meson/meson.py "$@"\n' $V $PY $P > $P/bin/meson
+   chmod 755 $P/bin/meson
+   stage2_resources Meson $V "Meson build system (run by Python 3.13)" "Apache-2.0" https://mesonbuild.com/ \
+      https://github.com/mesonbuild/meson/releases/download/$V/meson-$V.tar.gz "Python >= 3.10" Ninja
+   stage2_unlink /System/Aliens/PIP/3.8/bin/meson
+   ln -sfn $V /Programs/Meson/Current
+   SymlinkProgram Meson $V | tail -n 1
+   [ "$(meson --version)" = $V ] || { echo "meson is not $V"; exit 1; }
+   # a tiny project, configured, built and run: once with gcc, once with clang (step llvm)
+   T=/Data/Build/work/mesontest
+   rm -rf $T && mkdir -p $T && cd $T
+   printf "project('hello', 'c', 'cpp', version : '1.0')\nm = meson.get_compiler('c').find_library('m')\nexecutable('hello', 'hello.c', dependencies : m)\nexecutable('hellocpp', 'hello.cpp')\n" > meson.build
+   printf '#include <stdio.h>\n#include <math.h>\n#include <gnu/libc-version.h>\nint main(void) { printf("meson C: sqrt(2)=%%.3f glibc %%s\\n", sqrt(2.0), gnu_get_libc_version()); return 0; }\n' > hello.c
+   printf '#include <iostream>\nint main() { std::cout << "meson C++ " << __VERSION__ << std::endl; }\n' > hello.cpp
+   meson setup build-gcc > meson-gcc.log 2>&1 || { tail -n 30 meson-gcc.log; exit 1; }
+   meson compile -C build-gcc && ./build-gcc/hello && ./build-gcc/hellocpp
+   if command -v clang > /dev/null
+   then
+      CC=clang CXX=clang++ meson setup build-clang > meson-clang.log 2>&1 || { tail -n 30 meson-clang.log; exit 1; }
+      ninja -C build-clang && ./build-clang/hello && ./build-clang/hellocpp
+   fi
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"
