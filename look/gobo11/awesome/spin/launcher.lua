@@ -44,23 +44,25 @@ local function load_apps()
    end)
 end
 
-local function filter(query)
+-- the apps whose name matches `query` (names starting with it first, then names containing it;
+-- both in alphabetical order). 0.10.6: also used by the start menu panel's search box.
+function launcher.find(query)
    query = (query or ""):lower()
-   matches = {}
-   if query == "" then
-      for _, app in ipairs(apps) do table.insert(matches, app) end
-   else
-      local starts, contains = {}, {}
-      for _, app in ipairs(apps) do
-         local at = app.name:lower():find(query, 1, true)
-         if at == 1 then table.insert(starts, app)
-         elseif at then table.insert(contains, app) end
-      end
-      for _, app in ipairs(starts) do table.insert(matches, app) end
-      for _, app in ipairs(contains) do table.insert(matches, app) end
-      if #matches == 0 and not no_commands then
-         table.insert(matches, { name = "Run command: " .. query, cmdline = query, shell = true })
-      end
+   local starts, contains = {}, {}
+   for _, app in ipairs(apps) do
+      local at = app.name:lower():find(query, 1, true)
+      if at == 1 then table.insert(starts, app)
+      elseif at then table.insert(contains, app) end
+   end
+   for _, app in ipairs(contains) do table.insert(starts, app) end
+   return starts
+end
+
+local function filter(query)
+   query = query or ""
+   matches = launcher.find(query)
+   if query ~= "" and #matches == 0 and not no_commands then
+      table.insert(matches, { name = "Run command: " .. query, cmdline = query, shell = true })
    end
    selected, offset = 1, 0
 end
@@ -270,6 +272,9 @@ function launcher.power_xy()
    if not open then return nil end
    return { x = popup.x + WIDTH - 14 - 20, y = popup.y + popup.height - 10 - 20 }
 end
+
+-- 0.10.6: read the list again (start menu editor, AppImage install; rc.lua's spin_menu_reload)
+function launcher.reload() load_apps() end
 
 function launcher.setup(args)
    on_power = args and args.on_power

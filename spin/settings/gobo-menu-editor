@@ -1,0 +1,24 @@
+#!/bin/sh
+# gobo-menu-editor — GoboRefined 0.10.6: the start menu editor (a right click on the dots button).
+# Lua + lgi + GTK 3, file menu-editor.lua next to the Settings app's files. One window per user:
+# if it is open on this desktop, the desktop (Awesome) brings it to the front instead.
+# Simple accounts have no editor.
+export NO_AT_BRIDGE=1
+case " $(id -Gn 2>/dev/null) " in
+   *" simple "*) echo "gobo-menu-editor: not for Simple accounts" >&2; exit 1 ;;
+esac
+if [ -n "${DISPLAY:-}" ] && command -v awesome-client > /dev/null 2>&1
+then
+   found=$(timeout 3 awesome-client '
+      for _, c in ipairs(client.get()) do
+         if c.instance == "gobo-menu-editor" then
+            c:jump_to(false)
+            return "found-editor-window"
+         end
+      end
+      return "none"' 2>/dev/null)
+   case "$found" in
+      *found-editor-window*) exit 0 ;;
+   esac
+fi
+exec lua /Programs/GoboSpin/Current/share/gobo-settings/menu-editor.lua "$@"

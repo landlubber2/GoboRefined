@@ -124,20 +124,34 @@ scenario() {
                         run menu-click-gtk 'return T.click_pos("start")' 'return T.click_client_free("zenity")' ;;
    menu-click-taskbar)  run menu-click-taskbar 'return T.click_pos("start")' 'local x, y = T.pos("start") T.click(x + 177, y) return 1' ;;
    menu-escape)         run menu-escape 'return T.click_pos("start")' '@k esc' ;;
-   menu-then-search)    run menu-then-search 'return T.click_pos("start")' 'return T.click_pos("start", 3)' 'T.click_desktop() return 1' ;;
+   menu-then-editor)    # 0.10.6: a right click on the dots button opens the start menu editor (no longer the search).
+                        # With the menu open, the first right click only closes it (the menu's click sheet covers
+                        # the taskbar, as before 0.10.6); the second one opens the editor.
+                        steps 'return T.click_pos("start")' 'return T.click_pos("start", 3)' 'return T.click_pos("start", 3)'; pause 3
+                        is menu-then-editor-open 'for _, c in ipairs(client.get()) do if c.instance == "gobo-menu-editor" then return "editor-open" end end return "none"' editor-open
+                        menu_open menu-then-editor-menu-closed false
+                        L 'for _, c in ipairs(client.get()) do if c.instance == "gobo-menu-editor" then c:kill() end end return 1' > /dev/null; pause 1
+                        check menu-then-editor ;;
    menu-rightclick-desktop) run menu-rightclick-desktop 'T.click_desktop(3) return 1' ;;
-   search-click-out)    run search-click-out 'return T.click_pos("start", 3)' 'T.click_desktop() return 1' ;;
-   search-click-client) run search-click-client 'return T.click_pos("start", 3)' ;;
+   search-click-out)    run search-click-out '@k win r' 'T.click_desktop() return 1' ;;   # 0.10.6: the search opens by key only
+   search-click-client) run search-click-client '@k win r' ;;
    search-escape)       run search-escape '@k win r' '@k esc' ;;
    search-types)        # the search must take typing after the terminal had focus: run a command from it
                         L 'return T.click_client("inputtest")' > /dev/null; pause 1
                         steps '@k win r' '@t touch /tmp/kb-search-typed'; pause 1
                         result search-types /tmp/kb-search-typed; reset ;;
-   search-from-menu)    L 'return T.click_client("inputtest")' > /dev/null; pause 1
-                        steps 'return T.click_pos("start")' '@k down' '@k enter' '@t touch /tmp/kb-search-from-menu'; pause 1
-                        result search-from-menu /tmp/kb-search-from-menu; reset ;;
+   panel-search)        # 0.10.6: with the panel shown, typing in the open start menu goes to the panel's search box;
+                        # Escape closes the menu and the window gets the keys again (the panel setting is put back)
+                        was=$(L 'return tostring(require("spin.startpanel").enabled())' | grep -o 'true\|false')
+                        L 'require("spin.startpanel").set_enabled(true) return 1' > /dev/null
+                        steps 'return T.click_pos("start")' '@t zzq'
+                        is panel-search-typed 'return require("spin.startpanel").query()' zzq
+                        steps '@k esc'
+                        menu_open panel-search-closed false
+                        L "require(\"spin.startpanel\").set_enabled(${was:-false}) return 1" > /dev/null
+                        check panel-search ;;
    search-twice)        run search-twice '@k win r' 'T.click_desktop() return 1' '@k win r' '@k esc' ;;
-   search-power)        run search-power 'return T.click_pos("start", 3)' 'local p = spin_debug.launcher_power_xy() if p then T.click(p.x, p.y) end return 1' 'T.click_desktop() return 1' ;;
+   search-power)        run search-power '@k win r' 'local p = spin_debug.launcher_power_xy() if p then T.click(p.x, p.y) end return 1' 'T.click_desktop() return 1' ;;
    power-click-out)     run power-click-out '@k ctrl alt del' 'T.click_desktop() return 1' ;;
    power-escape)        run power-escape '@k ctrl alt del' '@k esc' ;;
    tasklist-menu)       run tasklist-menu 'local x, y = T.pos("start") T.click(x + 177, y, 3) return 1' ;;
@@ -214,8 +228,8 @@ scenario() {
    esac
 }
 
-ALL="plain menu-click-client menu-click-desktop menu-click-gtk menu-click-taskbar menu-escape menu-then-search
-     menu-rightclick-desktop search-click-out search-click-client search-escape search-types search-from-menu
+ALL="plain menu-click-client menu-click-desktop menu-click-gtk menu-click-taskbar menu-escape menu-then-editor
+     menu-rightclick-desktop search-click-out search-click-client search-escape search-types panel-search
      search-twice search-power power-click-out power-escape tasklist-menu net-menu usb-menu window-menu
      hotkeys-click hotkeys-key alttab alttab-twice desktops desktops-escape shot-menu shot-escape clip-menu
      two-popups panic-in-menu shot-print-in-menu shot-card-in-menu win-tap win-hold

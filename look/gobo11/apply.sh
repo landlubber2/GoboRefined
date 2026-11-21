@@ -18,6 +18,8 @@ cp "$here/picom.conf" "$home/.config/picom.conf"
 # 0.9.6: file manager action "Pin to start" (files and folders in the start menu's panel)
 mkdir -p "$home/.local/share/file-manager/actions"
 cp "$here/file-manager/actions/gobo-pin-to-start.desktop" "$home/.local/share/file-manager/actions/"
+# 0.10.6: "Install" for AppImages (to ~/Applications/<Name>/, start menu entry and/or pin)
+cp "$here/file-manager/actions/gobo-appimage-install.desktop" "$home/.local/share/file-manager/actions/"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
 # Terminal: right click pastes (perl extension, loaded via URxvt.perl-ext-common)
 mkdir -p "$home/.urxvt/ext"

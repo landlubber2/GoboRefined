@@ -64,6 +64,9 @@ if [ "${1:-}" = session ]; then
    # their hotkeys file is ignored (no Hotkeys tile; a file planted by hand changes nothing)
    ok "session: frequently used panel opens with the menu" "$(L 'local sp = require("spin.startpanel") local was = sp.enabled() sp.set_enabled(true) spin_debug.mainmenu:show() local v = spin_debug.startpanel ~= nil and spin_debug.startpanel.visible spin_debug.mainmenu:hide() sp.set_enabled(was) return "panel=" .. tostring(v)')" "panel=true"
    ok "session: no file pins for Simple" "$(S 'su kid -c "gobo-pin-to-start /Users/kid/Desktop" > /dev/null 2>&1; echo pin=$?')" "pin=1"
+   # 0.10.6: no start menu editor and no "Install" for AppImages in a Simple account
+   ok "session: no start menu editor for Simple" "$(S 'su kid -c "gobo-menu-editor" > /dev/null 2>&1; echo editor=$?')" "editor=1"
+   ok "session: no AppImage Install for Simple" "$(S 'su kid -c "gobo-appimage-install --offer /Users/kid/Downloads/x.AppImage"')" "false"
    ok "session: own hotkeys ignored for Simple" "$(S 'su kid -c "mkdir -p ~/.config/goborefined && printf \"key\\tclipboard\\tMod4+x\\n\" > ~/.config/goborefined/hotkeys"'; L 'spin_hotkeys_reload() local n = 0 for _, k in ipairs(root.keys()) do if k.key == "x" then n = n + 1 end end return "x=" .. n')" "x=0"
    S 'rm -f /Users/kid/.config/goborefined/hotkeys'
    # the file manager: "/" and "/Programs" refused, a window starts at home

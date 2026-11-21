@@ -23,6 +23,8 @@
 #   VERSION            version written into the image                [spin/build-iso.sh default]
 #   GOBO_SIGNING_KEY   private key (PEM) to sign the update file with. Read into memory only
 #                      (a copy in /dev/shm, deleted after use); never copied into the image.
+#                      A key file that is itself in /dev/shm (handed over in memory) is deleted
+#                      when build.sh ends, however it ends (done, error, Ctrl+C, kill -TERM).
 #                      If unset, a key pair is generated once in $WORK/keys and reused.
 #   REBUILD            program steps to build again even if done, e.g. REBUILD="libfm pcmanfm"
 #
@@ -37,6 +39,20 @@ REPO=$(cd "$HERE/.." && pwd)
 MANIFEST=$HERE/sources.manifest
 WORK=${WORK:-/Data/Build/GoboRefined}
 CMD=${1:-all}
+# 0.10.6: a key handed over in memory (GOBO_SIGNING_KEY=/dev/shm/...) is deleted at the end of
+# every run. Before, only build.sh's own copy (TMPKEY) was deleted and the handed-over file stayed
+# in /dev/shm until the machine was switched off (found after the 0.10.5 build).
+SHMKEY=
+case "${GOBO_SIGNING_KEY:-}" in
+   /dev/shm/*/*|*/../*|*/..) ;;          # only a file directly in /dev/shm
+   /dev/shm/?*) [ -f "$GOBO_SIGNING_KEY" ] && [ ! -L "$GOBO_SIGNING_KEY" ] && SHMKEY=$GOBO_SIGNING_KEY ;;
+esac
+# until on_exit (below) takes over, an early stop (bad argument, not root, ...) deletes it too;
+# a signal ends the script through exit, so the EXIT trap runs
+trap '[ -n "$SHMKEY" ] && rm -f "$SHMKEY"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 STOCK_VERSION=017.01
 STOCK_ISO_SIZE=2433744896          # bytes of GoboLinux-017.01-x86_64.iso
@@ -123,6 +139,7 @@ on_exit() {
    local rc=$?
    set +e
    [ -n "$TMPKEY" ] && rm -f "$TMPKEY"
+   [ -n "$SHMKEY" ] && rm -f "$SHMKEY" && echo "build.sh: deleted the signing key $SHMKEY"
    unmount_all
    if [ $rc -ne 0 ]
    then echo "build.sh: stopped with an error (exit $rc). Fix it and run the same command again: finished parts are kept. Log: $LOG"

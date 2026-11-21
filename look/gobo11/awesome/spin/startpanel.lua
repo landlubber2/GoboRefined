@@ -27,6 +27,12 @@
 -- menu reads two small files only when they changed (modification time) and checks whether the
 -- (at most 8) pinned files still exist. No folder is scanned.
 -- Simple accounts: the panel works with their own programs; files and folders cannot be pinned.
+--
+-- 0.10.6: a search box at the bottom of the panel (the panel keeps its size; the 8 rows get a
+-- little lower). While the panel is shown, typing goes there (rc.lua hands the start menu's keys
+-- to M.search_key): the rows then show the matching apps (M.find = the search popup's own
+-- matching, launcher.find); Enter starts the first one, Backspace deletes, Escape closes the menu
+-- as before. Closing the menu empties the box.
 local awful = require("awful")
 local wibox = require("wibox")
 local gears = require("gears")
@@ -39,6 +45,7 @@ local ctxmenu = require("spin.ctxmenu")
 local M = {}
 M.SLOTS = 8
 local HEADER_H = 44
+local SEARCH_H = 46
 local MAX_USAGE, AGE_AT = 60, 100
 
 local home = os.getenv("HOME") or ""
@@ -48,6 +55,7 @@ M.pins_file = M.dir .. "/start-pins"
 M.usage_file = M.dir .. "/app-usage"
 M.file_manager = "pcmanfm"
 M.allow_files = true      -- false for Simple accounts (rc.lua)
+M.find = nil              -- function(query) -> apps (rc.lua: launcher.find)
 
 -- Desktop-file ids ----------------------------------------------------------------------
 -- menu_gen (Awesome 4.3) does not hand out the desktop file of an entry. Every file it reads
@@ -315,8 +323,9 @@ function M.slots()
 end
 
 -- the panel --------------------------------------------------------------------------------
-local panel, menu_ref, rows_box
+local panel, menu_ref, rows_box, header_box, search_text
 local visible = false
+local query = ""
 
 function M.enabled()
    local f = io.open(M.shown_file, "r")
@@ -347,7 +356,9 @@ local function open_slot(s)
 end
 
 local function slot_context(s)
-   if s.pinned then
+   if s.result then
+      if s.app then M.app_context(s.app) end
+   elseif s.pinned then
       ctxmenu.show({ { "Unpin", function() M.unpin(s.kind, s.target) end } })
    else
       ctxmenu.show({ { "Pin to start", function() M.pin("app", s.target) end } })
@@ -358,10 +369,33 @@ local function dim(text)
    return '<span foreground="' .. beautiful.palette.fg_dim .. '">' .. gears.string.xml_escape(text) .. '</span>'
 end
 
+-- the apps matching the search box, as slots
+local function results()
+   local list = {}
+   for _, a in ipairs(M.find and M.find(query) or {}) do
+      if #list >= M.SLOTS then break end
+      local id = a.id or M.id_for(a.name, a.cmdline)
+      table.insert(list, { kind = "app", target = id, app = a, name = a.name,
+                           icon = a.icon or beautiful.default_app_icon, result = true })
+   end
+   return list
+end
+
+local function show_search()
+   if not search_text then return end
+   if query == "" then
+      search_text.markup = dim("Type to search")
+   else
+      search_text.markup = gears.string.xml_escape(query) .. '<span foreground="' .. beautiful.accent .. '">|</span>'
+   end
+   header_box.markup = "<b>" .. (query == "" and "Pinned and frequent" or "Search results") .. "</b>"
+end
+
 local function build_rows(height)
    rows_box:reset()
-   local row_h = math.max(28, math.floor((height - HEADER_H - 8) / M.SLOTS))
-   local list = M.slots()
+   local row_h = math.max(28, math.floor((height - HEADER_H - SEARCH_H - 8) / M.SLOTS))
+   local list = (query ~= "") and results() or M.slots()
+   show_search()
    for i = 1, M.SLOTS do
       local s = list[i]
       local row
@@ -385,7 +419,8 @@ local function build_rows(height)
             awful.button({}, 1, nil, function() ctxmenu.hide(); open_slot(s) end),
             awful.button({}, 3, nil, function() slot_context(s) end)))
       else
-         local hint = (i == 1) and "Apps you start often appear here." or
+         local hint = (query ~= "") and ((i == 1) and "No applications found" or "") or
+                      (i == 1) and "Apps you start often appear here." or
                       (i == 2 and #list == 0) and "Right-click an app to pin it." or ""
          row = wibox.widget {
             { markup = dim(hint), font = beautiful.font_small, widget = wibox.widget.textbox },
@@ -403,13 +438,35 @@ local function build()
       bg = beautiful.menu_bg_normal, fg = beautiful.fg_normal,
       border_width = 1, border_color = beautiful.menu_border_color,
       shape = beautiful.menu_shape })
+   header_box = wibox.widget { markup = "<b>Pinned and frequent</b>", font = beautiful.font,
+                               forced_height = HEADER_H - 8, widget = wibox.widget.textbox }
+   search_text = wibox.widget { markup = "", font = beautiful.font, ellipsize = "start",
+                                widget = wibox.widget.textbox }
+   local p = beautiful.palette
+   local search_box = wibox.widget {
+      {
+         {
+            { image = beautiful.search_icon, forced_width = 18, forced_height = 18, widget = wibox.widget.imagebox },
+            { search_text, left = 10, widget = wibox.container.margin },
+            layout = wibox.layout.fixed.horizontal,
+         },
+         left = 12, right = 12, top = 8, bottom = 8, widget = wibox.container.margin,
+      },
+      bg = p.surface2, shape = beautiful.button_shape,
+      shape_border_width = 1, shape_border_color = p.border,
+      forced_height = SEARCH_H - 10,
+      widget = wibox.container.background,
+   }
    panel:setup {
       {
-         { { markup = "<b>Pinned and frequent</b>", font = beautiful.font, forced_height = HEADER_H - 8,
-             widget = wibox.widget.textbox },
-           left = 16, top = 4, widget = wibox.container.margin },
-         { rows_box, left = 4, right = 4, bottom = 4, widget = wibox.container.margin },
-         layout = wibox.layout.fixed.vertical,
+         {
+            { header_box, left = 16, top = 4, widget = wibox.container.margin },
+            { rows_box, left = 4, right = 4, widget = wibox.container.margin },
+            layout = wibox.layout.fixed.vertical,
+         },
+         nil,
+         { search_box, left = 8, right = 8, bottom = 8, top = 2, widget = wibox.container.margin },
+         layout = wibox.layout.align.vertical,
       },
       bg = beautiful.menu_bg_normal,   -- as opaque as the menu (its rows have a background of their own)
       widget = wibox.container.background,
@@ -422,7 +479,47 @@ function M.hide()
    ctxmenu.hide()
    if panel then panel.visible = false end
    visible = false
+   query = ""
 end
+
+-- 0.10.6: a key pressed while the start menu (or one of its category menus) has the keyboard.
+-- Returns true when the search box took it (the menu then ignores it).
+local function printable(key)
+   if key == "space" then return " " end
+   if type(key) == "string" and utf8.len(key) == 1 and not key:match("^%c$") then return key end
+end
+function M.search_key(mods, key, event)
+   if not visible or not panel then return false end
+   for _, m in ipairs(mods or {}) do
+      if m == "Control" or m == "Mod1" or m == "Mod4" then return false end
+   end
+   if key == "BackSpace" then
+      if query == "" then return false end
+      if event == "press" then
+         query = query:sub(1, (utf8.offset(query, -1) or 1) - 1)
+         M.refresh()
+      end
+      return true
+   elseif key == "Return" or key == "KP_Enter" then
+      if query == "" then return false end
+      if event == "press" then
+         local first = results()[1]
+         if first then
+            if menu_ref then menu_ref:hide() end
+            M.launch(first.app)
+         end
+      end
+      return true
+   end
+   local ch = printable(key)
+   if not ch or (ch == " " and query == "") then return false end
+   if event == "press" then
+      query = query .. ch
+      M.refresh()
+   end
+   return true
+end
+function M.query() return query end   -- lab tests
 
 function M.is_visible() return visible end
 

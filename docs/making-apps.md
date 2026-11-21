@@ -7,6 +7,9 @@ file so it passes that check.
 You can also ship a program as an **AppImage** (one file, made executable, started with a double-click).
 That needs no package at all. Use a package when you want the program to show up in the menu and the
 search like a built-in one, and to be removable from the Apps page.
+Since 0.10.6 a user can also right-click an AppImage in the file manager and choose **Install**: it moves to
+`~/Applications/<Name>/` and gets a start menu entry and/or a pin (name, icon and category come from the
+AppImage's own `.desktop` file and icon, so ship those inside it); the start menu editor removes it again.
 
 ## The format in one minute
 

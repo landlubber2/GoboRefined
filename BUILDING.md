@@ -90,7 +90,9 @@ public half is in its image.
   updates for those systems later; it is never put into the image.
 - **Your own key:** `GOBO_SIGNING_KEY=/path/to/private.pem WORK=... bash build/build.sh`. The key is
   read into memory (a copy in `/dev/shm` that is deleted afterwards); its public half goes into the
-  image. Make one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out key.pem`.
+  image. A key file you put into `/dev/shm` yourself (`GOBO_SIGNING_KEY=/dev/shm/name.pem`, the way to
+  hand a key over without writing it to a disk) is deleted when the build ends, also after an error,
+  Ctrl+C or `kill`; put it there again for the next run. Make one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out key.pem`.
 - The project's own key is not in the repository; only the project's releases are signed with it.
 
 ## What is downloaded

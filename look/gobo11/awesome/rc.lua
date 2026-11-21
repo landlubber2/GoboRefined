@@ -40,6 +40,8 @@ local simple = require("spin.simple")
 spin_simple = simple   -- lab tests
 local window_menu = require("gobo.awesome.window_menu")
 local menu_gen = require("menubar.menu_gen")
+local appmenu = require("spin.appmenu")   -- 0.10.6: the program list the XDG way (user copies win)
+appmenu.install()
 local icon_theme = require("menubar.icon_theme")
 local hotkeys_popup = require("awful.hotkeys_popup.widget")
 
@@ -301,17 +303,39 @@ local function menu_icon(name)
    return icon_theme():find_icon_path(name, 24) or menubar.utils.lookup_icon(name)
 end
 
+-- 0.10.6: no "Search applications..." here any more (the panel has a search box; the key and the
+-- desktop menu still open the search popup); "<- Frequently used apps" is the first entry, so
+-- "Power..." is the last.
 local mymainmenu = awful.menu({
    items = awful.util.table.join({
-      { "Search applications...", function() launcher.show() end, beautiful.search_icon },
+      -- 0.9.6: the panel switch (the menu stays open; the label says what a click does next)
+      { startpanel.toggle_label(), function(item, m)
+         startpanel.set_enabled(not startpanel.enabled())
+         if item and item.label then item.label:set_text(startpanel.toggle_label()) end
+         return true   -- keep the menu open: awful.menu re-shows it, which shows or hides the panel
+      end, menu_icon("view-list") or menu_icon("go-previous") },
    }, (not simple.is_simple) and {   -- 0.9.1: no terminal for Simple accounts
       { "Terminal", terminal, menubar.utils.lookup_icon("utilities-terminal") or beautiful.default_app_icon },
    } or {}, gears.filesystem.file_readable("/System/Index/bin/gobo-settings")   -- 0.8.2: Settings app (gear)
       and { { "Settings", "gobo-settings", menubar.utils.lookup_icon("preferences-system") or beautiful.default_app_icon } } or {}),
    theme = { width = beautiful.menu_width, height = beautiful.menu_height },
 })
+local fixed_items = #mymainmenu.items
 
-menu_gen.generate(function(entries)
+-- 0.10.6: keys typed while the start menu or one of its category menus has the keyboard go to
+-- the panel's search box first (only while the panel is shown; spin/startpanel.lua)
+local function search_first(m)
+   local grab = m._keygrabber
+   m._keygrabber = function(mods, key, event)
+      if startpanel.search_key(mods, key, event) then return end
+      return grab(mods, key, event)
+   end
+end
+search_first(mymainmenu)
+
+local function fill_start_menu(entries)
+   -- 0.10.6: built again by spin_menu_reload(): drop the categories and "Power..." first
+   while #mymainmenu.items > fixed_items do mymainmenu:delete(#mymainmenu.items) end
    local cat_keys = {}
    local cat_submenus = {}
 
@@ -324,15 +348,17 @@ menu_gen.generate(function(entries)
    for _, entry in ipairs(entries) do
       if entry.name ~= nil and entry.cmdline ~= nil and simple.allows(entry) then
          table.insert(allowed, entry)
-      end
-      if entry.category ~= nil and entry.name ~= nil and entry.cmdline ~= nil and simple.allows(entry) then
          -- entries whose icon is not found keep their place, with the generic icon
          -- 0.9.6: started through startpanel.launch (counted for "frequently used"); `app` lets
-         -- a right click pin it
-         local app = { id = startpanel.id_for(entry.name, entry.cmdline), name = entry.name,
+         -- a right click pin it. 0.10.6: an entry can be in more than one category (spin/appmenu.lua)
+         local app = { id = entry.id or startpanel.id_for(entry.name, entry.cmdline), name = entry.name,
                        cmdline = entry.cmdline, icon = entry.icon }
-         table.insert(cat_submenus[entry.category], { entry.name, function() startpanel.launch(app) end,
-            entry.icon or beautiful.default_app_icon, app = app })
+         for _, cat in ipairs(entry.categories or { entry.category }) do
+            if cat_submenus[cat] then
+               table.insert(cat_submenus[cat], { entry.name, function() startpanel.launch(app) end,
+                  entry.icon or beautiful.default_app_icon, app = app })
+            end
+         end
       end
    end
    startpanel.set_apps(allowed)
@@ -341,16 +367,27 @@ menu_gen.generate(function(entries)
       if #cat_submenus[k] > 0 then
          local cat = menu_gen.all_categories[k]
          mymainmenu:add({ cat.name, cat_submenus[k], icon_theme():find_icon_path(cat.icon_name) })
+         -- the category menu made now (awful.menu would make it on first use) so typing reaches
+         -- the search box there too
+         local n = #mymainmenu.items
+         mymainmenu.child[n] = awful.menu.new(cat_submenus[k], mymainmenu)
+         search_first(mymainmenu.child[n])
       end
    end
    mymainmenu:add({ "Power...", function() power.show() end, beautiful.power_icon })
-   -- 0.9.6: the panel switch (the menu stays open; the label says what a click does next)
-   mymainmenu:add({ startpanel.toggle_label(), function(item, m)
-      startpanel.set_enabled(not startpanel.enabled())
-      if item and item.label then item.label:set_text(startpanel.toggle_label()) end
-      return true   -- keep the menu open: awful.menu re-shows it, which shows or hides the panel
-   end, menu_icon("view-list") or menu_icon("go-previous") })
-end)
+end
+menu_gen.generate(fill_start_menu)
+
+-- 0.10.6: read the program list again and rebuild the start menu, the search and the panel
+-- (start menu editor and AppImage install call it through awesome-client)
+function spin_menu_reload()
+   mymainmenu:hide()
+   appmenu.scan(true)
+   menu_gen.generate(fill_start_menu)
+   launcher.reload()
+   return #mymainmenu.items
+end
+
 -- 0.9.6: the panel opens and closes with the start menu
 do
    local show, hide = mymainmenu.show, mymainmenu.hide
@@ -429,9 +466,14 @@ launcher.setup({ on_power = power.show, allows = simple.allows, no_commands = si
                  on_launch = startpanel.launch, on_context = startpanel.app_context, on_hide = ctxmenu.hide })
 spin_launcher = launcher   -- lab tests
 popups.register("alttab", function() alttab.cancel() end)
+startpanel.find = launcher.find   -- 0.10.6: the panel's search box matches like the search popup
 start_button:buttons(awful.util.table.join(
    awful.button({}, 1, function() mymainmenu:toggle() end),   -- left click: the category menu
-   awful.button({}, 3, function() launcher.toggle() end)      -- right click: search
+   -- right click: 0.10.6 the start menu editor (Simple accounts: the category menu, they have no editor)
+   awful.button({}, 3, function()
+      if simple.is_simple then mymainmenu:toggle()
+      else mymainmenu:hide(); awful.spawn({ "gobo-menu-editor" }, false) end
+   end)
 ))
 
 local mytextclock = wibox.widget.textclock("%H:%M\n%d.%m.%Y", 5)
