@@ -52,8 +52,12 @@ STEPS="xorriso xrandr inter jetbrains-mono papirus menu-cache libfm pcmanfm pavu
 LAST_STEP=libva-utils
 # Stage 2 (build-environment jump, 2026-11-20): steps run after STEPS, in the stage-2 build root (the
 # stage-1 root with its C library switched to 2.38, as in the image), so current prebuilt tools run.
-# Build tools for 0.10.4's Mesa; nothing of stage 2 goes into the image yet.
-STEPS2="llvm cmake python ninja meson"
+# Build tools for 0.10.4's Mesa (llvm ... meson), then (0.10.4) the graphics stack: Python modules, SPIRV,
+# the SPIR-V/LLVM translator, glslang, Vulkan loader/tools, libdrm, libglvnd, Mesa 26.3.1, glxinfo.
+# The image takes LibDRM, LibGLVnd, Mesa, Vulkan-Loader, Vulkan-Tools, Mesa-Demos from the stage-2 root
+# (EXTRA2 in spin/build-iso.sh); the build tools stay out of it.
+STEPS2="llvm cmake python ninja meson pymods spirv-tools spirv-translator glslang vulkan libdrm libglvnd mesa mesa-demos"
+LAST_STEP2=mesa-demos
 STAGE2_SETUP=1   # change when the way the stage-2 root is made changes (remakes it)
 
 say() { echo "== $*"; }
@@ -520,6 +524,10 @@ build_image() {
    mount_buildroot
    [ -x "$BR/Data/Build/xorriso-inst/bin/xorriso" ] && [ -e "$STATE/step-$LAST_STEP.done" ] ||
       die "the programs are not built yet (run: build.sh programs)"
+   # 0.10.4: the graphics stack comes from the stage-2 root (its upper folder: the programs built there)
+   [ -e "$STAGE2/state/step-$LAST_STEP2.done" ] && [ -d "$STAGE2/upper/Programs" ] ||
+      die "the stage-2 programs are not built yet (run: build.sh programs; STAGE2=$STAGE2)"
+   umount_below "$S2ROOT"
    # a fresh copy-on-write layer over the stock image every time
    mountpoint -q "$IMG/rootfs" && umount -R "$IMG/rootfs"
    ! grep -q " $IMG/" /proc/mounts || die "something is still mounted below $IMG (run: build.sh unmount)"
@@ -528,7 +536,7 @@ build_image() {
    mount -t overlay overlay -o "lowerdir=$WORK/mnt/stock,upperdir=$IMG/upper,workdir=$IMG/ovl-work" "$IMG/rootfs" ||
       die "cannot mount the image overlay"
    prepare_key
-   B=$IMG R=$IMG/rootfs REPO=$REPO PROGRAMS_FROM=$BR ISO=$ISO VERSION=$v \
+   B=$IMG R=$IMG/rootfs REPO=$REPO PROGRAMS_FROM=$BR PROGRAMS2_FROM=$STAGE2/upper ISO=$ISO VERSION=$v \
       XORRISO=$BR/Data/Build/xorriso-inst/bin/xorriso SIGNING_KEY=$TMPKEY PUBKEY=$IMG/update-signing.pub.pem \
       bash "$REPO/spin/build-iso.sh"
    rm -f "$TMPKEY"; TMPKEY=

@@ -1157,6 +1157,343 @@ meson)
       ninja -C build-clang && ./build-clang/hello && ./build-clang/hellocpp
    fi
    ;;
+########## stage 2: the graphics stack (0.10.4) #############################################
+# Mesa 26.3.1 and what it needs. Build tools (Python modules, SPIRV-Headers/-Tools, the SPIR-V/LLVM
+# translator, glslang, Vulkan-Headers) stay in the build root. LibDRM, LibGLVnd, Mesa, Vulkan-Loader,
+# Vulkan-Tools and Mesa-Demos go into the image: spin/build-iso.sh copies them from the stage-2
+# root (EXTRA2) and they replace 017.01's LibDRM 2.4.100, LibGLVnd 1.2.0 and Mesa 19.3.3.
+# Every step logs to /Data/Build/<step>-<part>.log in the stage-2 root; s2run shows the errors.
+# Linker: 017.01's "ld" is GNU gold 2.33.1. Gold resolves a call through an undefined weak hidden
+# symbol to the library's own load address instead of 0 (Mesa's Vulkan entry-point tables: vulkaninfo
+# crashed at libvulkan_intel.so+0x47; a 5-line test shows the same: gold gives the base address, ld.bfd
+# gives 0). The steps whose programs go into the image link with ld.bfd (LDFLAGS=-fuse-ld=bfd).
+pymods)
+   # The Python modules Mesa's build runs with (mako; MarkupSafe for mako; PyYAML; packaging), pure
+   # Python, unpacked into Python 3.13's site-packages (that Python has no pip). Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   PY=/Programs/Python/3.13.18/bin/python3.13
+   [ -x $PY ] || { echo "Python 3.13.18 is not built (step python)"; exit 1; }
+   SP=$($PY -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+   [ "$SP" = /Programs/Python/3.13.18/lib/python3.13/site-packages ] || { echo "unexpected site-packages: $SP"; exit 1; }
+   need mako-1.4.3-py3-none-any.whl markupsafe-3.0.4.tar.gz pyyaml-6.0.3.tar.gz packaging-26.3-py3-none-any.whl
+   rm -rf $SP/mako $SP/mako-*.dist-info $SP/markupsafe $SP/yaml $SP/packaging $SP/packaging-*.dist-info
+   unzip -q -o $SRC/mako-1.4.3-py3-none-any.whl -d $SP
+   unzip -q -o $SRC/packaging-26.3-py3-none-any.whl -d $SP
+   tar xzf $SRC/markupsafe-3.0.4.tar.gz -C $WORK
+   cp -r $WORK/markupsafe-3.0.4/src/markupsafe $SP/
+   rm -f $SP/markupsafe/_speedups.c   # its C speed-up is optional: the pure Python code is used
+   tar xzf $SRC/pyyaml-6.0.3.tar.gz -C $WORK
+   cp -r $WORK/pyyaml-6.0.3/lib/yaml $SP/
+   chown -R root:root $SP/mako $SP/markupsafe $SP/yaml $SP/packaging $SP/mako-*.dist-info $SP/packaging-*.dist-info
+   $PY -m compileall -q $SP/mako $SP/markupsafe $SP/yaml $SP/packaging > /dev/null
+   $PY -c 'import mako, markupsafe, yaml, packaging; from packaging.version import Version; from mako.template import Template
+assert Version(mako.__version__) >= Version("0.8.0")
+print("mako", mako.__version__, "yaml", yaml.__version__, "packaging", packaging.__version__, Template("${x}").render(x="(mako renders)"))'
+   ;;
+spirv-tools)
+   # SPIRV-Headers (a commit of 2026-10 that SPIRV-LLVM-Translator v23.1.3 asks for; newer than the
+   # Vulkan SDK 1.4.363 tag) and SPIRV-Tools of the Vulkan SDK 1.4.363 (Mesa: >= 2024.1, for its CLC
+   # shaders). Static libraries only reach Mesa's build-time compiler (mesa_clc). Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   HC=cb42dec3830d3ac67fa449ecdc0c0f73d5e74498 HV=1.4.363.0-git-cb42dec PH=/Programs/SPIRV-Headers/1.4.363.0-git-cb42dec
+   V=1.4.363.0 P=/Programs/SPIRV-Tools/1.4.363.0 PY=/Programs/Python/3.13.18/bin/python3.13
+   unpack SPIRV-Headers-$HC.tar.gz SPIRV-Headers-$HC
+   rm -rf $PH
+   s2run /Data/Build/spirv-headers-cmake.log cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=$PH -DCMAKE_INSTALL_LIBDIR=lib \
+      -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DSPIRV_HEADERS_ENABLE_INSTALL=ON
+   s2run /Data/Build/spirv-headers-install.log sh -c 'cmake --build build && cmake --install build'
+   mkdir -p $PH/doc && install -m 644 LICENSE $PH/doc/
+   stage2_resources SPIRV-Headers $HV "SPIR-V headers (Khronos; build root only)" "MIT" \
+      https://github.com/KhronosGroup/SPIRV-Headers https://github.com/KhronosGroup/SPIRV-Headers/archive/$HC.tar.gz
+   ln -sfn $HV /Programs/SPIRV-Headers/Current
+   SymlinkProgram SPIRV-Headers $HV | tail -n 1
+   [ -f $PH/include/spirv/unified1/spirv.hpp ] || { echo "SPIRV-Headers: no include/spirv/unified1/spirv.hpp"; exit 1; }
+   unpack SPIRV-Tools-vulkan-sdk-$V.tar.gz SPIRV-Tools-vulkan-sdk-$V
+   rm -rf $P
+   s2run /Data/Build/spirv-tools-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P \
+      -DCMAKE_INSTALL_LIBDIR=lib -DSPIRV-Headers_SOURCE_DIR=$PH -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF \
+      -DSPIRV_TOOLS_BUILD_STATIC=ON -DBUILD_SHARED_LIBS=OFF -DPython3_EXECUTABLE=$PY
+   s2run /Data/Build/spirv-tools-build.log cmake --build build -j$(nproc)
+   s2run /Data/Build/spirv-tools-install.log cmake --install build
+   mkdir -p $P/doc && install -m 644 LICENSE $P/doc/
+   stage2_resources SPIRV-Tools $V "SPIR-V tools and libraries (Khronos, Vulkan SDK $V; build root only)" "Apache-2.0" \
+      https://github.com/KhronosGroup/SPIRV-Tools https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/vulkan-sdk-$V.tar.gz SPIRV-Headers
+   ln -sfn $V /Programs/SPIRV-Tools/Current
+   SymlinkProgram SPIRV-Tools $V | tail -n 1
+   [ -f $P/lib/libSPIRV-Tools.a ] && [ -f $P/lib/libSPIRV-Tools-opt.a ] || { ls $P/lib; echo "SPIRV-Tools: static libraries missing"; exit 1; }
+   echo "pkg-config SPIRV-Tools $(pkg-config --modversion SPIRV-Tools), $(spirv-val --version | head -n 1)"
+   ;;
+spirv-translator)
+   # SPIRV-LLVM-Translator v23.1.3 (LLVM 23.1, step llvm): Mesa's CLC compiler (mesa_clc, needed by
+   # iris, crocus and anv) turns OpenCL C into SPIR-V with it. A static library, build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=23.1.3 P=/Programs/SPIRV-LLVM-Translator/23.1.3 PH=/Programs/SPIRV-Headers/1.4.363.0-git-cb42dec
+   [ -f $PH/include/spirv/unified1/spirv.hpp ] || { echo "SPIRV-Headers missing (step spirv-tools)"; exit 1; }
+   [ "$(llvm-config --version)" = 23.1.6 ] || { echo "LLVM 23.1.6 is not the LLVM here (step llvm)"; exit 1; }
+   unpack SPIRV-LLVM-Translator-$V.tar.gz SPIRV-LLVM-Translator-$V
+   rm -rf $P
+   s2run /Data/Build/spirv-translator-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P \
+      -DCMAKE_INSTALL_LIBDIR=lib -DLLVM_DIR=/Programs/LLVM/23.1.6/lib/cmake/llvm -DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=$PH \
+      -DLLVM_SPIRV_INCLUDE_TESTS=OFF -DBUILD_SHARED_LIBS=OFF -DCCACHE_ALLOWED=OFF
+   s2run /Data/Build/spirv-translator-build.log cmake --build build -j$(nproc)
+   s2run /Data/Build/spirv-translator-install.log cmake --install build
+   mkdir -p $P/doc && install -m 644 LICENSE.TXT $P/doc/
+   stage2_resources SPIRV-LLVM-Translator $V "LLVM/SPIR-V translator for LLVM 23.1 (Khronos; build root only)" \
+      "Apache-2.0 WITH LLVM-exception" https://github.com/KhronosGroup/SPIRV-LLVM-Translator \
+      https://github.com/KhronosGroup/SPIRV-LLVM-Translator/archive/refs/tags/v$V.tar.gz "LLVM 23.1" SPIRV-Headers
+   ln -sfn $V /Programs/SPIRV-LLVM-Translator/Current
+   SymlinkProgram SPIRV-LLVM-Translator $V | tail -n 1
+   [ -f $P/lib/libLLVMSPIRVLib.a ] || { ls $P/lib; echo "no libLLVMSPIRVLib.a"; exit 1; }
+   v=$(pkg-config --modversion LLVMSPIRVLib)
+   case "$v" in 23.1.*) echo "pkg-config LLVMSPIRVLib $v" ;; *) echo "LLVMSPIRVLib reports version '$v' (Mesa wants 23.1.x)"; exit 1 ;; esac
+   ;;
+glslang)
+   # glslang (Vulkan SDK 1.4.363): Mesa's Vulkan drivers (anv, radv) compile internal GLSL shaders with
+   # glslangValidator while they are built. Against SPIRV-Tools of the same SDK. Build root only.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=1.4.363.0 P=/Programs/Glslang/1.4.363.0 PY=/Programs/Python/3.13.18/bin/python3.13
+   unpack glslang-vulkan-sdk-$V.tar.gz glslang-vulkan-sdk-$V
+   rm -rf $P
+   s2run /Data/Build/glslang-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P \
+      -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_PREFIX_PATH=/Programs/SPIRV-Tools/$V -DBUILD_EXTERNAL=OFF -DALLOW_EXTERNAL_SPIRV_TOOLS=ON \
+      -DENABLE_OPT=ON -DGLSLANG_TESTS=OFF -DBUILD_SHARED_LIBS=OFF -DPython3_EXECUTABLE=$PY
+   s2run /Data/Build/glslang-build.log cmake --build build -j$(nproc)
+   s2run /Data/Build/glslang-install.log cmake --install build
+   mkdir -p $P/doc && install -m 644 LICENSE.txt $P/doc/
+   stage2_resources Glslang $V "GLSL/HLSL to SPIR-V compiler glslangValidator (Khronos, Vulkan SDK $V; build root only)" \
+      "BSD-3-Clause AND others (see doc/LICENSE.txt)" https://github.com/KhronosGroup/glslang \
+      https://github.com/KhronosGroup/glslang/archive/refs/tags/vulkan-sdk-$V.tar.gz SPIRV-Tools
+   # 017.01 has glslang 8.13 as the program "GSLLang" (sic): its index links make room in this root
+   stage2_unlink /Programs/GSLLang/
+   ln -sfn $V /Programs/Glslang/Current
+   SymlinkProgram Glslang $V | tail -n 1
+   glslangValidator --version | head -n 1
+   printf '#version 450\nlayout(local_size_x = 8) in;\nlayout(binding = 0) buffer B { uint v[]; };\nvoid main() { v[gl_GlobalInvocationID.x] *= 2u; }\n' > $WORK/t.comp
+   glslangValidator -V --target-env vulkan1.2 -o $WORK/t.spv $WORK/t.comp > /dev/null && spirv-val --target-env vulkan1.2 $WORK/t.spv &&
+      echo "glslang: test compute shader compiled and validated" || { echo "glslang test shader failed"; exit 1; }
+   ;;
+vulkan)
+   # The Vulkan loader (libvulkan.so.1) and vulkaninfo, with the headers they are built from (all of the
+   # Vulkan SDK 1.4.363). 017.01 has Mesa's Intel/AMD Vulkan drivers but no loader. X11 only (no
+   # Wayland in 017.01). Loader and vulkaninfo go into the image; the headers stay in the build root.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   S=vulkan-sdk-1.4.363.0 V=1.4.363 PH=/Programs/Vulkan-Headers/1.4.363 PL=/Programs/Vulkan-Loader/1.4.363 PT=/Programs/Vulkan-Tools/1.4.363
+   U=https://github.com/KhronosGroup
+   unpack Vulkan-Headers-$S.tar.gz Vulkan-Headers-$S
+   rm -rf $PH
+   s2run /Data/Build/vulkan-headers-cmake.log cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=$PH -DCMAKE_INSTALL_LIBDIR=lib
+   s2run /Data/Build/vulkan-headers-install.log sh -c 'cmake --build build && cmake --install build'
+   mkdir -p $PH/doc && install -m 644 LICENSE.md $PH/doc/
+   stage2_resources Vulkan-Headers $V "Vulkan headers and registry (Khronos; build root only)" "Apache-2.0 OR MIT" \
+      $U/Vulkan-Headers $U/Vulkan-Headers/archive/refs/tags/$S.tar.gz
+   ln -sfn $V /Programs/Vulkan-Headers/Current
+   SymlinkProgram Vulkan-Headers $V | tail -n 1
+   unpack Vulkan-Loader-$S.tar.gz Vulkan-Loader-$S
+   rm -rf $PL
+   s2run /Data/Build/vulkan-loader-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PL \
+      -DCMAKE_INSTALL_LIBDIR=lib -DVulkanHeaders_DIR=$PH/share/cmake/VulkanHeaders -DSYSCONFDIR=/etc \
+      -DBUILD_WSI_WAYLAND_SUPPORT=OFF -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_TESTS=OFF
+   s2run /Data/Build/vulkan-loader-build.log cmake --build build -j$(nproc)
+   s2run /Data/Build/vulkan-loader-install.log cmake --install build
+   mkdir -p $PL/doc && install -m 644 LICENSE.txt $PL/doc/
+   stage2_resources Vulkan-Loader $V "Vulkan loader libvulkan.so.1 (Khronos, Vulkan SDK $V)" "Apache-2.0" \
+      $U/Vulkan-Loader $U/Vulkan-Loader/archive/refs/tags/$S.tar.gz LibX11 LibXCB LibXrandr
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $PL/Resources/GoboRefinedStage
+   ln -sfn $V /Programs/Vulkan-Loader/Current
+   SymlinkProgram Vulkan-Loader $V | tail -n 1
+   [ -e $PL/lib/libvulkan.so.1 ] || { ls $PL/lib; echo "no libvulkan.so.1"; exit 1; }
+   unpack Vulkan-Tools-$S.tar.gz Vulkan-Tools-$S
+   rm -rf $PT
+   s2run /Data/Build/vulkan-tools-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PT \
+      -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_PREFIX_PATH="$PH;$PL" -DVulkanHeaders_DIR=$PH/share/cmake/VulkanHeaders \
+      -DBUILD_CUBE=OFF -DBUILD_ICD=OFF -DBUILD_TESTS=OFF -DBUILD_VULKANINFO=ON -DBUILD_WSI_WAYLAND_SUPPORT=OFF \
+      -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON
+   s2run /Data/Build/vulkan-tools-build.log cmake --build build -j$(nproc)
+   s2run /Data/Build/vulkan-tools-install.log cmake --install build
+   mkdir -p $PT/doc && install -m 644 LICENSE.txt $PT/doc/
+   stage2_resources Vulkan-Tools $V "vulkaninfo: Vulkan devices and drivers (Khronos, Vulkan SDK $V)" "Apache-2.0" \
+      $U/Vulkan-Tools $U/Vulkan-Tools/archive/refs/tags/$S.tar.gz Vulkan-Loader
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $PT/Resources/GoboRefinedStage
+   ln -sfn $V /Programs/Vulkan-Tools/Current
+   SymlinkProgram Vulkan-Tools $V | tail -n 1
+   [ -x $PT/bin/vulkaninfo ] || { ls $PT/bin; echo "no vulkaninfo"; exit 1; }
+   # vulkaninfo loads libvulkan.so.1 at run time (dlopen), it does not link it
+   ! ldd $PT/bin/vulkaninfo | grep -q 'not found' || { ldd $PT/bin/vulkaninfo; echo "vulkaninfo misses libraries"; exit 1; }
+   strings $PT/bin/vulkaninfo | grep -qx 'libvulkan.so.1' || { echo "vulkaninfo does not name libvulkan.so.1"; exit 1; }
+   case "$(readlink -f /System/Index/lib/libvulkan.so.1)" in $PL/lib/*) ;; *) echo "libvulkan.so.1 is not the new loader's"; exit 1 ;; esac
+   ;;
+libdrm)
+   # libdrm 2.4.134 (017.01: 2.4.100; Mesa 26 needs >= 2.4.133 for radeonsi/radv). Same sonames
+   # (libdrm.so.2, _amdgpu.so.1, _intel.so.1, _nouveau.so.2, _radeon.so.1); 2.4.100's libkms.so.1 is
+   # gone upstream (nothing in 017.01 links it). Goes into the image in place of 2.4.100.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=2.4.134 P=/Programs/LibDRM/2.4.134
+   unpack libdrm-$V.tar.xz libdrm-$V
+   rm -rf $P
+   s2run /Data/Build/libdrm-meson.log meson setup build --prefix=$P --libdir=lib --buildtype=release \
+      -Dintel=enabled -Dradeon=enabled -Damdgpu=enabled -Dnouveau=enabled -Dvmwgfx=enabled \
+      -Domap=disabled -Dexynos=disabled -Dfreedreno=disabled -Dtegra=disabled -Dvc4=disabled -Detnaviv=disabled \
+      -Dcairo-tests=disabled -Dman-pages=disabled -Dvalgrind=disabled -Dtests=false -Dudev=false -Dinstall-test-programs=false
+   s2run /Data/Build/libdrm-build.log ninja -C build
+   s2run /Data/Build/libdrm-install.log ninja -C build install
+   mkdir -p $P/doc && sed -n '1,/\*\//p' xf86drm.c > $P/doc/COPYING
+   stage2_resources LibDRM $V "Userspace interface to the kernel's direct rendering manager (DRM)" "MIT" \
+      https://dri.freedesktop.org/ https://dri.freedesktop.org/libdrm/libdrm-$V.tar.xz LibPCIAccess
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $P/Resources/GoboRefinedStage
+   stage2_unlink /Programs/LibDRM/2.4.100/
+   ln -sfn $V /Programs/LibDRM/Current
+   SymlinkProgram LibDRM $V | tail -n 1
+   for l in libdrm.so.2 libdrm_amdgpu.so.1 libdrm_intel.so.1 libdrm_nouveau.so.2 libdrm_radeon.so.1
+   do
+      case "$(readlink -f /System/Index/lib/$l)" in $P/lib/*) ;; *) echo "$l is not LibDRM $V's"; exit 1 ;; esac
+   done
+   [ "$(pkg-config --modversion libdrm)" = $V ] || { echo "pkg-config libdrm is not $V"; exit 1; }
+   ;;
+libglvnd)
+   # libglvnd 1.7.0 (017.01: 1.2.0; Mesa 26 needs >= 1.3.2): libGL, libEGL, libGLX, libGLES*, libOpenGL
+   # dispatch to the vendor library (Mesa). Same sonames. The EGL vendor folders are the ones 017.01's
+   # build uses (/System/Settings/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d); libglvnd installs
+   # nothing into them. Goes into the image in place of 1.2.0.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=1.7.0 P=/Programs/LibGLVnd/1.7.0
+   unpack libglvnd-v$V.tar.gz libglvnd-v$V
+   rm -rf $P
+   touch $WORK/libglvnd-stamp
+   s2run /Data/Build/libglvnd-meson.log meson setup build --prefix=$P --libdir=lib --buildtype=release \
+      --sysconfdir=/System/Settings --datadir=/usr/share -Dx11=enabled -Dglx=enabled -Degl=true -Dgles1=true -Dgles2=true -Dheaders=true
+   s2run /Data/Build/libglvnd-build.log ninja -C build
+   s2run /Data/Build/libglvnd-install.log ninja -C build install
+   [ -z "$(find /System/Settings/glvnd /System/Index/share/glvnd -newer $WORK/libglvnd-stamp 2> /dev/null)" ] ||
+      { echo "libglvnd installed files outside its program folder"; exit 1; }
+   mkdir -p $P/doc && install -m 644 README.md $P/doc/
+   stage2_resources LibGLVnd $V "GL Vendor-Neutral Dispatch library (libGL, libEGL, libGLX, libGLES, libOpenGL)" "MIT" \
+      https://gitlab.freedesktop.org/glvnd/libglvnd https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v$V/libglvnd-v$V.tar.gz LibX11 LibXext
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $P/Resources/GoboRefinedStage
+   stage2_unlink /Programs/LibGLVnd/1.2.0/
+   ln -sfn $V /Programs/LibGLVnd/Current
+   SymlinkProgram LibGLVnd $V | tail -n 1
+   for l in libGL.so.1 libEGL.so.1 libGLX.so.0 libGLdispatch.so.0 libOpenGL.so.0 libGLESv2.so.2 libGLESv1_CM.so.1
+   do
+      case "$(readlink -f /System/Index/lib/$l)" in $P/lib/*) ;; *) echo "$l is not LibGLVnd $V's"; exit 1 ;; esac
+   done
+   strings $P/lib/libEGL.so.1 | grep -qx '/System/Settings/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d' ||
+      { strings $P/lib/libEGL.so.1 | grep egl_vendor; echo "libEGL looks for EGL vendors elsewhere"; exit 1; }
+   ;;
+mesa)
+   # Mesa 26.3.1 (017.01: 19.3.3), X11 only: Gallium nouveau (NVIDIA), iris + crocus (Intel), radeonsi +
+   # r600 (AMD), svga (VirtualBox/VMware), zink (GL on Vulkan), llvmpipe + softpipe (software); Vulkan
+   # anv (Intel), radv (AMD), lavapipe (software); VA-API for nouveau/radeonsi/r600 (free codecs only:
+   # Mesa's default "all_free"). No NVK (needs Rust >= 1.85). LLVM 23.1.6 is static (llvm.org's build):
+   # linked into Mesa's libraries (libgallium, libvulkan_*), nothing named libLLVM goes into the image.
+   # GLX on X11 is DRI3-only since Mesa 25; for Xorg 1.20's AIGLX Mesa still builds the "dril" loader
+   # stubs (lib/dri/<name>_dri.so). No libxatracker any more (Xorg's vmware DDX needs it): VirtualBox
+   # and VMware go to the modesetting driver (spin/ab/20-gobo-modesetting.conf).
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=26.3.1 P=/Programs/Mesa/26.3.1
+   [ "$(readlink /Programs/LibDRM/Current)" = 2.4.134 ] && [ "$(readlink /Programs/LibGLVnd/Current)" = 1.7.0 ] ||
+      { echo "LibDRM 2.4.134 / LibGLVnd 1.7.0 are not built (steps libdrm, libglvnd)"; exit 1; }
+   command -v glslangValidator > /dev/null && pkg-config --exists LLVMSPIRVLib SPIRV-Tools ||
+      { echo "glslang / SPIRV-LLVM-Translator / SPIRV-Tools missing (steps glslang, spirv-translator, spirv-tools)"; exit 1; }
+   unpack mesa-$V.tar.xz mesa-$V
+   rm -rf $P
+   # the llvm.org LLVM is built without RTTI: Mesa's C++ must be too (cpp_rtti=false)
+   [ "$(llvm-config --has-rtti)" = NO ] || { echo "LLVM has RTTI now: drop -Dcpp_rtti=false"; exit 1; }
+   # TLS: Mesa picks -mtls-dialect=gnu2 when the toolchain runs it, but gold (017.01's default ld) then
+   # failed on gcc 14's code ("TLS relocation against invalid instruction"). Kept on the classic dialect
+   # with ld.bfd too (proven in the VM; gnu2 is only a speed-up)
+   s2run /Data/Build/mesa-meson.log meson setup build --prefix=$P --libdir=lib --sysconfdir=/etc --buildtype=release \
+      -Db_ndebug=true -Dbackend_max_links=2 -Dcpp_rtti=false -Dc_args=-mtls-dialect=gnu -Dcpp_args=-mtls-dialect=gnu \
+      -Dplatforms=x11 -Dglx=dri -Degl=enabled -Dgbm=enabled -Dglvnd=enabled -Dopengl=true -Dgles1=enabled -Dgles2=enabled \
+      -Dgallium-drivers=nouveau,iris,crocus,radeonsi,r600,llvmpipe,softpipe,svga,zink \
+      -Dvulkan-drivers=intel,amd,swrast -Dvulkan-layers=[] -Dtools=[] \
+      -Dgallium-va=enabled -Dvideo-codecs=all_free -Dgallium-rusticl=false -Dmicrosoft-clc=disabled \
+      -Dllvm=enabled -Dshared-llvm=disabled -Dzstd=enabled -Dexpat=enabled -Dxmlconfig=enabled \
+      -Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=false -Dhtml-docs=disabled
+   sed -n '/^Message: Configuration summary\|^mesa [0-9]/,$p' /Data/Build/mesa-meson.log | grep -v '^ *$' | head -n 80
+   t0=$(date +%s)
+   s2run /Data/Build/mesa-build.log ninja -C build
+   echo "mesa: compiled in $(( $(date +%s) - t0 )) s"
+   s2run /Data/Build/mesa-install.log ninja -C build install
+   mkdir -p $P/doc && install -m 644 docs/license.rst $P/doc/
+   stage2_resources Mesa $V "OpenGL, EGL, GBM, Vulkan and VA-API drivers (Gallium, Intel/AMD/software Vulkan)" "MIT AND others (see doc/license.rst)" \
+      https://www.mesa3d.org/ https://archive.mesa3d.org/mesa-$V.tar.xz LibDRM LibGLVnd LibVA Expat ZLib Zstd ELFUtils LibXML2 LibXshmfence
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $P/Resources/GoboRefinedStage
+   stage2_unlink /Programs/Mesa/19.3.3/
+   ln -sfn $V /Programs/Mesa/Current
+   SymlinkProgram Mesa $V | tail -n 1
+   # checks: the drivers named above, nothing of LLVM/clang/SPIRV needed at run time
+   for f in lib/libGLX_mesa.so.0 lib/libEGL_mesa.so.0 lib/libgbm.so.1 lib/libvulkan_intel.so lib/libvulkan_radeon.so lib/libvulkan_lvp.so \
+            lib/dri/nouveau_dri.so lib/dri/iris_dri.so lib/dri/crocus_dri.so lib/dri/radeonsi_dri.so lib/dri/r600_dri.so \
+            lib/dri/swrast_dri.so lib/dri/kms_swrast_dri.so lib/dri/vmwgfx_dri.so lib/dri/zink_dri.so \
+            lib/dri/nouveau_drv_video.so lib/dri/radeonsi_drv_video.so lib/dri/r600_drv_video.so \
+            share/vulkan/icd.d/intel_icd.x86_64.json share/vulkan/icd.d/radeon_icd.x86_64.json share/vulkan/icd.d/lvp_icd.x86_64.json
+   do [ -e $P/$f ] || { echo "Mesa $V: $f missing"; ls $P/lib $P/lib/dri; exit 1; }
+   done
+   for f in $(find $P/lib -name '*.so*' -type f)
+   do
+      ! ldd "$f" | grep -q 'not found' || { ldd "$f" | grep 'not found'; echo "$f misses libraries"; exit 1; }
+      ! readelf -d "$f" | grep -E 'NEEDED.*(libLLVM|libclang|libSPIRV|libLTO)' || { echo "$f needs a build-root library"; exit 1; }
+   done
+   # the Vulkan drivers load and answer (no display needed): lavapipe lists its device; anv/radv find no
+   # GPU in the build root and must say so, not crash (the gold link of 0.10.4's first build crashed)
+   VK_DRIVER_FILES=$P/share/vulkan/icd.d/lvp_icd.x86_64.json vulkaninfo --summary > /Data/Build/mesa-vk-lvp.log 2>&1 &&
+      grep -q 'llvmpipe' /Data/Build/mesa-vk-lvp.log || { tail -n 20 /Data/Build/mesa-vk-lvp.log; echo "vulkaninfo with lavapipe failed"; exit 1; }
+   grep -m 1 'deviceName' /Data/Build/mesa-vk-lvp.log
+   for d in intel radeon
+   do
+      rc=0; VK_DRIVER_FILES=$P/share/vulkan/icd.d/${d}_icd.x86_64.json vulkaninfo --summary > /Data/Build/mesa-vk-$d.log 2>&1 || rc=$?
+      [ $rc -lt 128 ] || { tail -n 20 /Data/Build/mesa-vk-$d.log; echo "vulkaninfo with the $d driver crashed (exit $rc)"; exit 1; }
+      echo "vulkaninfo with the $d driver and no such GPU: exit $rc (no crash)"
+   done
+   echo "libgallium needs: $(readelf -d $P/lib/libgallium-$V.so | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
+   du -sh $P $P/lib/libgallium-$V.so $P/lib/libvulkan_*.so
+   ;;
+mesa-demos)
+   # glxinfo, eglinfo and glxgears from mesa-demos 9.0.0 (017.01 has none of them): "glxinfo -B" shows
+   # the OpenGL driver in use. Only these three programs are installed. Goes into the image.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=9.0.0 P=/Programs/Mesa-Demos/9.0.0
+   [ "$(readlink /Programs/Mesa/Current)" = 26.3.1 ] || { echo "Mesa 26.3.1 is not built (step mesa)"; exit 1; }
+   unpack mesa-demos-$V.tar.xz mesa-demos-$V
+   rm -rf $P
+   s2run /Data/Build/mesa-demos-meson.log meson setup build --prefix=$P --buildtype=release \
+      -Degl=enabled -Dx11=enabled -Dgles1=disabled -Dgles2=disabled -Dglut=disabled -Dosmesa=disabled \
+      -Dlibdrm=enabled -Dvulkan=disabled -Dwayland=disabled
+   s2run /Data/Build/mesa-demos-build.log ninja -C build src/xdemos/glxinfo src/xdemos/glxgears src/egl/opengl/eglinfo
+   mkdir -p $P/bin $P/doc
+   install -m 755 build/src/xdemos/glxinfo build/src/xdemos/glxgears build/src/egl/opengl/eglinfo $P/bin/
+   sed -n '1,/\*\//p' src/xdemos/glxinfo.c > $P/doc/COPYING
+   stage2_resources Mesa-Demos $V "glxinfo, eglinfo, glxgears (OpenGL information and test)" "MIT" \
+      https://gitlab.freedesktop.org/mesa/demos https://archive.mesa3d.org/demos/mesa-demos-$V.tar.xz LibGLVnd LibX11
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $P/Resources/GoboRefinedStage
+   ln -sfn $V /Programs/Mesa-Demos/Current
+   SymlinkProgram Mesa-Demos $V | tail -n 1
+   for b in glxinfo eglinfo glxgears
+   do ! ldd $P/bin/$b | grep -q 'not found' || { ldd $P/bin/$b; echo "$b misses libraries"; exit 1; }
+   done
+   ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac
 echo "STEP-DONE $1"

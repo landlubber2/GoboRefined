@@ -12,7 +12,10 @@
 #                  the stock gobolinux-live.squashfs; it is changed in place   [$B/rootfs]
 #   PROGRAMS_FROM  root of the tree holding the built /Programs/<Name> (build/build.sh: its
 #                  build root)                                     [empty = this system's /]
-#   ISO            the stock GoboLinux-017.01 ISO (file or device) [/dev/sr0]
+#   PROGRAMS2_FROM the same for the programs of build/build.sh's stage-2 build root (0.10.4: the
+#                  graphics stack, EXTRA2 below; build.sh: the stage-2 root's upper folder,
+#                  where Current names the version built)          [$PROGRAMS_FROM]
+#   ISO           the stock GoboLinux-017.01 ISO (file or device) [/dev/sr0]
 #   XORRISO        GNU xorriso binary                              [$B/xorriso-inst/bin/xorriso]
 #   SIGNING_KEY    private key for the .update file, a copy in memory (/dev/shm); DELETED when
 #                  this script ends                                [/dev/shm/gobo-update-signing.pem]
@@ -28,6 +31,7 @@ B=${B:-/Data/Build}
 R=${R:-$B/rootfs}
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 PROGRAMS_FROM=${PROGRAMS_FROM:-}
+PROGRAMS2_FROM=${PROGRAMS2_FROM:-$PROGRAMS_FROM}
 ISO=${ISO:-/dev/sr0}
 XORRISO=${XORRISO:-$B/xorriso-inst/bin/xorriso}
 VERSION=${VERSION:-0.10}
@@ -93,10 +97,27 @@ do
    [ -d "$PROGRAMS_FROM/Programs/$prog" ] || { echo "program $prog not built (no $PROGRAMS_FROM/Programs/$prog)"; exit 1; }
    rm -rf $R/Programs/$prog && cp -a "$PROGRAMS_FROM/Programs/$prog" $R/Programs/
 done
+# 0.10.4: the graphics stack, built in the stage-2 build root (C library 2.38, as the image): Mesa 26.3.1
+# (replaces 19.3.3), LibDRM 2.4.134 (replaces 2.4.100), LibGLVnd 1.7.0 (replaces 1.2.0), the Vulkan
+# loader and vulkaninfo, glxinfo/eglinfo/glxgears. One /Programs/<Name>/<Version> folder each, the version
+# that Current names there. (Overlay attributes of the build root's upper folder are not copied.)
+EXTRA2="LibDRM LibGLVnd Mesa Vulkan-Loader Vulkan-Tools Mesa-Demos"
+for prog in $EXTRA2
+do
+   v=$(readlink "$PROGRAMS2_FROM/Programs/$prog/Current" 2> /dev/null || true)
+   [[ "$v" =~ ^[0-9][0-9A-Za-z.-]*$ ]] && [ -d "$PROGRAMS2_FROM/Programs/$prog/$v" ] ||
+      { echo "stage-2 program $prog not built (no $PROGRAMS2_FROM/Programs/$prog/Current)"; exit 1; }
+   mkdir -p $R/Programs/$prog
+   rm -rf "$R/Programs/$prog/$v"
+   cp -dR --preserve=mode,ownership,timestamps,links "$PROGRAMS2_FROM/Programs/$prog/$v" $R/Programs/$prog/
+   ln -sfn "$v" $R/Programs/$prog/Current
+   echo "stage 2: $prog $v"
+done
 # 0.8.4: these two replace stock programs of the same name; the build root still has the stock
 # version next to the new one (20250309-GIT, 1.4.2): keep only the new version (Current)
 # (0.9.1: the same for Firefox: ESR instead of the stock 136.0_bin; 0.10.3: LibVA 2.24.1 instead of 2.7.0)
-for prog in Linux-Firmware SOF-Firmware Firefox LibVA
+# (0.10.4: the same for Mesa, LibDRM, LibGLVnd: the stage-2 versions above instead of 017.01's)
+for prog in Linux-Firmware SOF-Firmware Firefox LibVA Mesa LibDRM LibGLVnd
 do
    cur=$(readlink $R/Programs/$prog/Current)
    [ -n "$cur" ] && [ -d "$R/Programs/$prog/$cur" ] || { echo "$prog: no Current version"; exit 1; }
@@ -237,9 +258,89 @@ xargs -0 -r rm -f < $B/old-firefox-links
 find $R/System/Index -xdev -lname '/Programs/LibVA/2.7.0/*' -print0 > $B/old-libva-links
 echo "index links into LibVA 2.7.0: $(tr -cd '\0' < $B/old-libva-links | wc -c)"
 xargs -0 -r rm -f < $B/old-libva-links
-for prog in $EXTRA
+# 0.10.4: the same for the stock graphics stack (Mesa 19.3.3, LibDRM 2.4.100, LibGLVnd 1.2.0; folders
+# dropped above) and LLVM 9.0.1, which only Mesa 19.3.3 linked (libLLVM-9.so; there is no clang in it):
+# dropped too, after checking that nothing else in the image names libLLVM.so or libLLVM-9.so (Rust 1.41
+# carries its own libLLVM-9-rust-1.41.0-stable.so)
+: > $B/old-graphics-links
+for old in Mesa/19.3.3 LibDRM/2.4.100 LibGLVnd/1.2.0 LLVM/9.0.1
+do find $R/System/Index -xdev -lname "/Programs/$old/*" -print0 >> $B/old-graphics-links
+done
+echo "index links into Mesa 19.3.3, LibDRM 2.4.100, LibGLVnd 1.2.0, LLVM 9.0.1: $(tr -cd '\0' < $B/old-graphics-links | wc -c)"
+xargs -0 -r rm -f < $B/old-graphics-links
+if [ -d $R/Programs/LLVM/9.0.1 ]
+then
+   users=$(find $R/Programs -xdev -type f \( -name '*.so*' -o -perm -u+x \) ! -path "$R/Programs/LLVM/*" ! -path "$R/Programs/Mesa/*" -print0 |
+           xargs -0 -r grep -l -a -E 'libLLVM(-9|-9\.0\.1)?\.so' 2> /dev/null | grep -v '/ld\.so\.cache$' | head -n 5 || true)
+   [ -z "$users" ] || { echo "LLVM 9.0.1 is still linked by: $users"; exit 1; }
+   echo "dropping stock LLVM 9.0.1 ($(du -sh $R/Programs/LLVM/9.0.1 | cut -f1); only Mesa 19.3.3 linked it)"
+   rm -rf $R/Programs/LLVM
+fi
+for prog in $EXTRA $EXTRA2
 do chroot $R SymlinkProgram $prog | tail -n 1
 done
+# 0.10.4: the index names the new graphics stack; nothing points at the old versions any more
+for pair in libdrm.so.2:LibDRM libdrm_nouveau.so.2:LibDRM libdrm_amdgpu.so.1:LibDRM libGL.so.1:LibGLVnd libEGL.so.1:LibGLVnd \
+            libGLX.so.0:LibGLVnd libGLX_mesa.so.0:Mesa libEGL_mesa.so.0:Mesa libgbm.so.1:Mesa libvulkan.so.1:Vulkan-Loader \
+            dri/vmwgfx_dri.so:Mesa dri/nouveau_dri.so:Mesa dri/iris_dri.so:Mesa dri/crocus_dri.so:Mesa dri/radeonsi_dri.so:Mesa \
+            dri/r600_dri.so:Mesa dri/swrast_dri.so:Mesa dri/zink_dri.so:Mesa dri/nouveau_drv_video.so:Mesa dri/radeonsi_drv_video.so:Mesa
+do
+   l=${pair%%:*} prog=${pair#*:}
+   t=$(chroot $R readlink -f /usr/lib/$l)
+   case "$t" in "/Programs/$prog/$(readlink $R/Programs/$prog/Current)/"*) ;; *) echo "/usr/lib/$l is not $prog's new version (-> $t)"; exit 1 ;; esac
+done
+for icd in intel_icd radeon_icd lvp_icd
+do
+   t=$(chroot $R readlink -f /usr/share/vulkan/icd.d/$icd.x86_64.json)
+   case "$t" in /Programs/Mesa/*) ;; *) echo "Vulkan driver list $icd.x86_64.json not linked (-> $t)"; exit 1 ;; esac
+done
+left=$(find $R/System/Index -xdev \( -lname '/Programs/Mesa/19.3.3/*' -o -lname '/Programs/LibDRM/2.4.100/*' -o -lname '/Programs/LibGLVnd/1.2.0/*' -o -lname '/Programs/LLVM/9.0.1/*' \) | head -n 3)
+[ -z "$left" ] || { echo "links into the old graphics stack left: $left"; exit 1; }
+# Every program of the image that names a graphics library still finds all of them and their symbols
+# (ldd -r). Exception: Xorg's vmware DDX needs libxatracker, which Mesa 26 no longer has; VirtualBox and
+# VMware (kernel driver vmwgfx) use the modesetting driver instead (20-gobo-modesetting.conf). Only the
+# graphics libraries count here: Firefox's own NSS and ONLYOFFICE's own ICU are found by their launchers.
+find $R/Programs -xdev -type f \( -name '*.so*' -o -perm -u+x \) -print0 |
+   xargs -0 -r grep -l -a -E 'lib(drm[a-z_]*|GL[A-Za-z_]*|EGL[a-z_]*|OpenGL|gbm|glapi|vulkan|LLVM|xatracker|OSMesa|kms)\.so' 2> /dev/null |
+   grep -v '/ld\.so\.cache$' > $B/graphics-users || true
+n=0 bad=
+while read -r f
+do
+   [ "$(head -c 4 "$f" | od -An -c | tr -d ' ')" = '177ELF' ] || continue
+   n=$((n + 1))
+   out=$(chroot $R ldd -r "${f#$R}" < /dev/null 2>&1 | grep -E 'lib(drm|GL|EGL|OpenGL|gbm|glapi|vulkan|LLVM|OSMesa|kms|xatracker)[^ ]*\.so[^ ]* (=> )?not found|(lib(drm|GL|EGL|OpenGL|gbm|vulkan)[^ ]*\.so[^ ]*: version .* not found)|undefined symbol: (gl[A-Z]|egl[A-Z]|drm[A-Z]|gbm_|glX[A-Z]|vk[A-Z]|_glapi|nouveau_|amdgpu_|radeon_)' | head -n 3 || true)
+   case "$f" in
+      */XF86-Video-VMware/*) [ -z "$out" ] || echo "NOTE (not used, see above): ${f#$R}: $(echo $out)" ;;
+      *) [ -z "$out" ] || bad="$bad ${f#$R}: $(echo $out);" ;;
+   esac
+done < $B/graphics-users
+echo "programs naming a graphics library: $n ELF files checked with ldd -r"
+[ -z "$bad" ] || { echo "graphics libraries or their symbols not found:$bad"; exit 1; }
+! chroot $R ldd /System/Index/bin/glxinfo /System/Index/bin/eglinfo /System/Index/bin/vulkaninfo | grep 'not found' ||
+   { echo "glxinfo/eglinfo/vulkaninfo miss a library"; exit 1; }
+# 0.10.4 (here, after the index names the new graphics stack: run earlier, fixincludes walked index
+# links into the dropped Mesa 19.3.3/LibDRM 2.4.100 headers and failed): gcc 14.2's include-fixed holds fixincludes copies of 2.30's headers (bits/statx.h, floatn.h ...)
+# that break compiles against 2.38's headers on installed systems (the "-include fix.h" workaround of
+# 0.10.2/0.10.3). gcc's own mkheaders makes them again from the image's /usr/include, as build/build.sh
+# does for its stage-2 root (fixinc.sh runs with $CONFIG_SHELL or $SHELL: bash, whatever ours is).
+it=$(chroot $R /usr/bin/env -i PATH=/System/Index/bin gcc -print-file-name=install-tools)
+fixed=$(chroot $R /usr/bin/env -i PATH=/System/Index/bin gcc -print-file-name=include-fixed)
+[ -x "$R$it/mkheaders" ] && [ -d "$R$fixed" ] || { echo "gcc's mkheaders or include-fixed not found ($it, $fixed)"; exit 1; }
+chroot $R /usr/bin/env -i PATH=/System/Index/bin:/bin:/usr/bin CONFIG_SHELL=/bin/bash SHELL=/bin/bash \
+   /bin/bash -c "cd '$it' && /bin/bash ./mkheaders" > $B/mkheaders.log 2>&1 || { tail -n 20 $B/mkheaders.log; echo "mkheaders failed"; exit 1; }
+! grep -Eq "No such file|shift count|not found|cannot|rror" $B/mkheaders.log || { cat $B/mkheaders.log; echo "mkheaders reported errors"; exit 1; }
+[ -f "$R$fixed/limits.h" ] && [ -f "$R$fixed/syslimits.h" ] || { echo "include-fixed has no limits.h/syslimits.h after mkheaders"; exit 1; }
+! grep -rlq 'Copyright (C) 2018-2019' "$R$fixed/bits" 2> /dev/null || { echo "include-fixed still has 2.30's headers"; exit 1; }
+echo "include-fixed made again for glibc 2.38: $(cd "$R$fixed" && find . -type f | sort | tr '\n' ' ')"
+T=$R/.gobo-cc-test   # a fixed folder in the image root (the image's /tmp may be a link); removed below
+rm -rf "$T" && mkdir "$T"
+printf '%s\n' '#ifndef _GNU_SOURCE' '#define _GNU_SOURCE' '#endif' '#include <sys/stat.h>' '#include <fcntl.h>' '#include <math.h>' \
+   '#include <stdio.h>' '#include <gnu/libc-version.h>' \
+   'int main(void) { struct statx s; if (statx(AT_FDCWD, "/", 0, STATX_BASIC_STATS, &s)) return 1;' \
+   '   printf("image gcc: glibc %s, statx ok, %.1f\n", gnu_get_libc_version(), sqrt(4.0)); return 0; }' > $T/t.c
+chroot $R /usr/bin/env -i PATH=/System/Index/bin:/bin:/usr/bin /bin/bash -c "cd '${T#$R}' && gcc -O2 -Wall -Werror -o t t.c -lm && ./t &&
+   g++ -O2 -x c++ -include cmath -include cstdio -o txx t.c && ./txx" || { echo "the image's gcc does not compile against glibc 2.38's headers"; exit 1; }
+rm -rf "$T"
 # 0.10.3: VA-API 1.24 for Chromium/Electron; FFmpeg (the only stock user) still finds every libva symbol
 [ "$(chroot $R readlink -f /System/Index/lib/libva.so.2)" = "/Programs/LibVA/2.24.1/lib/libva.so.2.2400.0" ] ||
    { echo "libva.so.2 is not LibVA 2.24.1's"; exit 1; }

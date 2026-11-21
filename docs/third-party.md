@@ -44,6 +44,12 @@ The project's own scripts, look files and tools (`installer/`, `look/gobo11/`, `
 | rsync (program `Rsync`; 0.10 btrfs layout, prototype: not in an image yet) | 3.5.2 | GPL-3.0-or-later | https://download.samba.org/pub/rsync/src/rsync-3.5.2.tar.gz | no (built without xxhash and man pages) |
 | LibVA (program `LibVA`; 0.10.3, replaces 017.01's 2.7.0) | 2.24.1 | MIT | https://github.com/intel/libva/releases/download/2.24.1/libva-2.24.1.tar.bz2 | no (built without Wayland; driver folder /usr/lib/dri as the stock build) |
 | libva-utils (program `LibVA-Utils`; 0.10.3: vainfo) | 2.24.0 | MIT | https://github.com/intel/libva-utils/releases/download/2.24.0/libva-utils-2.24.0.tar.bz2 | no (built without Wayland and unit tests) |
+| Mesa (program `Mesa`; 0.10.4, replaces 017.01's 19.3.3) | 26.3.1 | MIT for most of it; parts under other permissive licences (`docs/license.rst`, copied to the program's `doc/`) | https://archive.mesa3d.org/mesa-26.3.1.tar.xz | no (X11 only; Gallium nouveau, iris, crocus, radeonsi, r600, svga, zink, llvmpipe, softpipe; Vulkan intel, amd, swrast; VA-API with Mesa's default free codecs only). **Contains LLVM 23.1.6** (Apache-2.0 WITH LLVM-exception), statically linked from llvm.org's build |
+| libdrm (program `LibDRM`; 0.10.4, replaces 2.4.100) | 2.4.134 | MIT | https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz | no |
+| libglvnd (program `LibGLVnd`; 0.10.4, replaces 1.2.0) | 1.7.0 | MIT-style (README.md) | https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v1.7.0/libglvnd-v1.7.0.tar.gz | no (EGL vendor folders as 017.01's build) |
+| Vulkan loader (program `Vulkan-Loader`; 0.10.4) | 1.4.363 (Vulkan SDK 1.4.363.0) | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz | no (X11 only) |
+| vulkaninfo (program `Vulkan-Tools`; 0.10.4) | 1.4.363 | Apache-2.0 | https://github.com/KhronosGroup/Vulkan-Tools/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz | no (only vulkaninfo built) |
+| glxinfo, eglinfo, glxgears (program `Mesa-Demos`; 0.10.4) | 9.0.0 | MIT | https://archive.mesa3d.org/demos/mesa-demos-9.0.0.tar.xz | no (only these three programs installed) |
 | GoboNet menu widget (`look/gobo11/awesome/spin/gobonet_menu.lua`) | from GoboNet 0.12 | GPL-3.0 (GoboNet) | https://github.com/gobolinux/GoboNet | **yes**: a patched copy of upstream's widget lives in our look (see `HANDOFF.md`, 0.8.1) |
 
 Used only to build, not shipped: GNU xorriso 1.5.6.pl02 (GPL-3.0-or-later), writes the ISO.
@@ -53,11 +59,17 @@ tools for the graphics stack of 0.10.4; pins in `build/sources.manifest`):
 
 | Component | Version | Licence (as stated upstream) | Source | Changed by us? |
 |---|---|---|---|---|
-| LLVM + clang, llvm.org's release build (`LLVM-23.1.6-Linux-X64`) | 23.1.6 | Apache-2.0 WITH LLVM-exception (parts of the bundled runtime libraries: see the LICENSE.TXT files in the archive) | https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | no (unpacked as `/Programs/LLVM/23.1.6`). 0.10.4 plans to ship its `libLLVM.so` in the image (with Mesa): then it moves to the table above |
+| LLVM + clang, llvm.org's release build (`LLVM-23.1.6-Linux-X64`) | 23.1.6 | Apache-2.0 WITH LLVM-exception (parts of the bundled runtime libraries: see the LICENSE.TXT files in the archive) | https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | no (unpacked as `/Programs/LLVM/23.1.6`). 0.10.4: llvm.org's build has no libLLVM.so; its static libraries are linked into Mesa, see the Mesa row above |
 | CMake, Kitware's binary release | 3.31.12 | BSD-3-Clause (the binary bundles curl, OpenSSL, zlib and other libraries under their own licences: `doc/cmake-3.31/` in the archive) | https://github.com/Kitware/CMake/releases/download/v3.31.12/cmake-3.31.12-linux-x86_64.tar.gz | no |
 | Python | 3.13.18 | PSF-2.0 (Python Software Foundation License Version 2) | https://www.python.org/ftp/python/3.13.18/Python-3.13.18.tar.xz | no (built without PGO, ensurepip and the test suite; installed as `python3.13` only) |
 | Ninja, the release's Linux binary | 1.13.2 | Apache-2.0 | https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip | no |
 | Meson | 1.12.1 | Apache-2.0 | https://github.com/mesonbuild/meson/releases/download/1.12.1/meson-1.12.1.tar.gz | no (run from its source tree by Python 3.13) |
+| Python modules mako, MarkupSafe, PyYAML, packaging (0.10.4, into Python 3.13) | 1.4.3, 3.0.4, 6.0.3, 26.3 | MIT, BSD-3-Clause, MIT, Apache-2.0 OR BSD-2-Clause | PyPI (URLs in `build/sources.manifest`) | no |
+| SPIRV-Headers (0.10.4) | commit cb42dec (after Vulkan SDK 1.4.363.0) | MIT | https://github.com/KhronosGroup/SPIRV-Headers/archive/cb42dec3830d3ac67fa449ecdc0c0f73d5e74498.tar.gz | no |
+| SPIRV-Tools (0.10.4) | Vulkan SDK 1.4.363.0 | Apache-2.0 | https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz | no (static libraries; only in Mesa's build-time compiler) |
+| SPIRV-LLVM-Translator (0.10.4) | 23.1.3 | Apache-2.0 WITH LLVM-exception | https://github.com/KhronosGroup/SPIRV-LLVM-Translator/archive/refs/tags/v23.1.3.tar.gz | no (static library; only in Mesa's build-time compiler `mesa_clc`) |
+| glslang (0.10.4) | Vulkan SDK 1.4.363.0 | BSD-3-Clause and others (LICENSE.txt) | https://github.com/KhronosGroup/glslang/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz | no |
+| Vulkan-Headers (0.10.4) | 1.4.363 | Apache-2.0 OR MIT | https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz | no |
 
 ## App packages (not in the image; offered on the website, installed through Settings › Apps)
 

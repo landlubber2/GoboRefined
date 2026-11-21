@@ -122,9 +122,15 @@ redistribution notes are in `docs/third-party.md`.
   shipped system: an overlay whose lower layers are stage 1's upper folder and the stock image (so it
   has every stage-1 program without a copy), switched to Glibc 2.38 by `spin/glibc-switch.sh` (the same
   script the image step uses), with gcc's `include-fixed` headers made again for the 2.38 headers
-  (gcc's `mkheaders`). It lives in `STAGE2` (default `WORK/stage2`; may be another disk). Stage 2 now
-  holds build tools only: LLVM/clang 23.1.6 (llvm.org's build), CMake 3.31.12 (Kitware's build),
-  Python 3.13.18, Ninja 1.13.2 and Meson 1.12.1; nothing of it goes into the image yet.
+  (gcc's `mkheaders`). It lives in `STAGE2` (default `WORK/stage2`; may be another disk). Stage 2
+  holds build tools: LLVM/clang 23.1.6 (llvm.org's build), CMake 3.31.12 (Kitware's build), Python
+  3.13.18, Ninja 1.13.2, Meson 1.12.1 and (0.10.4) mako/MarkupSafe/PyYAML/packaging, SPIRV-Headers,
+  SPIRV-Tools, SPIRV-LLVM-Translator 23.1.3, glslang and Vulkan-Headers; and (0.10.4) the **graphics
+  stack** that goes into the image: libdrm 2.4.134, libglvnd 1.7.0, Mesa 26.3.1 (LLVM linked in
+  statically), the Vulkan loader and vulkaninfo (Vulkan SDK 1.4.363), glxinfo/eglinfo (mesa-demos 9.0.0).
+  The image step copies those six programs from the stage-2 root's upper folder (`EXTRA2` in
+  `spin/build-iso.sh`, the version that `Current` names there) and drops 017.01's Mesa 19.3.3, libdrm
+  2.4.100, libglvnd 1.2.0 and LLVM 9.0.1.
   - A change in stage 1 (any stage-1 step redone) makes the stage-2 root again and redoes **every**
     stage-2 step; a change in one stage-2 step redoes it and the stage-2 steps after it.
   - Rebuild one stage-2 step: `REBUILD=meson build.sh programs` (stage-1 steps stay cached).
@@ -158,6 +164,11 @@ redistribution notes are in `docs/third-party.md`.
 - **Time:** making the root (glibc switch, gcc `mkheaders`, a compile test) about 1 minute; `llvm` 39 s (unpacking),
   `cmake` 6 s, `python` 3 min, `ninja` and `meson` seconds; the whole `build.sh programs` with stage 1 cached and
   stage 2 from scratch 4 min 43 s; with everything cached 22 s.
+- **0.10.4 graphics steps** (measured 2026-11-20/21, same VM): +125 MB downloads; spirv-tools 10 min, spirv-translator
+  4 min, glslang 7 min, vulkan 1.5 min, libdrm/libglvnd/mesa-demos seconds, **mesa 31 min** (3,283 build steps, at most
+  2 links at a time for memory): about 54 min in all; the stage-2 upper grows to 13 GB. The image step stays ~12 min.
+- **Linker:** 017.01's default `ld` is GNU gold 2.33.1, which mislinks undefined weak hidden symbols (Mesa's Vulkan
+  drivers crashed). The stage-2 steps whose programs go into the image link with `ld.bfd` (`LDFLAGS=-fuse-ld=bfd`).
 - **Needs:** zstd unpacks llvm.org's archive only with `--memory=2048MB` (1 GiB window), so about 1.1 GB of RAM
   for that step.
 
