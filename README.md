@@ -9,6 +9,7 @@ and the default desktop look, plus a few programs compiled into the image.
 - `spin/` — what goes into the ISO (`GoboRefined-<version>.iso`): build scripts, patches, the A/B update
   system, the Settings app and other tools.
 - `build/` — **build the ISO yourself** from the stock 017.01 ISO and this repository: see **`BUILDING.md`**.
+- `docs/making-apps.md` — **make an app package** that Settings > Software > Apps installs; `apps/` holds examples.
 - `dist/` — the built ISO (not in git) and how to try it.
 - `docs/roadmap.md` — what comes next, in stages with checkpoints; `docs/third-party.md` — third-party parts
   and their licences.

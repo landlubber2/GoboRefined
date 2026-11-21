@@ -18,6 +18,13 @@ minutes to hours; needs your password because it writes to `/Programs`):
   Figlet 2.2.4 and linked it; it ran. Without `sudo` you get *"Needs write access to /Programs"*.
 - To remove a program again: `sudo RemoveProgram <Name>`.
 
+**Package files from Settings > Software > Apps** (`Name--Version--x86_64.tar.bz2`, GoboLinux's own
+package format): pick the file, the page checks that it fits this system, then installs it. Apps added this
+way stay through system updates and are removed on the same page. How to make such a file:
+[making-apps.md](making-apps.md).
+
+**AppImages**: make the file executable and double-click it. It runs if it needs glibc 2.38 or older.
+
 **Programs that ship as ready-made Linux builds** (like ONLYOFFICE on this spin) can be unpacked
 into `/Programs/<Name>/<Version>` by hand and linked with `sudo SymlinkProgram <Name>`.
 
@@ -33,4 +40,4 @@ into `/Programs/<Name>/<Version>` by hand and linked with `sudo SymlinkProgram <
   (`apt` is also the name of an old Java tool), but the current recipe collection has no `Sun-JDK`
   and no `OpenJDK` recipe at all, so `sudo Compile Sun-JDK` stops with "no recipe". Java would have
   to be unpacked by hand from an upstream binary build (as ONLYOFFICE is).
-- **Flatpak, Snap, AppImage stores**: not on the image.
+- **Flatpak, Snap and app stores**: not on the image.
