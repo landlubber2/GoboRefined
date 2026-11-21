@@ -43,6 +43,18 @@ do
       cp "$here/$conf" "$home/.config/$conf"
    fi
 done
+# 0.10.5: the spin's clipboard command (copied once, above) now leaves files copied in a file
+# manager alone. Existing copies get the new version of that one command, once; the user's other
+# commands and settings stay. Runs after an update before anyone logs in (CopyQ is not running).
+cq="$home/.config/copyq/copyq-commands.ini"
+if [ -f "$cq" ] && grep -q 'GoboRefined: take over the clipboard' "$cq"
+then
+   GOBO_CQ_NEW=$(sed -n 's/^1\\Command=//p' "$here/copyq/copyq-commands.ini") \
+   awk 'index($0, "GoboRefined: take over the clipboard") && !index($0, "str(clipboard(") &&
+        match($0, /^[0-9]+\\Command=/) && ENVIRON["GOBO_CQ_NEW"] != "" { print substr($0, 1, RLENGTH) ENVIRON["GOBO_CQ_NEW"]; next }
+        { print }' "$cq" > "$cq.new" &&
+   if cmp -s "$cq" "$cq.new"; then rm -f "$cq.new"; else cat "$cq.new" > "$cq" && rm -f "$cq.new"; fi
+fi
 # Office documents open in ONLYOFFICE (kept if the user already has their own list)
 if [ ! -e "$home/.config/mimeapps.list" ]
 then cp "$here/xdg/mimeapps.list" "$home/.config/mimeapps.list"

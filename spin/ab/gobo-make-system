@@ -279,7 +279,8 @@ then
 fi
 
 # 0.8.3: Intel graphics use the kernel modesetting driver (Xorg picked the old "intel" DDX on a
-# Tiger Lake laptop: only a thin strip of the desktop showed). 0.8.4: i915, xe, amdgpu, radeon (not nouveau).
+# Tiger Lake laptop: only a thin strip of the desktop showed). 0.8.4: i915, xe, amdgpu, radeon; 0.10.4: vmwgfx;
+# 0.10.5: nouveau (Mesa 26's GLX needs DRI3, which the nouveau DDX did not give).
 # 0.8.4: + touchpad tap to click (30-gobo-touchpad.conf). Every snippet in share/gobo-xorg is copied.
 for xorg_snippet in "$T"/Programs/GoboSpin/Current/share/gobo-xorg/*.conf
 do

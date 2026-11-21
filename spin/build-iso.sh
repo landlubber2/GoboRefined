@@ -173,6 +173,23 @@ done
 # Login screen theme files (title image "GoboRefined", wallpaper, CSS) from spin/lxdm in the
 # checkout, so a theme change does not depend on the copy built into /Programs/LXDM.
 install -m 644 "$REPO"/spin/lxdm/Gobo11/* $R/Programs/LXDM/0.5.3/share/lxdm/themes/Gobo11/
+# 0.10.5: the login screen starts no accessibility (AT-SPI) bus. LXDM runs its GTK greeter as root;
+# GTK's accessibility bridge started a root session bus (D-Bus autolaunch) and a root
+# at-spi-bus-launcher, which left AT_SPI_BUS on the X root window. The session reuses that X server,
+# so every org.a11y.Bus call of the user's programs waited 25 s for it (Electron apps' first window).
+# The greeter binary (lxdm.conf "greeter=", also in copies changed by Settings) becomes a wrapper.
+G=$R/Programs/LXDM/0.5.3/lib/lxdm-greeter-gtk
+[ -f $G ] || { echo "no LXDM greeter at $G"; exit 1; }
+if ! [ -f $G.bin ]
+then
+   head -c 4 $G | grep -q 'ELF' || { echo "LXDM greeter is not a program: $G"; exit 1; }
+   mv $G $G.bin
+fi
+printf '%s\n' '#!/bin/sh' \
+   '# GoboRefined 0.10.5: no accessibility bus at the login screen (see spin/build-iso.sh)' \
+   'export NO_AT_BRIDGE=1 GTK_A11Y=none' \
+   'exec /Programs/LXDM/0.5.3/lib/lxdm-greeter-gtk.bin "$@"' > $G
+chmod 755 $G
 P=$R/Programs/GoboSpin
 rm -rf $P && mkdir -p $P/1.0/bin $P/1.0/share $P/1.0/Resources
 install -m 755 gobo-install $P/1.0/bin/gobo-install
