@@ -455,6 +455,12 @@ devices_kmsg() {
 # gid=<group> and no rights for others), /Mount/Disks/<name> links to it. Administrators are
 # always members; new partitions and new standard accounts get access, Simple accounts do not
 # (Settings > Accounts > Disks changes it; group changes apply from the next login).
+# 0.10.7: BitLocker partitions (FSTYPE BitLocker; id from the BitLocker GUID) are listed too. A volume
+# whose key is stored in the clear on the disk (BitLocker suspended, or "waiting for activation" on new
+# Windows laptops) is opened READ-ONLY by cryptsetup >= 2.8.2 (upstream code; device-mapper read-only,
+# mapping /dev/mapper/gobo-bitlk-<id>) and its NTFS/FAT/exFAT mounted read-only as above: nothing is ever
+# written to it. Other BitLocker volumes (TPM, password, recovery key) are not opened: state "locked"
+# in the list. "shutdown-disks" (Shutdown) unmounts them and removes the mappings.
 # USB drives (udevil/devmon): udevil.conf allowed_groups = gobo-usb; administrators and standard
 # accounts are always members, Simple accounts by their switch (on for new ones).
 DISK_GROUP=disk
@@ -512,7 +518,7 @@ internal_partitions() {
          [ "$type" = part ] || { [ "$type" = disk ] && [ -n "$fstype" ]; } || continue
          [[ "$name" =~ ^[a-z][a-z0-9]{1,40}$ ]] || continue
          [[ "$busy" != *" $name "* ]] || continue
-         case "$fstype" in ntfs|vfat|exfat|ext2|ext3|ext4|btrfs|xfs) ;; *) continue ;; esac
+         case "$fstype" in ntfs|vfat|exfat|ext2|ext3|ext4|btrfs|xfs) ;; BitLocker) fstype=bitlocker ;; *) continue ;; esac
          case "$label" in GOBO_*) continue ;; esac
          # EFI system, Microsoft reserved, Windows recovery, BIOS boot; MBR: EFI, hidden recovery
          case "${ptype,,}" in
@@ -520,11 +526,39 @@ internal_partitions() {
             de94bba4-06d1-4d40-a16a-bfd50179d6ac|21686148-6449-6e6f-744e-656564454649|0xef|0x27) continue ;;
          esac
          [ -n "$size" ] && [ "$size" -ge "$DISK_MIN_BYTES" ] || continue
+         # 0.10.7: BitLocker: the volume GUID (blkid may not report one); cryptsetup's own BITLK parser
+         if [ "$fstype" = bitlocker ] && [ -z "$uuid" ]
+         then uuid=$(cryptsetup bitlkDump "/dev/$name" 2>/dev/null | sed -n 's/^GUID:[[:space:]]*//p' | head -n 1)
+         fi
          id=$(printf '%s' "${uuid,,}" | tr -dc '0-9a-f' | cut -c1-6)
          [ "${#id}" = 6 ] || continue
          printf '%s\t/dev/%s\t%s\t%s\t%s\n' "$id" "$name" "$fstype" "$size" "$label"
       done
    done < <(lsblk -d -n -P -o NAME,TYPE,RM,TRAN 2>/dev/null)
+}
+# 0.10.7: bitlk_open DEVICE MAPNAME: map a BitLocker volume whose key is stored in the clear, read-only.
+# 0 = mapped (now or before), 2 = locked (no clear key: not opened), 1 = error. No key is ever typed or
+# passed: cryptsetup takes the clear key from the volume itself; stdin and the key file are /dev/null,
+# so a volume that would need a password fails instead of asking.
+BITLK_MAP_RE='^gobo-bitlk-[0-9a-f]{6}$'
+bitlk_open() {
+   local dev=$1 map=$2
+   [[ "$map" =~ $BITLK_MAP_RE ]] || return 1
+   [[ "$dev" =~ ^/dev/[a-z][a-z0-9]{1,40}$ ]] && [ -b "$dev" ] || return 1
+   [ -b "/dev/mapper/$map" ] && return 0
+   cryptsetup bitlkDump "$dev" < /dev/null 2>/dev/null | grep -q 'VMK protected with clear key' || return 2
+   cryptsetup open --type bitlk --readonly --batch-mode --tries 1 --key-file /dev/null "$dev" "$map" < /dev/null >> "$LOG" 2>&1 ||
+      { log "disks: cryptsetup could not open the BitLocker volume $dev"; return 1; }
+   [ -b "/dev/mapper/$map" ] || return 1
+}
+bitlk_close() {   # bitlk_close MAPNAME: unmount what uses it, remove the mapping
+   local map=$1 m
+   [[ "$map" =~ $BITLK_MAP_RE ]] || return 1
+   [ -e "/dev/mapper/$map" ] || return 0
+   for m in $(awk -v a="/dev/mapper/$map" -v b="$(readlink -f "/dev/mapper/$map")" '$1 == a || $1 == b { print $2 }' /proc/mounts)
+   do umount "$(printf '%b' "$m")" 2>> "$LOG" || umount -l "$(printf '%b' "$m")" 2>> "$LOG"
+   done
+   cryptsetup close "$map" >> "$LOG" 2>&1
 }
 # a safe folder name for /Mount/Disks from a label (lsblk's \xNN decoded, odd characters -> _)
 disk_link_name() {   # disk_link_name LABEL ID
@@ -536,7 +570,7 @@ disk_link_name() {   # disk_link_name LABEL ID
    printf '%s' "$n"
 }
 boot_disks() {
-   local g u k id dev fstype size label gid name dir state opts used="" ids="" tmp
+   local g u k id dev fstype size label gid name dir state opts used="" ids="" tmp src mfs map rc
    # once (0.10.2): nobody stays in "disk" (the owner: administrators too)
    mkdir -p "$STATE"; chmod 755 "$STATE"
    if [ ! -e "$STATE/disk-group-emptied-0.10.2" ] && grep -q "^$DISK_GROUP:" "$GROUP"
@@ -586,18 +620,42 @@ boot_disks() {
       dir="$DISKS_ACCESS/$id"
       mkdir -p "$dir/disk"
       chown root:"$g" "$dir" && chmod 750 "$dir" || continue
+      state=unmounted
       if ! awk -v d="$dir/disk" '$2 == d { f = 1 } END { exit !f }' /proc/mounts
       then
          gid=$(awk -F: -v g="$g" '$1 == g { print $3 }' "$GROUP")
-         case "$fstype" in
+         src=$dev mfs=$fstype
+         if [ "$fstype" = bitlocker ]   # 0.10.7: read-only mapping, then the file system inside, read-only
+         then
+            map="gobo-bitlk-$id" rc=0
+            bitlk_open "$dev" "$map" || rc=$?
+            src="" mfs=""
+            if [ "$rc" = 0 ]
+            then
+               mfs=$(blkid -p -o value -s TYPE "/dev/mapper/$map" 2>/dev/null)
+               case "$mfs" in
+                  ntfs|vfat|exfat) src=/dev/mapper/$map ;;
+                  *) log "disks: BitLocker volume $dev holds '$mfs', not NTFS/FAT/exFAT: not mounted"; bitlk_close "$map" ;;
+               esac
+            elif [ "$rc" = 2 ]
+            then state=locked
+            fi
+         fi
+         case "$mfs" in
             ntfs)  opts="uid=0,gid=$gid,fmask=0117,dmask=0007,iocharset=utf8,windows_names,nosuid,nodev,noatime" ;;
             vfat)  opts="uid=0,gid=$gid,fmask=0117,dmask=0007,utf8,nosuid,nodev,noatime" ;;
             exfat) opts="uid=0,gid=$gid,fmask=0117,dmask=0007,iocharset=utf8,nosuid,nodev,noatime" ;;
             *)     opts="nosuid,nodev,noatime" ;;
          esac
-         mount -t "$fstype" -o "$opts" "$dev" "$dir/disk" 2>> "$LOG" || log "disks: could not mount $dev ($fstype)"
+         [ "$fstype" = bitlocker ] && opts="ro,$opts"
+         if [ -n "$src" ]
+         then
+            mount -t "$mfs" -o "$opts" "$src" "$dir/disk" 2>> "$LOG" || log "disks: could not mount $dev ($mfs)"
+            if [ "$fstype" = bitlocker ] && ! awk -v d="$dir/disk" '$2 == d { f = 1 } END { exit !f }' /proc/mounts
+            then bitlk_close "$map"
+            fi
+         fi
       fi
-      state=unmounted
       if awk -v d="$dir/disk" '$2 == d { f = 1 } END { exit !f }' /proc/mounts
       then
          state=rw
@@ -606,7 +664,7 @@ boot_disks() {
       name=$(disk_link_name "$label" "$id")
       case " $used " in *" $name "*) name="$name-$id" ;; esac
       used="$used $name"
-      [ -e "$DISKS_BASE/$name" ] || [ -L "$DISKS_BASE/$name" ] || ln -s ".access/$id/disk" "$DISKS_BASE/$name"
+      [ "$state" = locked ] || [ -e "$DISKS_BASE/$name" ] || [ -L "$DISKS_BASE/$name" ] || ln -s ".access/$id/disk" "$DISKS_BASE/$name"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$g" "$name" "$fstype" "$size" "$state" "$dev" >> "$tmp"
    done < <(internal_partitions)
    chmod 644 "$tmp"; mv -f "$tmp" "$DISKS_LIST"
@@ -1107,6 +1165,14 @@ case "$cmd" in
       nargs 0 "$@"
       [ "$caller" = root ] || die "boot-disks is for the boot scripts"
       boot_disks || die "could not set up the internal disks" ;;
+
+   shutdown-disks)   # (Shutdown, 0.10.7) unmount the BitLocker volumes and remove their read-only mappings
+      nargs 0 "$@"
+      [ "$caller" = root ] || die "shutdown-disks is for the boot scripts"
+      for m in /dev/mapper/gobo-bitlk-*
+      do [ -e "$m" ] && bitlk_close "${m##*/}"
+      done
+      true ;;
 
    disk-access)
       # which disks LOGIN may open: lines "<disk id> on|off" (ids from the list of boot-disks)

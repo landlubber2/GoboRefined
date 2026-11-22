@@ -1,0 +1,65 @@
+#!/bin/sh
+# gobo-boost-run (GoboRefined 0.10.7): "Launch in boost mode" on computers with two GPUs (a laptop's
+# Intel GPU that drives the screen plus an NVIDIA or AMD GPU). The desktop and every other program stay
+# on the screen's GPU; the one program started through this script runs on the other GPU.
+#
+#   gobo-boost-run --gpu                 print the other GPU as Mesa names it (pci-0000_01_00_0);
+#                                        exit 1 (nothing printed) on a computer with one GPU
+#   gobo-boost-run --offer FILE          prints "true" when the file manager should offer the action
+#                                        (two GPUs, FILE an executable AppImage)
+#   gobo-boost-run COMMAND [ARGS...]     run COMMAND with DRI_PRIME=<that GPU> (OpenGL; Vulkan through
+#                                        Mesa's device-select layer). Without a second GPU it runs as is.
+#
+# Two GPUs = two DRM cards (/sys/class/drm/cardN) that have a render node and are different PCI
+# devices. "The other" GPU = the first one that is not the boot VGA device (the one the firmware
+# showed its screen on); when no card says boot_vga=1, DRI_PRIME=1 (Mesa: "not the default GPU").
+# No root, no settings file, nothing kept: read again on every call. The card's power management is
+# left as it is (the kernel driver powers an idle card down).
+# GOBO_BOOST_SYSFS (lab tests only): read <dir>/class/drm instead of /sys/class/drm.
+
+sysfs=${GOBO_BOOST_SYSFS:-/sys}
+
+other_gpu() {
+   n=0 tag= seen=" " bootvga=
+   for c in "$sysfs"/class/drm/card[0-9]*
+   do
+      case "${c##*/}" in *-*) continue ;; esac          # connectors: card0-HDMI-A-1 ...
+      [ -e "$c/device" ] || continue
+      pci=$(readlink -f "$c/device" 2> /dev/null) || continue
+      pci=${pci##*/}
+      case "$pci" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f].[0-7]) ;; *) continue ;; esac
+      ls "$c/device/drm" 2> /dev/null | grep -q '^renderD[0-9]*$' || continue
+      case "$seen" in *" $pci "*) continue ;; esac
+      seen="$seen$pci " n=$((n + 1))
+      if [ "$(cat "$c/device/boot_vga" 2> /dev/null)" = 1 ]
+      then bootvga=yes; continue
+      fi
+      [ -n "$tag" ] || tag=pci-$(printf '%s' "$pci" | tr ':.' '__')
+   done
+   [ "$n" -ge 2 ] || return 1
+   [ -n "$bootvga" ] || tag=1     # nobody is the boot VGA device: Mesa's "not the default GPU"
+   echo "${tag:-1}"
+}
+
+case "${1:-}" in
+   --gpu)
+      other_gpu ;;
+   --offer)
+      if [ -f "${2:-}" ] && [ -x "$2" ] && other_gpu > /dev/null
+      then echo true
+      else echo false
+      fi ;;
+   "")
+      echo "usage: gobo-boost-run --gpu | --offer FILE | COMMAND [ARGS...]" >&2
+      exit 2 ;;
+   -*)
+      echo "gobo-boost-run: unknown option $1" >&2
+      exit 2 ;;
+   *)
+      if tag=$(other_gpu)
+      then
+         DRI_PRIME=$tag
+         export DRI_PRIME
+      fi
+      exec "$@" ;;
+esac

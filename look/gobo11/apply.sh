@@ -20,6 +20,8 @@ mkdir -p "$home/.local/share/file-manager/actions"
 cp "$here/file-manager/actions/gobo-pin-to-start.desktop" "$home/.local/share/file-manager/actions/"
 # 0.10.6: "Install" for AppImages (to ~/Applications/<Name>/, start menu entry and/or pin)
 cp "$here/file-manager/actions/gobo-appimage-install.desktop" "$home/.local/share/file-manager/actions/"
+# 0.10.7: "Launch in boost mode" for AppImages (offered only on computers with two GPUs)
+cp "$here/file-manager/actions/gobo-boost-run.desktop" "$home/.local/share/file-manager/actions/"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"
 # Terminal: right click pastes (perl extension, loaded via URxvt.perl-ext-common)
 mkdir -p "$home/.urxvt/ext"

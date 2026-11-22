@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Action
+Name=Launch in boost mode
+Tooltip=Start this AppImage on the second (faster) graphics card
+Icon=applications-games
+TryExec=gobo-boost-run
+Profiles=boost;
+
+[X-Action-Profile boost]
+Name=Launch in boost mode
+Exec=gobo-boost-run %f
+MimeTypes=all/allfiles;
+Basenames=*.AppImage;*.appimage;
+Matchcase=false
+SelectionCount=1
+ShowIfTrue=gobo-boost-run --offer %f

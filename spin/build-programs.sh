@@ -1283,6 +1283,9 @@ vulkan)
    # The Vulkan loader (libvulkan.so.1) and vulkaninfo, with the headers they are built from (all of the
    # Vulkan SDK 1.4.363). 017.01 has Mesa's Intel/AMD Vulkan drivers but no loader. X11 only (no
    # Wayland in 017.01). Loader and vulkaninfo go into the image; the headers stay in the build root.
+   # 0.10.7: the loader's fallback data folders are only /usr/share. Its default "/usr/local/share:/usr/share"
+   # names the same index twice in GoboLinux (both are /System/Index/share), so 0.10.4-0.10.6 listed every
+   # Vulkan driver and device twice.
    . $SPIN/stage2-lib.sh
    stage2_check
    export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
@@ -1302,7 +1305,7 @@ vulkan)
    rm -rf $PL
    s2run /Data/Build/vulkan-loader-cmake.log cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PL \
       -DCMAKE_INSTALL_LIBDIR=lib -DVulkanHeaders_DIR=$PH/share/cmake/VulkanHeaders -DSYSCONFDIR=/etc \
-      -DBUILD_WSI_WAYLAND_SUPPORT=OFF -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_TESTS=OFF
+      -DFALLBACK_DATA_DIRS=/usr/share -DBUILD_WSI_WAYLAND_SUPPORT=OFF -DBUILD_WSI_XCB_SUPPORT=ON -DBUILD_WSI_XLIB_SUPPORT=ON -DBUILD_TESTS=OFF
    s2run /Data/Build/vulkan-loader-build.log cmake --build build -j$(nproc)
    s2run /Data/Build/vulkan-loader-install.log cmake --install build
    mkdir -p $PL/doc && install -m 644 LICENSE.txt $PL/doc/
@@ -1331,6 +1334,7 @@ vulkan)
    ! ldd $PT/bin/vulkaninfo | grep -q 'not found' || { ldd $PT/bin/vulkaninfo; echo "vulkaninfo misses libraries"; exit 1; }
    strings $PT/bin/vulkaninfo | grep -qx 'libvulkan.so.1' || { echo "vulkaninfo does not name libvulkan.so.1"; exit 1; }
    case "$(readlink -f /System/Index/lib/libvulkan.so.1)" in $PL/lib/*) ;; *) echo "libvulkan.so.1 is not the new loader's"; exit 1 ;; esac
+   ! strings $PL/lib/libvulkan.so.1 | grep -q '/usr/local/share' || { echo "the loader still names /usr/local/share (FALLBACK_DATA_DIRS)"; exit 1; }
    ;;
 libdrm)
    # libdrm 2.4.134 (017.01: 2.4.100; Mesa 26 needs >= 2.4.133 for radeonsi/radv). Same sonames
@@ -1399,22 +1403,47 @@ mesa)
    # Mesa 26.3.1 (017.01: 19.3.3), X11 only: Gallium nouveau (NVIDIA), iris + crocus (Intel), radeonsi +
    # r600 (AMD), svga (VirtualBox/VMware), zink (GL on Vulkan), llvmpipe + softpipe (software); Vulkan
    # anv (Intel), radv (AMD), lavapipe (software); VA-API for nouveau/radeonsi/r600 (free codecs only:
-   # Mesa's default "all_free"). No NVK (needs Rust >= 1.85). LLVM 23.1.6 is static (llvm.org's build):
+   # Mesa's default "all_free"). LLVM 23.1.6 is static (llvm.org's build):
    # linked into Mesa's libraries (libgallium, libvulkan_*), nothing named libLLVM goes into the image.
    # GLX on X11 is DRI3-only since Mesa 25; for Xorg 1.20's AIGLX Mesa still builds the "dril" loader
    # stubs (lib/dri/<name>_dri.so). No libxatracker any more (Xorg's vmware DDX needs it): VirtualBox
    # and VMware go to the modesetting driver (spin/ab/20-gobo-modesetting.conf).
+   # 0.10.7: + NVK (Vulkan for NVIDIA, Kepler and newer; written partly in Rust: step rust gives rustc,
+   # bindgen, cbindgen) and Mesa's device-select layer (DRI_PRIME then also picks the GPU of a Vulkan
+   # program: "Launch in boost mode"). NVK's Rust crates (syn, proc-macro2, quote, unicode-ident, paste,
+   # rustc-hash) are pinned in build/sources.manifest and put into subprojects/packagecache; meson runs
+   # with --wrap-mode=nodownload, so nothing is fetched while building.
+   # Which OpenGL driver an NVIDIA GPU gets (Mesa 26.3.1, src/loader/loader.c nouveau_zink_predicate):
+   # zink (OpenGL on Vulkan, i.e. on NVK) when the kernel has NOUVEAU_GETPARAM_HAS_VMA_TILEMODE and the
+   # chipset is >= 0x160 (Turing and newer); always zink from 0x1a0 (Blackwell); else Gallium nouveau
+   # (Pascal GTX 10xx = 0x13x stays on nouveau). NOUVEAU_USE_ZINK=0/1 overrides below Blackwell. If NVK
+   # cannot take a Turing+ card, GLX's fallback runs zink without a device and lands on another GPU:
+   # gobo-gpu-env (session start) sets NOUVEAU_USE_ZINK=0 then (spin/gobo-gpu-env).
    . $SPIN/stage2-lib.sh
    stage2_check
    export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
    s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
    V=26.3.1 P=/Programs/Mesa/26.3.1
+   # 017.01's Rust 1.41.0 is a rustup install whose Environment puts its proxies first in PATH ("no default
+   # toolchain configured"): the stage-2 Rust (step rust) goes before it
+   export PATH=/Programs/Rust/1.100.0/bin:$PATH
+   [ "$(rustc --version | cut -d' ' -f2)" = 1.100.0 ] && command -v bindgen > /dev/null && command -v cbindgen > /dev/null ||
+      { echo "rustc 1.100.0 / bindgen / cbindgen missing (step rust)"; exit 1; }
    [ "$(readlink /Programs/LibDRM/Current)" = 2.4.134 ] && [ "$(readlink /Programs/LibGLVnd/Current)" = 1.7.0 ] ||
       { echo "LibDRM 2.4.134 / LibGLVnd 1.7.0 are not built (steps libdrm, libglvnd)"; exit 1; }
    command -v glslangValidator > /dev/null && pkg-config --exists LLVMSPIRVLib SPIRV-Tools ||
       { echo "glslang / SPIRV-LLVM-Translator / SPIRV-Tools missing (steps glslang, spirv-translator, spirv-tools)"; exit 1; }
    unpack mesa-$V.tar.xz mesa-$V
    rm -rf $P
+   # NVK's crates: each wrap's source_filename, from the pinned .crate files (same bytes; meson checks
+   # the wrap's source_hash)
+   mkdir -p subprojects/packagecache
+   for w in syn-2 proc-macro2-1 quote-1 unicode-ident-1 paste-1 rustc-hash-2
+   do
+      f=$(sed -n 's/^source_filename = //p' subprojects/$w-rs.wrap)
+      need ${f%.tar.gz}.crate
+      cp $SRC/${f%.tar.gz}.crate subprojects/packagecache/$f
+   done
    # the llvm.org LLVM is built without RTTI: Mesa's C++ must be too (cpp_rtti=false)
    [ "$(llvm-config --has-rtti)" = NO ] || { echo "LLVM has RTTI now: drop -Dcpp_rtti=false"; exit 1; }
    # TLS: Mesa picks -mtls-dialect=gnu2 when the toolchain runs it, but gold (017.01's default ld) then
@@ -1424,7 +1453,7 @@ mesa)
       -Db_ndebug=true -Dbackend_max_links=2 -Dcpp_rtti=false -Dc_args=-mtls-dialect=gnu -Dcpp_args=-mtls-dialect=gnu \
       -Dplatforms=x11 -Dglx=dri -Degl=enabled -Dgbm=enabled -Dglvnd=enabled -Dopengl=true -Dgles1=enabled -Dgles2=enabled \
       -Dgallium-drivers=nouveau,iris,crocus,radeonsi,r600,llvmpipe,softpipe,svga,zink \
-      -Dvulkan-drivers=intel,amd,swrast -Dvulkan-layers=[] -Dtools=[] \
+      -Dvulkan-drivers=intel,amd,swrast,nouveau -Dvulkan-layers=device-select -Dtools=[] --wrap-mode=nodownload \
       -Dgallium-va=enabled -Dvideo-codecs=all_free -Dgallium-rusticl=false -Dmicrosoft-clc=disabled \
       -Dllvm=enabled -Dshared-llvm=disabled -Dzstd=enabled -Dexpat=enabled -Dxmlconfig=enabled \
       -Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=false -Dhtml-docs=disabled
@@ -1434,7 +1463,7 @@ mesa)
    echo "mesa: compiled in $(( $(date +%s) - t0 )) s"
    s2run /Data/Build/mesa-install.log ninja -C build install
    mkdir -p $P/doc && install -m 644 docs/license.rst $P/doc/
-   stage2_resources Mesa $V "OpenGL, EGL, GBM, Vulkan and VA-API drivers (Gallium, Intel/AMD/software Vulkan)" "MIT AND others (see doc/license.rst)" \
+   stage2_resources Mesa $V "OpenGL, EGL, GBM, Vulkan and VA-API drivers (Gallium, Intel/AMD/NVIDIA/software Vulkan)" "MIT AND others (see doc/license.rst)" \
       https://www.mesa3d.org/ https://archive.mesa3d.org/mesa-$V.tar.xz LibDRM LibGLVnd LibVA Expat ZLib Zstd ELFUtils LibXML2 LibXshmfence
    echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.4)" > $P/Resources/GoboRefinedStage
    stage2_unlink /Programs/Mesa/19.3.3/
@@ -1445,7 +1474,7 @@ mesa)
             lib/dri/nouveau_dri.so lib/dri/iris_dri.so lib/dri/crocus_dri.so lib/dri/radeonsi_dri.so lib/dri/r600_dri.so \
             lib/dri/swrast_dri.so lib/dri/kms_swrast_dri.so lib/dri/vmwgfx_dri.so lib/dri/zink_dri.so \
             lib/dri/nouveau_drv_video.so lib/dri/radeonsi_drv_video.so lib/dri/r600_drv_video.so \
-            share/vulkan/icd.d/intel_icd.x86_64.json share/vulkan/icd.d/radeon_icd.x86_64.json share/vulkan/icd.d/lvp_icd.x86_64.json
+            share/vulkan/icd.d/intel_icd.x86_64.json share/vulkan/icd.d/radeon_icd.x86_64.json share/vulkan/icd.d/lvp_icd.x86_64.json             lib/libvulkan_nouveau.so share/vulkan/icd.d/nouveau_icd.x86_64.json             lib/libVkLayer_MESA_device_select.so share/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json
    do [ -e $P/$f ] || { echo "Mesa $V: $f missing"; ls $P/lib $P/lib/dri; exit 1; }
    done
    for f in $(find $P/lib -name '*.so*' -type f)
@@ -1458,14 +1487,21 @@ mesa)
    VK_DRIVER_FILES=$P/share/vulkan/icd.d/lvp_icd.x86_64.json vulkaninfo --summary > /Data/Build/mesa-vk-lvp.log 2>&1 &&
       grep -q 'llvmpipe' /Data/Build/mesa-vk-lvp.log || { tail -n 20 /Data/Build/mesa-vk-lvp.log; echo "vulkaninfo with lavapipe failed"; exit 1; }
    grep -m 1 'deviceName' /Data/Build/mesa-vk-lvp.log
-   for d in intel radeon
+   for d in intel radeon nouveau
    do
       rc=0; VK_DRIVER_FILES=$P/share/vulkan/icd.d/${d}_icd.x86_64.json vulkaninfo --summary > /Data/Build/mesa-vk-$d.log 2>&1 || rc=$?
       [ $rc -lt 128 ] || { tail -n 20 /Data/Build/mesa-vk-$d.log; echo "vulkaninfo with the $d driver crashed (exit $rc)"; exit 1; }
       echo "vulkaninfo with the $d driver and no such GPU: exit $rc (no crash)"
    done
+   # all drivers at once, through the index as on an installed system: the software device once (0.10.4-0.10.6
+   # listed every device twice, see step vulkan), the device-select layer found by the loader
+   vulkaninfo --summary > /Data/Build/mesa-vk-all.log 2>&1 || true
+   n=$(grep -c 'deviceName *= *llvmpipe' /Data/Build/mesa-vk-all.log || true)
+   [ "$n" = 1 ] || { grep -m 8 -E 'deviceName|ERROR' /Data/Build/mesa-vk-all.log; echo "vulkaninfo lists llvmpipe $n times (want 1)"; exit 1; }
+   grep -q 'VK_LAYER_MESA_device_select' /Data/Build/mesa-vk-all.log || { echo "the loader does not find the device-select layer"; exit 1; }
+   echo "vulkaninfo (all drivers): llvmpipe listed once, VK_LAYER_MESA_device_select found"
    echo "libgallium needs: $(readelf -d $P/lib/libgallium-$V.so | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
-   du -sh $P $P/lib/libgallium-$V.so $P/lib/libvulkan_*.so
+   du -sh $P $P/lib/libgallium-$V.so $P/lib/libvulkan_*.so $P/lib/libVkLayer_MESA_device_select.so
    ;;
 mesa-demos)
    # glxinfo, eglinfo and glxgears from mesa-demos 9.0.0 (017.01 has none of them): "glxinfo -B" shows
@@ -1493,6 +1529,122 @@ mesa-demos)
    for b in glxinfo eglinfo glxgears
    do ! ldd $P/bin/$b | grep -q 'not found' || { ldd $P/bin/$b; echo "$b misses libraries"; exit 1; }
    done
+   ;;
+rust)
+   # 0.10.7: Rust 1.100.0 (the official standalone installer: rustc, cargo, the x86_64 standard library),
+   # with bindgen 0.72.1 and cbindgen 0.29.2 built by that cargo from their crates.io sources: Mesa's NVK
+   # (step mesa) needs Rust >= 1.85, bindgen >= 0.71.1 (not 0.72.0/0.73.0/0.73.1) and cbindgen >= 0.28.
+   # Every crate is a pinned file of build/sources.manifest (step rust; each crate's sha256 is the one the
+   # crate's Cargo.lock / crates.io names); they are put into a cargo "vendor" folder here and cargo runs
+   # --offline --locked: nothing is fetched while building. Build root only (nothing of Rust in the image).
+   # bindgen loads LLVM 23.1.6's libclang.so (step llvm) at run time.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   V=1.100.0 P=/Programs/Rust/1.100.0 T=rust-1.100.0-x86_64-unknown-linux-gnu.tar.xz
+   BG=0.72.1 CB=0.29.2 M=$SPIN/../build/sources.manifest
+   [ -f $M ] || { echo "no build/sources.manifest next to spin/"; exit 1; }
+   [ -e /Programs/LLVM/23.1.6/lib/libclang.so ] || { echo "LLVM 23.1.6 has no lib/libclang.so (step llvm): bindgen needs it"; exit 1; }
+   unpack $T rust-$V-x86_64-unknown-linux-gnu
+   rm -rf $P
+   ./install.sh --prefix=$P --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu --disable-ldconfig > /Data/Build/rust-install.log 2>&1 ||
+      { tail -n 20 /Data/Build/rust-install.log; exit 1; }
+   mkdir -p $P/doc && install -m 644 LICENSE-APACHE LICENSE-MIT COPYRIGHT $P/doc/
+   rm -rf $P/share/doc
+   # the crates: one folder per crate in a vendor folder (cargo checks each against its .cargo-checksum.json)
+   VD=$WORK/vendor CH=$WORK/cargo-home
+   rm -rf $VD $CH && mkdir -p $VD $CH
+   n=0
+   while read -r st ver file sum rest
+   do
+      case "$file" in *.crate) ;; *) continue ;; esac
+      need $file
+      [ "$(sha256sum $SRC/$file | cut -d' ' -f1)" = "$sum" ] || { echo "$file: sha256 differs from the manifest"; exit 1; }
+      d=${file%.crate}
+      tar xzf $SRC/$file -C $VD --no-same-owner
+      [ -f $VD/$d/Cargo.toml ] || { echo "$file did not unpack to $d/"; exit 1; }
+      printf '{"files":{},"package":"%s"}\n' "$sum" > $VD/$d/.cargo-checksum.json
+      n=$((n + 1))
+   done < <(awk '$1 == "rust"' $M)
+   echo "crates for bindgen/cbindgen: $n"
+   printf '[source.crates-io]\nreplace-with = "vendored"\n[source.vendored]\ndirectory = "%s"\n[net]\noffline = true\n' $VD > $CH/config.toml
+   export CARGO_HOME=$CH PATH=$P/bin:$PATH RUSTFLAGS="-C link-arg=-fuse-ld=bfd"   # ld.bfd: see the note above pymods
+   [ "$(rustc --version | cut -d' ' -f2)" = $V ] || { rustc --version; echo "rustc is not $V"; exit 1; }
+   for c in bindgen-cli-$BG cbindgen-$CB
+   do
+      [ -d $VD/$c ] || { echo "crate $c is not in the manifest"; exit 1; }
+      rm -rf $WORK/$c && cp -a $VD/$c $WORK/$c
+      ( cd $WORK/$c && cargo install --path . --root $WORK/inst --locked --offline --jobs $(nproc) ) > /Data/Build/rust-$c.log 2>&1 ||
+         { grep -m 10 -B 2 -A 6 'error' /Data/Build/rust-$c.log | head -n 60; tail -n 20 /Data/Build/rust-$c.log; exit 1; }
+   done
+   install -m 755 $WORK/inst/bin/bindgen $WORK/inst/bin/cbindgen $P/bin/
+   stage2_resources Rust $V "Rust compiler and cargo (official build), bindgen $BG and cbindgen $CB: for building Mesa's NVK (build root only)" \
+      "MIT OR Apache-2.0" https://www.rust-lang.org/ https://static.rust-lang.org/dist/$T "Glibc >= 2.17" GCC LLVM
+   for d in /Programs/Rust/*/
+   do
+      case "$(basename $d)" in $V|Settings|Current) ;; *) stage2_unlink $d ;; esac
+   done
+   ln -sfn $V /Programs/Rust/Current
+   SymlinkProgram Rust $V | tail -n 1
+   unset RUSTFLAGS CARGO_HOME
+   # checks: the index names the new tools; bindgen runs with libclang 23; rustc builds and links a program
+   for b in rustc cargo bindgen cbindgen
+   do case "$(readlink -f /System/Index/bin/$b)" in $P/bin/*) ;; *) echo "$b in the index is not Rust $V's"; exit 1 ;; esac
+   done
+   echo "$(rustc --version); $(cargo --version); $(bindgen --version); $(cbindgen --version)"
+   [ "$(bindgen --version)" = "bindgen $BG" ] && [ "$(cbindgen --version)" = "cbindgen $CB" ] || { echo "bindgen/cbindgen versions differ"; exit 1; }
+   cd $WORK && printf 'struct gobo_point { int x; int y; };\nint gobo_add(int a, int b);\n' > t.h
+   bindgen t.h -o t.rs > /Data/Build/rust-bindgen-test.log 2>&1 && grep -q 'pub struct gobo_point' t.rs && grep -q 'pub fn gobo_add' t.rs ||
+      { cat /Data/Build/rust-bindgen-test.log; echo "bindgen test failed (libclang?)"; exit 1; }
+   printf 'fn main() { let v: Vec<u32> = (1..=4).collect(); println!("rustc: sum {}", v.iter().sum::<u32>()); }\n' > t.rs
+   rustc -O -C link-arg=-fuse-ld=bfd t.rs -o trs && ./trs
+   du -sh $P
+   ;;
+cryptsetup)
+   # 0.10.7: cryptsetup 2.8.8 (017.01: 2.3.0). 2.8.2 and later open BitLocker volumes whose key is stored
+   # in the clear ("VMK protected with clear key": BitLocker suspended or waiting for activation, common on
+   # new Windows laptops); 2.3.0 skips that entry. gobo-settings-helper maps such volumes read-only.
+   # Same library soname (libcryptsetup.so.12). OpenSSL backend, internal Argon2; no SSH token plugin, no
+   # external token plugins, no OPAL. Goes into the image in place of 2.3.0.
+   . $SPIN/stage2-lib.sh
+   stage2_check
+   export LDFLAGS="-fuse-ld=bfd"   # not 017.01's default ld (gold): see the note above pymods
+   s2run() { local log=$1; shift; "$@" > "$log" 2>&1 || { grep -m 10 -B 2 -A 4 -E 'error|Error|ERROR' "$log" | head -n 60; tail -n 30 "$log"; exit 1; }; }
+   V=2.8.8 P=/Programs/CryptSetup/2.8.8
+   old=$(ls -d /Programs/CryptSetup/[0-9]*/ 2> /dev/null | grep -v "/$V/" || true)
+   echo "CryptSetup in the root before: $(ls /Programs/CryptSetup 2> /dev/null | tr '\n' ' ')"
+   unpack cryptsetup-$V.tar.xz cryptsetup-$V
+   rm -rf $P
+   s2run /Data/Build/cryptsetup-configure.log ./configure --prefix=$P --libdir=$P/lib --sysconfdir=/System/Settings \
+      --with-crypto_backend=openssl --disable-asciidoc --disable-ssh-token --disable-external-tokens --disable-hw-opal \
+      --disable-selinux --disable-static --disable-nls --disable-fips --disable-pwquality --disable-passwdqc
+   s2run /Data/Build/cryptsetup-build.log make -j$(nproc)
+   s2run /Data/Build/cryptsetup-install.log make install
+   rm -rf $P/lib/tmpfiles.d
+   mkdir -p $P/doc && install -m 644 COPYING README.licensing $P/doc/
+   stage2_resources CryptSetup $V "Disk encryption tools (dm-crypt, LUKS, BitLocker, TrueCrypt) and libcryptsetup" \
+      "GPL-2.0-or-later AND LGPL-2.1-or-later" https://gitlab.com/cryptsetup/cryptsetup \
+      https://cdn.kernel.org/pub/linux/utils/cryptsetup/v2.8/cryptsetup-$V.tar.xz LVM2 JSON-C Popt OpenSSL Util-Linux
+   echo "built in the stage-2 build root (glibc 2.38) of GoboRefined's build/build.sh; in the image (0.10.7)" > $P/Resources/GoboRefinedStage
+   for d in $old
+   do stage2_unlink $d
+   done
+   ln -sfn $V /Programs/CryptSetup/Current
+   SymlinkProgram CryptSetup $V | tail -n 1
+   [ "$(cryptsetup --version | cut -d' ' -f2)" = $V ] || { cryptsetup --version; echo "cryptsetup is not $V"; exit 1; }
+   case "$(readlink -f /System/Index/sbin/cryptsetup)" in $P/*) ;; *) echo "/System/Index/sbin/cryptsetup is not $V's"; exit 1 ;; esac
+   [ -e $P/lib/libcryptsetup.so.12 ] || { ls $P/lib; echo "no libcryptsetup.so.12"; exit 1; }
+   for f in $P/sbin/cryptsetup $P/lib/libcryptsetup.so.12
+   do ! ldd "$f" | grep -q 'not found' || { ldd "$f"; echo "$f misses libraries"; exit 1; }
+   done
+   cryptsetup --help | grep -q 'bitlk' || { echo "cryptsetup knows no BITLK"; exit 1; }
+   # LUKS2 header and key slot (Argon2id) on a plain file: no device-mapper needed (the passphrase is a test string)
+   cd $WORK && truncate -s 32M luks.img
+   printf 'gobo-build-test' | cryptsetup luksFormat --type luks2 --batch-mode --pbkdf argon2id --pbkdf-memory 32768 \
+      --pbkdf-force-iterations 4 --key-file=- luks.img > /Data/Build/cryptsetup-test.log 2>&1 &&
+   cryptsetup isLuks luks.img && cryptsetup luksDump luks.img | grep -q '^Version:[[:space:]]*2' &&
+   printf 'gobo-build-test' | cryptsetup open --test-passphrase --key-file=- luks.img >> /Data/Build/cryptsetup-test.log 2>&1 ||
+      { cat /Data/Build/cryptsetup-test.log; echo "cryptsetup LUKS2 test failed"; exit 1; }
+   echo "cryptsetup $V: LUKS2 format, dump and passphrase test passed"
    ;;
 *) echo "unknown step: $1"; exit 1 ;;
 esac

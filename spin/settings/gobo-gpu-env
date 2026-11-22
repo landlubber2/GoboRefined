@@ -1,0 +1,28 @@
+#!/bin/sh
+# gobo-gpu-env (GoboRefined 0.10.7): GPU settings for the desktop session, printed as shell lines that
+# the session's .xinitrc runs (eval) before any program starts. Prints nothing on most computers.
+#
+# NVIDIA: Mesa 26 runs OpenGL on Turing and newer cards (chipset >= 0x160, with a kernel that has
+# NOUVEAU_GETPARAM_HAS_VMA_TILEMODE) through zink on NVK, Mesa's Vulkan driver for NVIDIA. When NVK
+# cannot take the card (GSP firmware missing, ...), the OpenGL fallback runs zink on whatever Vulkan
+# device it finds (on a laptop: the Intel GPU) instead of the NVIDIA card. Then this prints
+# "export NOUVEAU_USE_ZINK=0": OpenGL stays on the NVIDIA card with Mesa's Gallium nouveau driver.
+# Checked only when a card runs on the nouveau kernel driver (vulkaninfo with NVK alone, ~0.1 s);
+# a NOUVEAU_USE_ZINK the user set already is left alone. Older cards (Pascal and before) use Gallium
+# nouveau anyway; the line is harmless for them.
+
+[ -z "${NOUVEAU_USE_ZINK:-}" ] || exit 0
+nouveau=
+for c in /sys/class/drm/card[0-9]*
+do
+   case "${c##*/}" in *-*) continue ;; esac
+   [ "$(basename "$(readlink -f "$c/device/driver" 2> /dev/null)")" = nouveau ] && nouveau=yes
+done
+[ -n "$nouveau" ] || exit 0
+icd=/usr/share/vulkan/icd.d/nouveau_icd.x86_64.json
+if [ -e "$icd" ] &&
+   VK_DRIVER_FILES=$icd VK_LOADER_LAYERS_DISABLE='~all~' timeout 10 vulkaninfo --summary 2> /dev/null |
+      grep -q 'vendorID *= *0x10de'
+then exit 0
+fi
+echo "export NOUVEAU_USE_ZINK=0"

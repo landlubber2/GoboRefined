@@ -7,6 +7,7 @@
 --  2. Name = the .desktop file's Name=, else the file name without version, architecture and
 --     ".AppImage". Moves the file to ~/Applications/<Name>/ and makes it executable; the icon is
 --     copied next to it (icon.png / icon.svg; a generic icon when the AppImage has none).
+--     (0.10.7: the reading is in appimage-meta.lua; the entry also gets X-GoboRefined-Icon=checked)
 --     An app of that name already installed: asks before replacing its AppImage.
 --  3. One dialog: add to the start menu in a category (default: the AppImage's own), pin it to
 --     "Pinned and frequent", both, or neither (no shortcut).
@@ -87,103 +88,12 @@ if src:sub(1, #APPS_HOME + 1) == APPS_HOME .. "/" then
    fail("This AppImage is already installed.", "It is in " .. short(src) .. ".")
 end
 
--- where the SquashFS image starts (nil: not a type-2 AppImage)
-local function squashfs_offset(path)
-   local f = io.open(path, "rb")
-   if not f then return nil end
-   local h = f:read(64)
-   local off
-   if h and #h == 64 and h:sub(1, 4) == "\127ELF" and h:byte(6) == 1 then
-      if h:byte(5) == 2 then
-         local shoff = string.unpack("<I8", h, 0x29)
-         local size, num = string.unpack("<I2I2", h, 0x3B)
-         off = shoff + size * num
-      elseif h:byte(5) == 1 then
-         local shoff = string.unpack("<I4", h, 0x21)
-         local size, num = string.unpack("<I2I2", h, 0x2F)
-         off = shoff + size * num
-      end
-   end
-   if off then
-      f:seek("set", off)
-      if f:read(4) ~= "hsqs" then off = nil end
-   end
-   f:close()
-   return off
-end
-
--- the AppImage's own .desktop and icon (into a private temporary folder)
-local tmp = GLib.dir_make_tmp("gobo-appimage-XXXXXX")
-local root = tmp .. "/root"
-local function cleanup() if tmp and tmp:match("/gobo%-appimage%-[%w]+$") then sh("rm -r -- " .. C.q(tmp)) end end
-local offset = squashfs_offset(src)
-local function extract(patterns)
-   local cmd = "unsquashfs -q -n -no-xattrs -f -d " .. C.q(root) .. " -o " .. string.format("%d", offset) .. " " .. C.q(src)
-   for _, p in ipairs(patterns) do cmd = cmd .. " " .. C.q(p) end
-   sh(cmd)
-end
-local function kind_of(path)   -- "png", "svg" or nil (by content)
-   local f = io.open(path, "rb")
-   if not f then return nil end
-   local h = f:read(512) or ""
-   f:close()
-   if h:sub(1, 8) == "\137PNG\r\n\26\n" then return "png" end
-   if h:find("<svg", 1, true) then return "svg" end
-   return nil
-end
-local function regular(path)
-   local info = Gio.File.new_for_path(path):query_info("standard::type,standard::is-symlink,standard::symlink-target",
-      Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, nil)
-   if not info then return nil end
-   if info:get_is_symlink() then return "link", info:get_symlink_target() end
-   return info:get_file_type() == "REGULAR" and "file" or nil
-end
-
-local meta = {}
-if offset then
-   extract({ "*.desktop", ".DirIcon", "*.png", "*.svg" })
-   local desktop
-   local enum = Gio.File.new_for_path(root):enumerate_children("standard::name", Gio.FileQueryInfoFlags.NONE, nil)
-   if enum then
-      while true do
-         local info = enum:next_file(nil)
-         if not info then break end
-         local n = info:get_name()
-         if n:match("%.desktop$") and (not desktop or n < desktop) then desktop = n end
-      end
-      enum:close(nil)
-   end
-   if desktop then
-      local kf = GLib.KeyFile()
-      if kf:load_from_file(root .. "/" .. desktop, GLib.KeyFileFlags.NONE) and kf:has_group("Desktop Entry") then
-         local G = "Desktop Entry"
-         meta.name = kf:get_string(G, "Name")
-         meta.icon = kf:get_string(G, "Icon")
-         meta.comment = kf:get_string(G, "Comment")
-         meta.wmclass = kf:get_string(G, "StartupWMClass")
-         meta.categories = kf:get_string_list(G, "Categories") or {}
-      end
-   end
-   -- the icon: <Icon>.png / .svg at the top, else .DirIcon (often a link into usr/share/icons)
-   local cands = {}
-   if meta.icon and not meta.icon:find("/") then
-      table.insert(cands, root .. "/" .. meta.icon .. ".png")
-      table.insert(cands, root .. "/" .. meta.icon .. ".svg")
-   end
-   local dir_icon = root .. "/.DirIcon"
-   for _ = 1, 3 do   -- follow up to three links inside the image
-      local t, target = regular(dir_icon)
-      if t ~= "link" or not target or target:sub(1, 1) == "/" or target:find("%.%.") then break end
-      local rel = (dir_icon:sub(#root + 2):match("^(.*)/") or "")
-      rel = (rel ~= "" and rel .. "/" or "") .. target
-      extract({ rel })
-      dir_icon = root .. "/" .. rel
-   end
-   table.insert(cands, dir_icon)
-   for _, p in ipairs(cands) do
-      if regular(p) == "file" and kind_of(p) then meta.icon_file, meta.icon_kind = p, kind_of(p) break end
-   end
-end
+-- the AppImage's own .desktop and icon (0.10.7: appimage-meta.lua, shared with the icon fix-up
+-- of apps installed before; it also finds icons under usr/share/icons and runtimes without an
+-- ELF section table)
+local AM = require("appimage-meta")
+local meta = AM.read(src) or {}
+local function cleanup() AM.cleanup(meta) end
 
 -- the name and the folder ---------------------------------------------------------------
 local function clean(s)
@@ -251,13 +161,7 @@ sh("chmod 755 -- " .. C.q(dest))
 for _, f in ipairs(old_files) do
    if f ~= file_name then os.remove(folder .. "/" .. f) end
 end
-local icon = "application-x-executable"
-os.remove(folder .. "/icon.png")
-os.remove(folder .. "/icon.svg")
-if meta.icon_file then
-   local target = folder .. "/icon." .. meta.icon_kind
-   if sh("cp -- " .. C.q(meta.icon_file) .. " " .. C.q(target)) then icon = target end
-end
+local icon = AM.copy_icon(meta, folder) or "application-x-executable"
 cleanup()
 
 -- the dialog ----------------------------------------------------------------------------
@@ -331,6 +235,7 @@ if in_menu or pinned then
    if wmclass ~= "" then table.insert(lines, "StartupWMClass=" .. wmclass) end
    table.insert(lines, "X-GoboRefined-Menu=edited")
    table.insert(lines, "X-GoboRefined-AppImage=" .. folder)
+   table.insert(lines, "X-GoboRefined-Icon=checked")   -- 0.10.7: appimage-fixicons.lua leaves it alone
    GLib.mkdir_with_parents(USER_DIR, tonumber("0755", 8))
    local f = io.open(desktop_path .. ".new", "w")
    if f then

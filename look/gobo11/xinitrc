@@ -10,6 +10,9 @@ xsetroot -solid '#0b1630' -cursor_name left_ptr
 # 0.10.5: an accessibility bus left on the X server by the login screen (root's, not reachable)
 # made programs wait 25 s for it (Electron apps' first window); the session starts its own
 xprop -root -remove AT_SPI_BUS 2> /dev/null
+# 0.10.7: GPU settings for this session (gobo-gpu-env; empty on most computers: NVIDIA cards that
+# Mesa's NVK cannot drive keep OpenGL on the nouveau driver instead of another GPU)
+[ -x /System/Index/bin/gobo-gpu-env ] && eval "$(gobo-gpu-env 2> /dev/null)"
 
 # Load user preferences
 [ -e ~/.Xresources ] && xrdb -merge ~/.Xresources
@@ -54,6 +57,10 @@ xset s 600 5
 # Clipboard history: CopyQ keeps the last 20 copies, also after their program has closed
 # (no tray icon; Win+Shift+V lists them). Settings in ~/.config/copyq/.
 [ -x /bin/copyq ] && copyq > /dev/null 2>&1 &
+
+# 0.10.7: icons for the start menu entries of AppImages installed before 0.10.7 (once per entry;
+# after the desktop has started, it reloads the menu when it changed something)
+[ -x /System/Index/bin/gobo-appimage-install ] && { sleep 8; gobo-appimage-install --fix-icons > /dev/null 2>&1; } &
 
 # Shadows and fades
 [ -x /bin/picom ] && picom -b --config ~/.config/picom.conf

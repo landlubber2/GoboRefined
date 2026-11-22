@@ -72,8 +72,10 @@ LAST_STEP=libva-utils
 # the SPIR-V/LLVM translator, glslang, Vulkan loader/tools, libdrm, libglvnd, Mesa 26.3.1, glxinfo.
 # The image takes LibDRM, LibGLVnd, Mesa, Vulkan-Loader, Vulkan-Tools, Mesa-Demos from the stage-2 root
 # (EXTRA2 in spin/build-iso.sh); the build tools stay out of it.
-STEPS2="llvm cmake python ninja meson pymods spirv-tools spirv-translator glslang vulkan libdrm libglvnd mesa mesa-demos"
-LAST_STEP2=mesa-demos
+# 0.10.7: + rust (Rust, bindgen, cbindgen for Mesa's NVK; build root only), directly before mesa so the
+# cached SPIR-V/glslang steps stay; + cryptsetup 2.8.8 (BitLocker clear-key volumes; into the image).
+STEPS2="llvm cmake python ninja meson pymods spirv-tools spirv-translator glslang vulkan libdrm libglvnd rust mesa mesa-demos cryptsetup"
+LAST_STEP2=cryptsetup
 STAGE2_SETUP=1   # change when the way the stage-2 root is made changes (remakes it)
 
 say() { echo "== $*"; }

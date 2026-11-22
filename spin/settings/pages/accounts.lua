@@ -147,7 +147,8 @@ function P.build(C)
       return list
    end
    local FS_NAMES = { ntfs = "Windows (NTFS)", vfat = "FAT", exfat = "exFAT", ext2 = "Linux (ext2)",
-                      ext3 = "Linux (ext3)", ext4 = "Linux (ext4)", btrfs = "Linux (btrfs)", xfs = "Linux (XFS)" }
+                      ext3 = "Linux (ext3)", ext4 = "Linux (ext4)", btrfs = "Linux (btrfs)", xfs = "Linux (XFS)",
+                      bitlocker = "Windows, BitLocker" }   -- 0.10.7
    local function choose_disks(p)
       local disks = read_disks()
       local d = Gtk.Dialog { title = "Disks of " .. p.login, transient_for = C.window, modal = true,
@@ -169,13 +170,21 @@ function P.build(C)
       local members = {}
       for _, dk in ipairs(disks) do
          members = C.group_members(dk.group)
-         local label = string.format("%s  (%s, %.1f GB)%s", dk.name, FS_NAMES[dk.fstype] or dk.fstype, dk.size / 1e9,
-            dk.state == "ro" and " - read-only: Windows did not shut down fully" or
-            (dk.state == "unmounted" and " - could not be opened" or ""))
+         -- 0.10.7: BitLocker volumes are opened read-only (state "ro") or not at all ("locked")
+         local why = dk.state == "ro" and " - read-only: Windows did not shut down fully" or
+            (dk.state == "unmounted" and " - could not be opened" or "")
+         if dk.fstype == "bitlocker" then
+            why = dk.state == "ro" and " - read-only" or
+               (dk.state == "locked" and " - Locked (BitLocker)" or " - could not be opened")
+         end
+         local label = string.format("%s  (%s, %.1f GB)%s", dk.name, FS_NAMES[dk.fstype] or dk.fstype, dk.size / 1e9, why)
          local c = Gtk.CheckButton { label = label, active = p.admin or members[p.login] == true }
          if p.admin then c.sensitive = false end
          checks[dk.id] = c
          vbox:pack_start(c, false, false, 0)
+         if dk.fstype == "bitlocker" and dk.state == "locked" then
+            note("Turn off BitLocker in Windows, or suspend it, to see this disk here.")
+         end
       end
       if p.admin and #disks > 0 then
          note("Administrators can always open every disk.")
@@ -191,7 +200,9 @@ function P.build(C)
             "(C:\\Users) while showing the rest is not reliable, because a partition is opened the same way " ..
             "for everyone. Windows usually keeps the users' files on C: and other data often on D:, so " ..
             "allowing D: but not C: is the usual choice. A Windows disk shows as read-only after Windows " ..
-            "was hibernated or started with Fast Startup: shut Windows down with Shift + Shut down.")
+            "was hibernated or started with Fast Startup: shut Windows down with Shift + Shut down. " ..
+            "A Windows disk with BitLocker is shown read-only when BitLocker is suspended (its key is " ..
+            "then stored on the disk unprotected); GoboRefined never writes to it.")
       end
       d:get_content_area():pack_start(vbox, true, true, 0)
       vbox:show_all()

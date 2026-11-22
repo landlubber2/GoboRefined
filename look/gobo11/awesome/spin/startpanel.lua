@@ -33,6 +33,13 @@
 -- to M.search_key): the rows then show the matching apps (M.find = the search popup's own
 -- matching, launcher.find); Enter starts the first one, Backspace deletes, Escape closes the menu
 -- as before. Closing the menu empties the box.
+--
+-- 0.10.7: "Launch in boost mode" in the same right-click menus (apps in the start menu, the search,
+-- the panel, pinned apps), only on computers with two GPUs: gobo-boost-run --gpu is asked each time
+-- such a menu opens (it reads /sys/class/drm; nothing is cached). The app then starts through
+-- gobo-boost-run, which sets DRI_PRIME to the GPU that does not drive the screen (OpenGL and, through
+-- Mesa's device-select layer, Vulkan); everything else stays on the screen's GPU. Simple accounts
+-- get it too (it starts only programs they may start anyway).
 local awful = require("awful")
 local wibox = require("wibox")
 local gears = require("gears")
@@ -84,13 +91,14 @@ function M.set_apps(entries)
    for _, e in ipairs(entries) do
       local id = e.id or M.id_for(e.name, e.cmdline)
       if id and not list[id] then
-         list[id] = { id = id, name = e.name, cmdline = e.cmdline, icon = e.icon }
+         list[id] = { id = id, name = e.name, cmdline = e.cmdline, icon = e.icon, wmclass = e.wmclass }
       end
    end
    apps = list
    M.refresh()
 end
 function M.app(id) return apps[id] end
+function M.all_apps() return apps end   -- 0.10.7: id -> app (rc.lua: which app a window belongs to)
 
 -- small files --------------------------------------------------------------------------
 local function mtime(path)
@@ -207,6 +215,76 @@ function M.launch(app)
    M.count(app.id or M.id_for(app.name, app.cmdline))
 end
 
+-- 0.10.7: taskbar pins -------------------------------------------------------------------
+-- ~/.config/goborefined/taskbar-pins: the buttons left of the running windows, in order, one per
+-- line: "builtin<TAB>terminal|files|browser" (the three of earlier versions) or "app<TAB>desktop-id".
+-- No file = the default list (rc.lua sets M.taskbar_default); the first change writes the file.
+-- Right click on a window's taskbar button: "Pin to taskbar" / "Unpin from taskbar"; on a pinned
+-- button: "Unpin from taskbar". A separate list from the start menu's pins (start-pins, at most 8
+-- and shown in the panel): pinning to the taskbar does not fill the start menu and the other way
+-- round. apply.sh never touches the file, so it survives updates and rollbacks (0.10.6 ignores it).
+M.taskbar_file = M.dir .. "/taskbar-pins"
+M.taskbar_default = {}
+M.TASKBAR_MAX = 12
+M.on_taskbar_change = nil       -- rc.lua: rebuild the buttons
+local tb, tb_mtime = nil, -1
+local BUILTINS = { terminal = true, files = true, browser = true }
+local function load_tb()
+   local f = io.open(M.taskbar_file, "r")
+   if not f then
+      tb, tb_mtime = {}, -1
+      for _, p in ipairs(M.taskbar_default) do table.insert(tb, { kind = p.kind, target = p.target }) end
+      return
+   end
+   f:close()
+   local t = mtime(M.taskbar_file)
+   if tb and t == tb_mtime then return end
+   tb_mtime, tb = t, {}
+   local seen = {}
+   for _, line in ipairs(lines(M.taskbar_file)) do
+      local kind, target = line:match("^(%a+)\t(.+)$")
+      local ok = (kind == "builtin" and BUILTINS[target]) or
+                 (kind == "app" and target and target:match("^[%w][%w._+@-]*%.desktop$"))
+      if ok and not seen[kind .. target] and #tb < M.TASKBAR_MAX then
+         seen[kind .. target] = true
+         table.insert(tb, { kind = kind, target = target })
+      end
+   end
+end
+local function save_tb()
+   local out = { "# GoboRefined taskbar pins (builtin<TAB>terminal|files|browser or app<TAB>desktop-id), in order\n" }
+   for _, p in ipairs(tb) do table.insert(out, p.kind .. "\t" .. p.target .. "\n") end
+   write(M.taskbar_file, table.concat(out))
+   tb_mtime = mtime(M.taskbar_file)
+   if M.on_taskbar_change then M.on_taskbar_change() end
+end
+function M.taskbar_pins() load_tb() return tb end
+function M.taskbar_index(kind, target)
+   load_tb()
+   for i, p in ipairs(tb) do
+      if p.kind == kind and p.target == target then return i end
+   end
+end
+function M.taskbar_pin(kind, target)
+   if kind == "app" and not (target and target:match("^[%w][%w._+@-]*%.desktop$")) then return false end
+   if kind == "builtin" and not BUILTINS[target] then return false end
+   if M.taskbar_index(kind, target) then return true end
+   if #tb >= M.TASKBAR_MAX then
+      naughty.notify({ title = "Taskbar", text = string.format("The taskbar holds %d pinned apps. Unpin one first.", M.TASKBAR_MAX), timeout = 4 })
+      return false
+   end
+   table.insert(tb, { kind = kind, target = target })
+   save_tb()
+   return true
+end
+function M.taskbar_unpin(kind, target)
+   local i = M.taskbar_index(kind, target)
+   if i then
+      table.remove(tb, i)
+      save_tb()
+   end
+end
+
 -- pins ------------------------------------------------------------------------------------
 function M.pinned(kind, target)
    load_pins()
@@ -254,11 +332,14 @@ end
 function M.app_context(app)
    local id = app and (app.id or M.id_for(app.name, app.cmdline))
    if not id then return end
+   local items
    if M.pinned("app", id) then
-      ctxmenu.show({ { "Unpin from start", function() M.unpin("app", id) end } })
+      items = { { "Unpin from start", function() M.unpin("app", id) end } }
    else
-      ctxmenu.show({ { "Pin to start", function() M.pin("app", id) end } })
+      items = { { "Pin to start", function() M.pin("app", id) end } }
    end
+   M.add_boost(items, app)
+   ctxmenu.show(items)
 end
 
 -- the slots: pins first, then the most used apps that are not pinned -----------------------
@@ -355,13 +436,43 @@ local function open_slot(s)
    end
 end
 
+-- 0.10.7: boost mode (see the top of this file) -----------------------------------------
+-- true when the computer has two GPUs (asked each time: a GPU can be switched off or added)
+function M.boost_available()
+   local f = io.popen("gobo-boost-run --gpu 2> /dev/null")
+   if not f then return false end
+   local tag = f:read("*l")
+   f:close()
+   return tag ~= nil and tag ~= ""
+end
+
+function M.boost(app)
+   if type(app) == "string" then app = apps[app] end
+   if not app or not app.cmdline then return end
+   if menu_ref then menu_ref:hide() end
+   require("spin.popups").close_all()   -- the search popup, if it was there
+   awful.spawn("gobo-boost-run " .. app.cmdline)
+   M.count(app.id or M.id_for(app.name, app.cmdline))
+end
+
+-- adds "Launch in boost mode" to a right-click menu's items (two GPUs only)
+function M.add_boost(items, app)
+   if app and app.cmdline and M.boost_available() then
+      table.insert(items, { "Launch in boost mode", function() M.boost(app) end })
+   end
+end
+
 local function slot_context(s)
    if s.result then
       if s.app then M.app_context(s.app) end
    elseif s.pinned then
-      ctxmenu.show({ { "Unpin", function() M.unpin(s.kind, s.target) end } })
+      local items = { { "Unpin", function() M.unpin(s.kind, s.target) end } }
+      if s.kind == "app" and not s.missing then M.add_boost(items, s.app) end
+      ctxmenu.show(items)
    else
-      ctxmenu.show({ { "Pin to start", function() M.pin("app", s.target) end } })
+      local items = { { "Pin to start", function() M.pin("app", s.target) end } }
+      M.add_boost(items, s.app)
+      ctxmenu.show(items)
    end
 end
 

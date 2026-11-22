@@ -5,8 +5,14 @@
 #                                           start menu entry, pin, both or no shortcut
 #   gobo-appimage-install --offer FILE      prints "true" when the action should be offered
 #                                           (an AppImage that is not in ~/Applications yet)
+#   gobo-appimage-install --fix-icons       (0.10.7, .xinitrc at login) icons for the menu entries of
+#                                           AppImages installed before 0.10.7 (appimage-fixicons.lua)
 # The work is done by appimage-install.lua (Lua + lgi + GTK 3) next to the Settings app's files.
 export NO_AT_BRIDGE=1
+if [ "${1:-}" = "--fix-icons" ]
+then
+   exec lua /Programs/GoboSpin/Current/share/gobo-settings/appimage-fixicons.lua
+fi
 if [ "${1:-}" = "--offer" ]
 then
    case " $(id -Gn 2>/dev/null) " in

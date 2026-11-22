@@ -67,7 +67,7 @@ cp -r "$REPO/spin/ab" ab
 cp -r "$REPO/spin/firmware" firmware
 cp -r "$REPO/spin/settings" settings
 bash -n gobo-install
-bash -n settings/gobo-app-check && bash -n settings/gobo-devices-scan && sh -n settings/gobo-devices && bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent && sh -n settings/gobo-sound-profile && sh -n settings/gobo-menu-editor && sh -n settings/gobo-appimage-install
+bash -n settings/gobo-app-check && bash -n settings/gobo-devices-scan && sh -n settings/gobo-devices && bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent && sh -n settings/gobo-sound-profile && sh -n settings/gobo-menu-editor && sh -n settings/gobo-appimage-install && sh -n settings/gobo-boost-run && sh -n settings/gobo-gpu-env
 for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 bash -n ab/gobo-firewall && sh -n gobo11/apply.sh   # 0.9.1
@@ -101,7 +101,8 @@ done
 # (replaces 19.3.3), LibDRM 2.4.134 (replaces 2.4.100), LibGLVnd 1.7.0 (replaces 1.2.0), the Vulkan
 # loader and vulkaninfo, glxinfo/eglinfo/glxgears. One /Programs/<Name>/<Version> folder each, the version
 # that Current names there. (Overlay attributes of the build root's upper folder are not copied.)
-EXTRA2="LibDRM LibGLVnd Mesa Vulkan-Loader Vulkan-Tools Mesa-Demos"
+# 0.10.7: + CryptSetup 2.8.8 (replaces 2.3.0: BitLocker volumes with a clear key)
+EXTRA2="LibDRM LibGLVnd Mesa Vulkan-Loader Vulkan-Tools Mesa-Demos CryptSetup"
 for prog in $EXTRA2
 do
    v=$(readlink "$PROGRAMS2_FROM/Programs/$prog/Current" 2> /dev/null || true)
@@ -117,7 +118,8 @@ done
 # version next to the new one (20250309-GIT, 1.4.2): keep only the new version (Current)
 # (0.9.1: the same for Firefox: ESR instead of the stock 136.0_bin; 0.10.3: LibVA 2.24.1 instead of 2.7.0)
 # (0.10.4: the same for Mesa, LibDRM, LibGLVnd: the stage-2 versions above instead of 017.01's)
-for prog in Linux-Firmware SOF-Firmware Firefox LibVA Mesa LibDRM LibGLVnd
+# (0.10.7: CryptSetup 2.8.8 instead of 2.3.0; its old index links are removed below)
+for prog in Linux-Firmware SOF-Firmware Firefox LibVA Mesa LibDRM LibGLVnd CryptSetup
 do
    cur=$(readlink $R/Programs/$prog/Current)
    [ -n "$cur" ] && [ -d "$R/Programs/$prog/$cur" ] || { echo "$prog: no Current version"; exit 1; }
@@ -225,9 +227,9 @@ install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $R/System/Se
 mkdir -p $P/1.0/lib/firmware
 install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
 # 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
-install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check settings/gobo-pin-to-start settings/gobo-menu-editor settings/gobo-appimage-install $P/1.0/bin/   # 0.9.6: + gobo-pin-to-start; 0.10.6: + start menu editor, AppImage install
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check settings/gobo-pin-to-start settings/gobo-menu-editor settings/gobo-appimage-install settings/gobo-boost-run settings/gobo-gpu-env $P/1.0/bin/   # 0.9.6: + gobo-pin-to-start; 0.10.6: + start menu editor, AppImage install; 0.10.7: + boost mode, GPU session env
 mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
-install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua settings/menu-editor.lua settings/appimage-install.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher
+install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua settings/menu-editor.lua settings/appimage-install.lua settings/appimage-meta.lua settings/appimage-fixicons.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher
 install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/
 install -m 644 settings/gobo-settings.desktop $P/1.0/share/applications/
 # 0.9.2: Device Manager (detection library, what the project knows about some hardware, lookup URLs)
@@ -280,6 +282,9 @@ xargs -0 -r rm -f < $B/old-libva-links
 # dropped too, after checking that nothing else in the image names libLLVM.so or libLLVM-9.so (Rust 1.41
 # carries its own libLLVM-9-rust-1.41.0-stable.so)
 : > $B/old-graphics-links
+# 0.10.7: the stock CryptSetup's links (its folder was dropped above; the name of its version is not fixed here)
+find $R/System/Index -xdev -lname '/Programs/CryptSetup/*' ! -lname "/Programs/CryptSetup/$(readlink $R/Programs/CryptSetup/Current)/*" -print0 >> $B/old-graphics-links
+echo "index links into the stock CryptSetup: $(tr -cd '\0' < $B/old-graphics-links | wc -c)"
 for old in Mesa/19.3.3 LibDRM/2.4.100 LibGLVnd/1.2.0 LLVM/9.0.1
 do find $R/System/Index -xdev -lname "/Programs/$old/*" -print0 >> $B/old-graphics-links
 done
@@ -306,11 +311,16 @@ do
    t=$(chroot $R readlink -f /usr/lib/$l)
    case "$t" in "/Programs/$prog/$(readlink $R/Programs/$prog/Current)/"*) ;; *) echo "/usr/lib/$l is not $prog's new version (-> $t)"; exit 1 ;; esac
 done
-for icd in intel_icd radeon_icd lvp_icd
+for icd in intel_icd radeon_icd lvp_icd nouveau_icd   # 0.10.7: + NVK
 do
    t=$(chroot $R readlink -f /usr/share/vulkan/icd.d/$icd.x86_64.json)
    case "$t" in /Programs/Mesa/*) ;; *) echo "Vulkan driver list $icd.x86_64.json not linked (-> $t)"; exit 1 ;; esac
 done
+# 0.10.7: Mesa's device-select layer (the loader reads implicit layers from /usr/share/vulkan/implicit_layer.d)
+t=$(chroot $R readlink -f /usr/share/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json)
+case "$t" in /Programs/Mesa/*) ;; *) echo "Vulkan device-select layer not linked (-> $t)"; exit 1 ;; esac
+t=$(chroot $R readlink -f /usr/sbin/cryptsetup)
+case "$t" in "/Programs/CryptSetup/$(readlink $R/Programs/CryptSetup/Current)/"*) ;; *) echo "/usr/sbin/cryptsetup is not the new CryptSetup (-> $t)"; exit 1 ;; esac
 left=$(find $R/System/Index -xdev \( -lname '/Programs/Mesa/19.3.3/*' -o -lname '/Programs/LibDRM/2.4.100/*' -o -lname '/Programs/LibGLVnd/1.2.0/*' -o -lname '/Programs/LLVM/9.0.1/*' \) | head -n 3)
 [ -z "$left" ] || { echo "links into the old graphics stack left: $left"; exit 1; }
 # Every program of the image that names a graphics library still finds all of them and their symbols

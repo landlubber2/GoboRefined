@@ -83,7 +83,7 @@ function M.scan(force)
                   local cats = M.categories_of(p)
                   table.insert(result, { id = f.id, file = f.path, name = name, cmdline = cmdline,
                      icon = p.icon_path, category = cats[1], categories = cats,
-                     edited = p[M.EDITED_KEY] == "edited" })
+                     edited = p[M.EDITED_KEY] == "edited", wmclass = p.StartupWMClass })   -- 0.10.7: wmclass (taskbar pins)
                end
             end
          end

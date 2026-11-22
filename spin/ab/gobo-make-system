@@ -186,6 +186,14 @@ then
    sed -i 's|^\(Exec "Starting message bus\.\.\."\)|Exec "Checking the machine ID..."             /System/Index/bin/gobo-settings-helper boot-machine-id\n\1|' "$bootup"
    grep -q 'gobo-settings-helper boot-machine-id' "$bootup" || die "could not add the machine ID step to BootUp"
 fi
+# 0.10.7: at shutdown, BitLocker volumes (mapped read-only by boot-disks) are unmounted and their
+# mappings removed before the other file systems are unmounted
+shutdown="$T/Programs/BootScripts/Settings/BootScripts/Shutdown"
+if [ -f "$shutdown" ] && ! grep -q 'gobo-settings-helper shutdown-disks' "$shutdown"
+then
+   sed -i 's|^\(Exec "Unmounting all other file systems"\)|Exec "Closing BitLocker disks..."            /System/Index/bin/gobo-settings-helper shutdown-disks\n\1|' "$shutdown"
+   grep -q 'gobo-settings-helper shutdown-disks' "$shutdown" || die "could not add the BitLocker step to Shutdown"
+fi
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 

@@ -352,7 +352,7 @@ local function fill_start_menu(entries)
          -- 0.9.6: started through startpanel.launch (counted for "frequently used"); `app` lets
          -- a right click pin it. 0.10.6: an entry can be in more than one category (spin/appmenu.lua)
          local app = { id = entry.id or startpanel.id_for(entry.name, entry.cmdline), name = entry.name,
-                       cmdline = entry.cmdline, icon = entry.icon }
+                       cmdline = entry.cmdline, icon = entry.icon, wmclass = entry.wmclass }
          for _, cat in ipairs(entry.categories or { entry.category }) do
             if cat_submenus[cat] then
                table.insert(cat_submenus[cat], { entry.name, function() startpanel.launch(app) end,
@@ -362,6 +362,7 @@ local function fill_start_menu(entries)
       end
    end
    startpanel.set_apps(allowed)
+   if spin_taskbar_pins_refresh then spin_taskbar_pins_refresh() end   -- 0.10.7: pinned app icons
    table.sort(cat_keys)
    for _, k in ipairs(cat_keys) do
       if #cat_submenus[k] > 0 then
@@ -452,9 +453,11 @@ local function find_icon(...)
    return beautiful.default_app_icon
 end
 
-local function pinned(icon, command, tip)
+local function pinned(icon, command, tip, on_right)
    local w = hoverable(wibox.widget.imagebox(icon), 8)
-   w:buttons(awful.button({}, 1, function() awful.spawn(command) end))
+   w:buttons(awful.util.table.join(
+      awful.button({}, 1, function() if type(command) == "function" then command() else awful.spawn(command) end end),
+      awful.button({}, 3, function() if on_right then on_right() end end)))
    awful.tooltip({ objects = { w }, text = tip })
    return w
 end
@@ -568,6 +571,52 @@ function spin_taskbar_align()
    for s in screen do arrange_bar(s) end
    return read_align()
 end
+-- 0.10.7: pinned buttons on the taskbar (Terminal, Files, Firefox by default; right click on a
+-- window's button pins its app, right click on a pinned button unpins it)
+taskbar_pins_box = {}
+local taskbar_builtins = {
+   terminal = { names = { "utilities-terminal", "terminal" }, command = terminal, tip = "Terminal" },
+   files = { names = { "system-file-manager", "folder" }, command = file_manager, tip = "Files" },
+   browser = { names = { "firefox" }, command = browser, tip = "Firefox" },
+}
+startpanel.taskbar_default = simple.is_simple
+   and { { kind = "builtin", target = "files" }, { kind = "builtin", target = "browser" } }
+   or { { kind = "builtin", target = "terminal" }, { kind = "builtin", target = "files" }, { kind = "builtin", target = "browser" } }
+local taskbar_menu
+local function taskbar_pin_menu(kind, target, app)
+   if taskbar_menu and taskbar_menu.wibox.visible then taskbar_menu:hide() end
+   local items = { { "Unpin from taskbar", function() startpanel.taskbar_unpin(kind, target) end } }
+   local boost = {}
+   startpanel.add_boost(boost, app)
+   for _, it in ipairs(boost) do table.insert(items, { it[1], it[2] }) end
+   taskbar_menu = awful.menu({ theme = { width = 240, height = 30 }, items = items })
+   taskbar_menu:show()
+end
+function spin_taskbar_pins_refresh()
+   for s, box in pairs(taskbar_pins_box) do
+      if s.valid then
+         box:reset()
+         for _, p in ipairs(startpanel.taskbar_pins()) do
+            if p.kind == "builtin" then
+               local b = taskbar_builtins[p.target]
+               if b and not (p.target == "terminal" and simple.is_simple) then
+                  box:add(pinned(find_icon((table.unpack or unpack)(b.names)), b.command, b.tip,
+                     function() taskbar_pin_menu("builtin", p.target, { cmdline = b.command }) end))
+               end
+            else
+               local a = startpanel.app(p.target)   -- not shown while its app is not in the menu
+               if a then
+                  box:add(pinned(a.icon or beautiful.default_app_icon, function() startpanel.launch(a) end, a.name,
+                     function() taskbar_pin_menu("app", p.target, a) end))
+               end
+            end
+         end
+      end
+   end
+   return #startpanel.taskbar_pins()
+end
+startpanel.on_taskbar_change = spin_taskbar_pins_refresh
+
 local mytaglist = {}
 mytaglist.buttons = awful.util.table.join(
    awful.button({}, 1, awful.tag.viewonly),
@@ -595,13 +644,30 @@ mytasklist.buttons = awful.util.table.join(
       end
    end),
    awful.button({}, 2, function(c) c:kill() end),
-   awful.button({}, 3, function()
+   awful.button({}, 3, function(c)
       if clients_menu and clients_menu.wibox.visible then
          clients_menu:hide()
          clients_menu = nil
-      else
-         clients_menu = awful.menu.clients({ theme = { width = 280, height = 30 } })
+         return
       end
+      -- 0.10.7: "Pin to taskbar" / "Unpin from taskbar" for a window whose app is known
+      local kind, target = spin_taskbar_target(c)
+      if not kind then
+         clients_menu = awful.menu.clients({ theme = { width = 280, height = 30 } })
+         return
+      end
+      local at = startpanel.taskbar_index(kind, target)
+      clients_menu = awful.menu({ theme = { width = 240, height = 30 }, items = {
+         { at and "Unpin from taskbar" or "Pin to taskbar", function()
+            if at then startpanel.taskbar_unpin(kind, target) else startpanel.taskbar_pin(kind, target) end
+         end },
+         { "All windows...", function()
+            gears.timer.delayed_call(function()
+               clients_menu = awful.menu.clients({ theme = { width = 280, height = 30 } })
+            end)
+         end },
+      } })
+      clients_menu:show()
    end)
 )
 
@@ -649,12 +715,73 @@ local function appimage_icon(c)
    end
    return appimage_icons[appdir] or nil
 end
+-- 0.10.7: the environment value NAME of a window's program (nil when unknown)
+local function client_env(c, name)
+   if not c.pid or c.pid <= 0 then return nil end
+   local f = io.open("/proc/" .. c.pid .. "/environ", "rb")
+   if not f then return nil end
+   local env = f:read("a") or ""
+   f:close()
+   local key, pos = name .. "=", 1
+   while pos <= #env do
+      local e = env:find("\0", pos, true) or (#env + 1)
+      if env:sub(pos, pos + #key - 1) == key then
+         local v = env:sub(pos + #key, e - 1)
+         if v ~= "" and not v:find("\n", 1, true) then return v end
+         return nil
+      end
+      pos = e + 1
+   end
+end
+-- the start menu app (desktop id) of a window: an AppImage by its file ($APPIMAGE), else the
+-- window class against StartupWMClass, the desktop id and the command's program name
+local function app_for_client(c)
+   local apps = startpanel.all_apps()
+   local appimage = client_env(c, "APPIMAGE")
+   if appimage then
+      for id, a in pairs(apps) do
+         if a.cmdline and a.cmdline:find(appimage, 1, true) then return id, a end
+      end
+   end
+   local class, inst = (c.class or ""):lower(), (c.instance or ""):lower()
+   if class == "" and inst == "" then return nil end
+   local function is(v) v = (v or ""):lower() return v ~= "" and (v == class or v == inst) end
+   local best, rank
+   for id, a in pairs(apps) do
+      local stem = id:gsub("%.desktop$", "")
+      local prog = ((a.cmdline or ""):match('^"([^"]+)"') or (a.cmdline or ""):match("^(%S+)") or ""):match("([^/]+)$")
+      local r = (is(a.wmclass) and 1) or (is(stem) and 2) or (is(stem:match("([^.]+)$")) and 3) or (is(prog) and 4) or nil
+      if r and (not rank or r < rank or (r == rank and id < best)) then best, rank = id, r end
+   end
+   return best, best and apps[best]
+end
+-- what "Pin to taskbar" pins for a window: the three built-in buttons by window class, else its app
+local builtin_class = { urxvt = "terminal", ["rxvt-unicode"] = "terminal", pcmanfm = "files", firefox = "browser", navigator = "browser" }
+function spin_taskbar_target(c)
+   local b = builtin_class[(c.class or ""):lower()] or builtin_class[(c.instance or ""):lower()]
+   if b and not (b == "terminal" and simple.is_simple) then return "builtin", b end
+   local id = app_for_client(c)
+   if id then return "app", id end
+end
+local appimage_entry_icons = {}       -- AppImage file -> surface, or false
 local function client_icon(c)
    local own = usable(c.icon)
    if own then return own end
    if client_fallback[c] then return client_fallback[c] end
    local from_appimage = appimage_icon(c)
    if from_appimage then client_fallback[c] = from_appimage; return from_appimage end
+   -- 0.10.7: an installed AppImage without .DirIcon: the icon of its start menu entry
+   local appimage = client_env(c, "APPIMAGE")
+   if appimage then
+      if appimage_entry_icons[appimage] == nil then
+         local _, a = app_for_client(c)
+         appimage_entry_icons[appimage] = (a and a.icon and usable(gears.surface.load_silently(a.icon, false))) or false
+      end
+      if appimage_entry_icons[appimage] then
+         client_fallback[c] = appimage_entry_icons[appimage]
+         return client_fallback[c]
+      end
+   end
    local class = (c.class or ""):lower()
    if class_icons[class] == nil then
       local names = {}
@@ -718,12 +845,13 @@ awful.screen.connect_for_each_screen(function(s)
    local center_layout = wibox.layout.fixed.horizontal()
    center_layout.spacing = 4
    center_layout:add(start_button)
-   if not simple.is_simple then   -- 0.9.1
-      center_layout:add(pinned(find_icon("utilities-terminal", "terminal"), terminal, "Terminal"))
-   end
-   center_layout:add(pinned(find_icon("system-file-manager", "folder"), file_manager, "Files"))
-   center_layout:add(pinned(find_icon("firefox"), browser, "Firefox"))
+   -- 0.10.7: the pinned buttons come from the user's list (spin/startpanel.lua, taskbar-pins);
+   -- by default Terminal (not for Simple accounts, 0.9.1), Files and Firefox as before
+   taskbar_pins_box[s] = wibox.layout.fixed.horizontal()
+   taskbar_pins_box[s].spacing = 4
+   center_layout:add(taskbar_pins_box[s])
    center_layout:add(mytasklist[s])
+   spin_taskbar_pins_refresh()
 
    local right_layout = wibox.layout.fixed.horizontal()
    if s == screen.primary then
@@ -753,7 +881,8 @@ awful.screen.connect_for_each_screen(function(s)
    bar_parts[s] = { tags = tag_area, center = center_layout, right = right_layout }
    arrange_bar(s)
 end)
-screen.connect_signal("removed", function(s) bar_parts[s] = nil end)
+screen.connect_signal("removed", function(s) bar_parts[s] = nil; taskbar_pins_box[s] = nil end)
+spin_taskbar_pins_refresh()   -- 0.10.7: the pinned buttons, now that every screen has its taskbar
 
 
 -- Realtek USB Wi-Fi adapters that start as a "driver CD": switch them from the session too,
