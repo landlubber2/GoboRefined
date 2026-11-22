@@ -197,6 +197,29 @@ fi
 printf 'nameserver 208.67.222.222\nnameserver 208.67.220.220\n' > "$T/System/Settings/resolv.conf"
 cp "$T/System/Settings/resolv.conf" "$T/System/Settings/resolv.conf.tail"
 
+# 0.10.8: /etc/os-release and /etc/lsb-release (read by Minecraft's oshi, many AppImages and
+# scripts). Part of the pristine slot, so every update refreshes them; the version is the one
+# build-iso.sh wrote from its single VERSION variable.
+spin_version=$(head -n 1 "$T/Programs/GoboSpin/Current/share/spin-version" 2>/dev/null || true)
+[[ "$spin_version" =~ ^[0-9A-Za-z.-]+$ ]] || die "no GoboRefined version in GoboSpin/share/spin-version"
+cat > "$T/System/Settings/os-release" << EOF
+NAME="GoboRefined"
+VERSION="$spin_version"
+ID=goborefined
+ID_LIKE=gobolinux
+VERSION_ID=$spin_version
+PRETTY_NAME="GoboRefined $spin_version"
+HOME_URL="https://goborefined.org"
+BUG_REPORT_URL="https://github.com/landlubber2/GoboRefined/issues"
+EOF
+cat > "$T/System/Settings/lsb-release" << EOF
+DISTRIB_ID=GoboRefined
+DISTRIB_RELEASE=$spin_version
+DISTRIB_CODENAME=goborefined
+DISTRIB_DESCRIPTION="GoboRefined $spin_version"
+EOF
+chmod 644 "$T/System/Settings/os-release" "$T/System/Settings/lsb-release"
+
 # The desktop's power menu runs these through sudo; group "sys" (may use sudo at all) may
 # run them without a password. 0.9.1: exactly the two commands the power menu uses (before:
 # shutdown/reboot/poweroff/halt with any arguments).

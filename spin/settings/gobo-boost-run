@@ -5,7 +5,7 @@
 #
 #   gobo-boost-run --gpu                 print the other GPU as Mesa names it (pci-0000_01_00_0);
 #                                        exit 1 (nothing printed) on a computer with one GPU
-#   gobo-boost-run --offer FILE          prints "true" when the file manager should offer the action
+#   gobo-boost-run --offer FILE          prints "true" (exit 0) when the file manager should offer the action
 #                                        (two GPUs, FILE an executable AppImage)
 #   gobo-boost-run COMMAND [ARGS...]     run COMMAND with DRI_PRIME=<that GPU> (OpenGL; Vulkan through
 #                                        Mesa's device-select layer). Without a second GPU it runs as is.
@@ -45,9 +45,10 @@ case "${1:-}" in
    --gpu)
       other_gpu ;;
    --offer)
+      # 0.10.8: libfm's ShowIfTrue looks at the EXIT STATUS (0 = show), not at the words
       if [ -f "${2:-}" ] && [ -x "$2" ] && other_gpu > /dev/null
       then echo true
-      else echo false
+      else echo false; exit 1
       fi ;;
    "")
       echo "usage: gobo-boost-run --gpu | --offer FILE | COMMAND [ARGS...]" >&2

@@ -338,8 +338,20 @@ function M.app_context(app)
    else
       items = { { "Pin to start", function() M.pin("app", id) end } }
    end
+   M.add_taskbar(items, id)
    M.add_boost(items, app)
    ctxmenu.show(items)
+end
+
+-- 0.10.8: "Pin to taskbar" / "Unpin from taskbar" in the same right-click menus (start menu,
+-- search, frequent apps, start pins); the taskbar's own list above (taskbar-pins)
+function M.add_taskbar(items, id)
+   if not (id and id:match("^[%w][%w._+@-]*%.desktop$")) then return end
+   if M.taskbar_index("app", id) then
+      table.insert(items, { "Unpin from taskbar", function() M.taskbar_unpin("app", id) end })
+   else
+      table.insert(items, { "Pin to taskbar", function() M.taskbar_pin("app", id) end })
+   end
 end
 
 -- the slots: pins first, then the most used apps that are not pinned -----------------------
@@ -467,10 +479,11 @@ local function slot_context(s)
       if s.app then M.app_context(s.app) end
    elseif s.pinned then
       local items = { { "Unpin", function() M.unpin(s.kind, s.target) end } }
-      if s.kind == "app" and not s.missing then M.add_boost(items, s.app) end
+      if s.kind == "app" and not s.missing then M.add_taskbar(items, s.target); M.add_boost(items, s.app) end
       ctxmenu.show(items)
    else
       local items = { { "Pin to start", function() M.pin("app", s.target) end } }
+      M.add_taskbar(items, s.target)
       M.add_boost(items, s.app)
       ctxmenu.show(items)
    end

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Action
+Name=Compress...
+Tooltip=Pack the selected files and folders into an archive (.zip, .tar.xz or .7z)
+Icon=package-x-generic
+TryExec=gobo-archive-gui
+Profiles=compress;
+
+[X-Action-Profile compress]
+Name=Compress...
+Exec=gobo-archive-gui --compress %F
+MimeTypes=all/all;
+SelectionCount=>0

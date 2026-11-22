@@ -1,6 +1,6 @@
-diff -ruN libfm-1.2.5/src/base/fm-file-info.c ../libfm-1.2.5/src/base/fm-file-info.c
---- libfm-1.2.5/src/base/fm-file-info.c	2016-12-10 00:11:18.000000000 +0100
-+++ libfm-1.2.5/src/base/fm-file-info.c	2026-11-14 12:24:48.797041000 +0100
+diff -ruN libfm-1.2.5.orig/src/base/fm-file-info.c libfm-1.2.5/src/base/fm-file-info.c
+--- libfm-1.2.5.orig/src/base/fm-file-info.c	2026-11-22 17:35:42.534795000 +0100
++++ libfm-1.2.5/src/base/fm-file-info.c	2026-11-22 17:35:44.181350600 +0100
 @@ -204,6 +204,32 @@
   *
   * Returns: TRUE if no error happens.
@@ -45,9 +45,59 @@ diff -ruN libfm-1.2.5/src/base/fm-file-info.c ../libfm-1.2.5/src/base/fm-file-in
          else if(!get_fast && S_ISDIR(st.st_mode)) /* special handling for folder icons */
          {
              FmPath* fmpath = fi->path;
-diff -ruN libfm-1.2.5/src/gtk/fm-places-model.c ../libfm-1.2.5/src/gtk/fm-places-model.c
---- libfm-1.2.5/src/gtk/fm-places-model.c	2016-02-20 01:02:10.000000000 +0100
-+++ libfm-1.2.5/src/gtk/fm-places-model.c	2026-11-14 15:10:35.059075400 +0100
+diff -ruN libfm-1.2.5.orig/src/gtk/fm-gtk-file-launcher.c libfm-1.2.5/src/gtk/fm-gtk-file-launcher.c
+--- libfm-1.2.5.orig/src/gtk/fm-gtk-file-launcher.c	2026-11-22 17:35:43.002108800 +0100
++++ libfm-1.2.5/src/gtk/fm-gtk-file-launcher.c	2026-11-22 17:35:59.174037900 +0100
+@@ -38,6 +38,7 @@
+ #include <glib/gi18n-lib.h>
+ #include <gio/gdesktopappinfo.h>
+ #include <math.h>
++#include <string.h> /* GoboRefined 0.10.8 */
+ 
+ #include "fm-gtk-file-launcher.h"
+ 
+@@ -118,6 +119,38 @@
+     int res;
+     FmIcon* fi_icon;
+ 
++    /* GoboRefined 0.10.8: an AppImage outside ~/Applications is not run straight away: the
++     * spin's installer asks "Install or just run once?" (gobo-install-app --ask) */
++    if (!fm_file_info_is_text(file) && fm_path_is_native(fm_file_info_get_path(file)))
++    {
++        const char *name = fm_file_info_get_name(file);
++        size_t len = name ? strlen(name) : 0;
++        char *installer = g_find_program_in_path("gobo-install-app");
++        if (installer && len > 9 && g_ascii_strcasecmp(name + len - 9, ".appimage") == 0)
++        {
++            char *path = fm_path_to_str(fm_file_info_get_path(file));
++            char *apps = g_build_filename(g_get_home_dir(), "Applications", NULL);
++            size_t alen = strlen(apps);
++            if (path && !(strncmp(path, apps, alen) == 0 && path[alen] == '/'))
++            {
++                char *argv[] = { installer, "--ask", path, NULL };
++                gboolean ok = g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
++                g_free(apps);
++                g_free(path);
++                g_free(installer);
++                if (ok)
++                    return FM_FILE_LAUNCHER_EXEC_CANCEL;
++            }
++            else
++            {
++                g_free(apps);
++                g_free(path);
++                g_free(installer);
++            }
++        }
++        else
++            g_free(installer);
++    }
+     if (fm_config->quick_exec)
+     {
+         /* SF bug#838: open terminal for each script may be just a waste.
+diff -ruN libfm-1.2.5.orig/src/gtk/fm-places-model.c libfm-1.2.5/src/gtk/fm-places-model.c
+--- libfm-1.2.5.orig/src/gtk/fm-places-model.c	2026-11-22 17:35:43.271124300 +0100
++++ libfm-1.2.5/src/gtk/fm-places-model.c	2026-11-22 17:35:44.190087300 +0100
 @@ -41,6 +41,7 @@
  #include "fm-file.h"
  
@@ -234,9 +284,9 @@ diff -ruN libfm-1.2.5/src/gtk/fm-places-model.c ../libfm-1.2.5/src/gtk/fm-places
      if(self->jobs)
      {
          GSList* l;
-diff -ruN libfm-1.2.5/src/gtk/fm-progress-dlg.c ../libfm-1.2.5/src/gtk/fm-progress-dlg.c
---- libfm-1.2.5/src/gtk/fm-progress-dlg.c	2016-12-10 00:11:18.000000000 +0100
-+++ libfm-1.2.5/src/gtk/fm-progress-dlg.c	2026-11-14 12:25:07.593000300 +0100
+diff -ruN libfm-1.2.5.orig/src/gtk/fm-progress-dlg.c libfm-1.2.5/src/gtk/fm-progress-dlg.c
+--- libfm-1.2.5.orig/src/gtk/fm-progress-dlg.c	2026-11-22 17:35:43.369105900 +0100
++++ libfm-1.2.5/src/gtk/fm-progress-dlg.c	2026-11-22 17:35:44.197661600 +0100
 @@ -363,9 +363,9 @@
          {
              /* FIXME: parent window might be already destroyed! */
@@ -250,9 +300,9 @@ diff -ruN libfm-1.2.5/src/gtk/fm-progress-dlg.c ../libfm-1.2.5/src/gtk/fm-progre
              {
                  job = fm_file_ops_job_new(FM_FILE_OP_DELETE, unsupported);
                  fm_file_ops_job_run_with_progress(parent, job);
-diff -ruN libfm-1.2.5/src/job/fm-file-ops-job-delete.c ../libfm-1.2.5/src/job/fm-file-ops-job-delete.c
---- libfm-1.2.5/src/job/fm-file-ops-job-delete.c	2016-02-20 01:18:25.000000000 +0100
-+++ libfm-1.2.5/src/job/fm-file-ops-job-delete.c	2026-11-14 12:24:09.019480000 +0100
+diff -ruN libfm-1.2.5.orig/src/job/fm-file-ops-job-delete.c libfm-1.2.5/src/job/fm-file-ops-job-delete.c
+--- libfm-1.2.5.orig/src/job/fm-file-ops-job-delete.c	2026-11-22 17:35:43.475329800 +0100
++++ libfm-1.2.5/src/job/fm-file-ops-job-delete.c	2026-11-22 17:35:44.205157300 +0100
 @@ -30,6 +30,7 @@
  #include "fm-config.h"
  #include "fm-file.h"
@@ -293,3 +343,52 @@ diff -ruN libfm-1.2.5/src/job/fm-file-ops-job-delete.c ../libfm-1.2.5/src/job/fm
          }
  
          if(!ret)
+diff -ruN libfm-1.2.5.orig/src/modules/gtk-menu-actions.c libfm-1.2.5/src/modules/gtk-menu-actions.c
+--- libfm-1.2.5.orig/src/modules/gtk-menu-actions.c	2026-11-22 17:35:42.905221800 +0100
++++ libfm-1.2.5/src/modules/gtk-menu-actions.c	2026-11-22 17:36:24.231778300 +0100
+@@ -21,6 +21,7 @@
+ 
+ #ifdef HAVE_CONFIG_H
+ #include <config.h>
++#include <string.h> /* GoboRefined 0.10.8 */
+ #endif
+ 
+ #include "fm.h"
+@@ -122,6 +123,29 @@
+     }
+ }
+ 
++/* GoboRefined 0.10.8: a fixed order for the spin's own actions (Install first, then the archive
++ * actions), the others after them by name; stock libfm keeps them in hash table order */
++static int gobo_action_rank(const char *id)
++{
++    static const char *order[] = { "gobo-install.desktop", "gobo-extract-here.desktop", "gobo-extract-to.desktop",
++                                   "gobo-compress.desktop", "gobo-boost-run.desktop", "gobo-pin-to-start.desktop", NULL };
++    int i;
++    for (i = 0; order[i]; i++)
++        if (id && strcmp(id, order[i]) == 0)
++            return i;
++    return i;
++}
++
++static gint gobo_action_compare(gconstpointer a, gconstpointer b)
++{
++    const char *ia = fm_file_action_item_get_id(FM_FILE_ACTION_ITEM((gpointer)a));
++    const char *ib = fm_file_action_item_get_id(FM_FILE_ACTION_ITEM((gpointer)b));
++    int ra = gobo_action_rank(ia), rb = gobo_action_rank(ib);
++    if (ra != rb)
++        return ra - rb;
++    return g_strcmp0(ia, ib);
++}
++
+ static void
+ _fm_actions_update_file_menu_for_scheme(GtkWindow* window, GtkUIManager* ui,
+                                         GString* xml, GtkActionGroup* act_grp,
+@@ -131,6 +155,7 @@
+     GList* files_list = fm_file_info_list_peek_head_link(files);
+     GList* items = fm_get_actions_for_files(files_list);
+ 
++    items = g_list_sort(items, gobo_action_compare); /* GoboRefined 0.10.8 */
+     /* add custom file actions */
+     if(items)
+     {

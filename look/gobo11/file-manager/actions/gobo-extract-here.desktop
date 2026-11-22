@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Action
+Name=Extract here
+Tooltip=Unpack this archive here (one folder stays a folder; loose files go into a new folder named after the archive)
+Icon=package-x-generic
+TryExec=gobo-archive-gui
+Profiles=here;
+
+[X-Action-Profile here]
+Name=Extract here
+Exec=gobo-archive-gui --here %F
+MimeTypes=application/zip;application/x-zip-compressed;application/x-compressed-tar;application/x-bzip-compressed-tar;application/x-bzip2-compressed-tar;application/x-xz-compressed-tar;application/x-zstd-compressed-tar;application/x-lzma-compressed-tar;application/x-tar;application/x-7z-compressed;application/vnd.rar;application/x-rar;application/x-rar-compressed;

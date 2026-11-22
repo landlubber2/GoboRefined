@@ -65,3 +65,36 @@
 #bottom_pane button:hover {
 	background-color: rgba(255,255,255,0.16);
 }
+
+/* 0.10.8: the list of accounts (LXDM's user_list, an icon view in a scrolled window): the same dark
+   translucent card as the name field, white names, the accent colour for the chosen account */
+#user_list_scrolled {
+	min-width: 320px;
+	min-height: 240px;
+	border-radius: 10px;
+	border: 1px solid rgba(255,255,255,0.18);
+	background-color: rgba(32,32,32,0.88);
+}
+
+#user_list_scrolled scrollbar {
+	background-color: transparent;
+	border: none;
+}
+
+#user_list {
+	font-family: Inter;
+	font-size: 14px;
+	background-color: transparent;
+	color: #ffffff;
+	padding: 4px;
+}
+
+#user_list:hover {
+	background-color: rgba(255,255,255,0.06);
+}
+
+#user_list:selected {
+	background-color: #0067c0;
+	color: #ffffff;
+	border-radius: 8px;
+}

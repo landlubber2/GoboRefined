@@ -169,7 +169,10 @@ libfm)
    # side-pane entry + one entry per mounted stick; folder icons from <folder>/.directory
    # (folder colours); only files on the home file system go to the trash (others: asked,
    # then deleted for good). Custom actions are on again (0.6, folder colours): the tarball
-   # ships the C files generated from Vala, so no Vala compiler is needed.
+   # ships the C files generated from Vala, so no Vala compiler is needed. 0.10.8: the file
+   # menu's actions in a fixed order (Install, Extract here, Extract to folder, Compress, ...);
+   # a double click on an executable AppImage outside ~/Applications asks gobo-install-app --ask
+   # ("Install or just run once?") instead of the stock "Execute?" question.
    patch -p1 < $SPIN/patches/libfm-1.2.5-gobo.patch
    gobo_configure LibFM 1.2.5 --with-gtk=3 --disable-exif CFLAGS="$CF"
    grep -q '^#define HAVE_ACTIONS 1' config.h
@@ -185,7 +188,10 @@ pcmanfm)
    # button ("this folder only" / "this folder and all folders inside it"); the old dialog
    # stays as Tools -> Advanced Search (Ctrl+Shift+F). Desktop mode (0.6, desktop icons): a right
    # click on an empty spot runs $GOBO_DESKTOP_MENU_COMMAND (Awesome's menu; Ctrl+right click =
-   # PCManFM's own), and the icon area follows _NET_WORKAREA read directly (set by the look)
+   # PCManFM's own), and the icon area follows _NET_WORKAREA read directly (set by the look).
+   # 0.10.8: folders opened from other programs, the desktop, the USB notice and the Files button
+   # become tabs of the file manager window of the current desktop; "Move Tab to New Window" in
+   # the tab's right-click menu and tabs dragged out of the window (GtkNotebook detachable tabs)
    patch -p1 < $SPIN/patches/pcmanfm-1.2.5-gobo.patch
    gobo_configure PCManFM 1.2.5 --with-gtk=3 CFLAGS="$CF"
    finish PCManFM 1.2.5 "Lightweight file manager (GTK 3 build)."
@@ -222,6 +228,13 @@ lxdm)
       rm -rf $T/Gobo11 && cp -a $T/Industrial $T/Gobo11
       rm -f $T/Gobo11/wave.svg $T/Gobo11/gtkrc $T/Gobo11/greeter.ui
       install -m 644 $F/Gobo11/* $T/Gobo11/
+      # 0.10.8: with the list of accounts (more than 3) LXDM stretches the row; keep the name
+      # label and the password field at their own height, centred
+      for id in login_entry prompt
+      do
+         sed -i "/<object class=\"Gtk[A-Za-z]*\" id=\"$id\">/a\                            <property name=\"valign\">center</property>" $T/Gobo11/greeter-gtk3.ui
+         grep -A1 "id=\"$id\"" $T/Gobo11/greeter-gtk3.ui | grep -q 'name="valign">center' || { echo "greeter-gtk3.ui: $id not centred"; exit 1; }
+      done
    }
    unpack lxdm-0.5.3.tar.xz
    gobo_configure LXDM 0.5.3 --enable-gtk3 --with-pam --disable-consolekit \

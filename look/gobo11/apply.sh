@@ -18,8 +18,12 @@ cp "$here/picom.conf" "$home/.config/picom.conf"
 # 0.9.6: file manager action "Pin to start" (files and folders in the start menu's panel)
 mkdir -p "$home/.local/share/file-manager/actions"
 cp "$here/file-manager/actions/gobo-pin-to-start.desktop" "$home/.local/share/file-manager/actions/"
-# 0.10.6: "Install" for AppImages (to ~/Applications/<Name>/, start menu entry and/or pin)
-cp "$here/file-manager/actions/gobo-appimage-install.desktop" "$home/.local/share/file-manager/actions/"
+# 0.10.8: one "Install" for AppImages, GoboLinux packages and program archives (gobo-install-app;
+# replaces 0.10.6's AppImage-only action), "Extract here", "Extract to folder...", "Compress..."
+rm -f "$home/.local/share/file-manager/actions/gobo-appimage-install.desktop"
+for a in gobo-install gobo-extract-here gobo-extract-to gobo-compress
+do cp "$here/file-manager/actions/$a.desktop" "$home/.local/share/file-manager/actions/"
+done
 # 0.10.7: "Launch in boost mode" for AppImages (offered only on computers with two GPUs)
 cp "$here/file-manager/actions/gobo-boost-run.desktop" "$home/.local/share/file-manager/actions/"
 cp "$here/gtk-3.0/settings.ini" "$home/.config/gtk-3.0/settings.ini"

@@ -1,9 +1,13 @@
--- Apps (0.9.2): add a program from a GoboLinux package file (Name--Version--x86_64.tar.bz2, the
--- format of GoboLinux's own CreatePackage / InstallPackage), after checking that it fits this
--- system (gobo-app-check: architecture, programs it depends on, libraries, C library version).
--- The file can come from a folder, a USB stick, or an FTP server (anonymous), through one
--- browser window. Installing and removing: gobo-settings-helper app-install / app-remove.
-local P = { id = "apps", title = "Apps", icon = "system-software-install" }
+-- Software (0.10.8; "Apps" 0.9.2-0.10.7): install programs from a file and remove them, in one place.
+-- Installing is done by gobo-install-app (the same dialog as the file manager's right click >
+-- Install): AppImages, GoboLinux packages (Name--Version--x86_64.tar.bz2, checked by gobo-app-check,
+-- installed system-wide by gobo-settings-helper app-install) and archives of a ready program. The
+-- file comes from a file chooser, or from a folder or an FTP server (anonymous) through the package
+-- browser of 0.9.2. The list shows everything installed by any of these ways: programs for everyone
+-- (apps.list: packages and, since 0.10.8, AppImages/folders copied to /Programs; removed with
+-- gobo-settings-helper app-remove, administrators) and the current user's own programs in
+-- ~/Applications (removed without a password: the folder, its start menu entries and its pins).
+local P = { id = "apps", title = "Software", icon = "system-software-install" }
 
 local LIST = "/Data/Variable/lib/gobo-settings/apps.list"
 local function is_package(name)
@@ -169,96 +173,133 @@ local function browse(C)
 end
 
 function P.build(C)
-   local Gtk = C.Gtk
+   local Gtk, GLib, Gio = C.Gtk, C.GLib, C.Gio
    local admin = C.kind() == "admin"
-   local outer, box = C.page("Apps", "Add a program from a GoboLinux package file. The file is checked first: it is installed only when it fits this system.")
-   box:pack_start(C.text("A package file is named like  Htop--3.3.0--x86_64.tar.bz2  (GoboLinux's own format, made with CreatePackage). Added programs are kept on the data partition and stay through system updates.", "dim-label"), false, false, 0)
+   local APPS_HOME = C.HOME .. "/Applications"
+   local USER_APPS = GLib.get_user_data_dir() .. "/applications"
+   local outer, box = C.page("Software", "Install a program from a file: an AppImage, a GoboLinux package or an archive (.tar.gz, .zip ...) holding a ready program. The file manager does the same: right click on the file > Install.")
+   box:pack_start(C.text("Programs \"only for me\" go to your folder ~/Applications (no password). Programs \"for everyone\" and GoboLinux packages go to /Programs (an administrator's password). Both stay through system updates.", "dim-label"), false, false, 0)
 
-   local scroll, append, clear = C.output_view(170)
-   local list_box = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6 }
-   local busy = false
+   local status = C.text("", "dim-label")
+   local system_box = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6 }
+   local user_box = Gtk.Box { orientation = Gtk.Orientation.VERTICAL, spacing = 6 }
    local refresh_list
 
-   local WORDS = { OK = "✓ ", WARN = "!  ", FAIL = "✗ " }
-   local function show_check(out)
-      local name, compatible = nil, false
-      for line in out:gmatch("[^\n]+") do
-         local tag, rest = line:match("^(%u+) (.*)$")
-         if tag == "PACKAGE" then name = rest; append("Package: " .. rest .. "\n")
-         elseif tag == "ABOUT" then if rest ~= "" then append("   " .. rest .. "\n") end
-         elseif WORDS[tag] then append(WORDS[tag] .. rest .. "\n")
-         elseif tag == "RESULT" then
-            compatible = rest == "compatible"
-            append(compatible and "\nThis package fits this system.\n" or "\nThis package does NOT fit this system. It will not be installed.\n")
-         end
-      end
-      return compatible, name
-   end
-
-   local function choose_and_check(then_install)
-      if busy then return end
-      local file = browse(C)
+   local function install(file)
       if not file then return end
-      busy = true
-      clear()
-      append("Checking " .. file .. " ...\n")
-      C.run({ "/System/Index/bin/gobo-app-check", file }, nil, function(_, out)
-         busy = false
-         local compatible, name = show_check(out)
-         if not (compatible and then_install) then return end
-         if not C.confirm("Install " .. (name or file) .. "?\nOnly install programs from people you trust: a program can do everything you can do.", "Install") then return end
-         busy = true
-         append("\nInstalling...\n")
-         local last = ""
-         C.helper({ "app-install", file }, nil, function(ok, all)
-            busy = false
-            if ok and all:match("INSTALLED%-OK") then
-               append("Installed. It is in the menu and the search now (programs without a menu entry: by their command name).\n")
-               C.desktop("pcall(function() require('spin.launcher').refresh() end)")
-            else
-               append("NOT installed: " .. C.clean_error(last) .. "\n")
-            end
-            refresh_list()
-         end, function(line) last = line end)
+      status.label = "The installer is open for " .. (file:match("([^/]+)$") or file) .. " ..."
+      C.run({ "/System/Index/bin/gobo-install-app", file }, nil, function()
+         status.label = ""
+         refresh_list()
       end)
    end
-
-   if admin then
-      box:pack_start(C.row(
-         C.button("Install an app from a file...", function() choose_and_check(true) end, "suggested-action"),
-         C.button("Only check a file...", function() choose_and_check(false) end)), false, false, 0)
-   else
-      box:pack_start(C.button("Check a package file...", function() choose_and_check(false) end), false, false, 0)
-      box:pack_start(C.text("Installing and removing apps needs an administrator's account.", "dim-label"), false, false, 0)
+   box:pack_start(C.row(
+      C.button("Install a program from a file...", function()
+         install(C.choose_file("Choose a program file", "Program files (AppImage, package, archive)",
+            { "*.AppImage", "*.appimage", "*.tar.gz", "*.tgz", "*.tar.xz", "*.txz", "*.tar.bz2", "*.tbz2", "*.tar.zst", "*.zip", "*.7z" },
+            C.exists(C.HOME .. "/Downloads") and (C.HOME .. "/Downloads") or C.HOME))
+      end, "suggested-action"),
+      C.button("GoboLinux package from a folder or FTP...", function() install(browse(C)) end)), false, false, 0)
+   box:pack_start(status, false, false, 0)
+   if not admin then
+      box:pack_start(C.text("GoboLinux packages and programs for everyone need an administrator's account; your own programs do not.", "dim-label"), false, false, 0)
    end
-   box:pack_start(scroll, false, false, 0)
-   box:pack_start(C.heading("Apps added on this computer"), false, false, 0)
-   box:pack_start(list_box, false, false, 0)
+   box:pack_start(C.heading("For everyone on this computer"), false, false, 0)
+   box:pack_start(system_box, false, false, 0)
+   box:pack_start(C.heading("Only for you"), false, false, 0)
+   box:pack_start(user_box, false, false, 0)
 
-   refresh_list = function()
-      C.clear(list_box)
-      local n = 0
-      for line in (C.read(LIST) or ""):gmatch("[^\n]+") do
-         local name, version, date, by = line:match("^([^\t]+)\t([^\t]+)\t([^\t]*)\t?(.*)$")
-         if name then
-            n = n + 1
-            local row = Gtk.Box { orientation = Gtk.Orientation.HORIZONTAL, spacing = 12 }
-            row:pack_start(Gtk.Label { label = name .. " " .. version, xalign = 0, width_chars = 30 }, false, false, 0)
-            row:pack_start(C.text("added " .. date .. (by ~= "" and (" by " .. by) or ""), "dim-label"), true, true, 0)
-            if admin then
-               row:pack_start(C.button("Remove", function()
-                  if not C.confirm("Remove " .. name .. " " .. version .. "?\nIts settings in your home folder are kept.", "Remove") then return end
-                  C.helper({ "app-remove", name, version }, nil, function(ok, out)
-                     if not ok then C.error(C.clean_error(out)) end
-                     refresh_list()
-                  end)
-               end), false, false, 0)
+   local KIND_WORDS = { appimage = "AppImage", folder = "program folder", package = "GoboLinux package" }
+   local function row_of(name, detail, on_remove)
+      local row = Gtk.Box { orientation = Gtk.Orientation.HORIZONTAL, spacing = 12 }
+      row:pack_start(Gtk.Label { label = name, xalign = 0, width_chars = 30, ellipsize = "END" }, false, false, 0)
+      row:pack_start(C.text(detail, "dim-label"), true, true, 0)
+      if on_remove then row:pack_start(C.button("Remove", on_remove), false, false, 0) end
+      return row
+   end
+
+   -- one per-user program: its folder, its start menu entries and its pins
+   local function remove_own(folder, name)
+      local dir_name = folder:sub(#APPS_HOME + 2)
+      if folder:sub(1, #APPS_HOME + 1) ~= APPS_HOME .. "/" or dir_name == "" or dir_name:find("/") or dir_name:match("^%.") then return end
+      local info = Gio.File.new_for_path(folder):query_info("standard::type,standard::is-symlink", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, nil)
+      if not info or info:get_file_type() ~= "DIRECTORY" or info:get_is_symlink() then return end
+      if not C.confirm("Remove " .. name .. "?\nThe folder ~/Applications/" .. dir_name .. " is deleted with everything in it. The program's settings in your home folder are kept.", "Remove") then return end
+      local ids = {}
+      for f in C.pread("grep -l -s -F -x -e " .. C.q("X-GoboRefined-AppImage=" .. folder) .. " -- " .. C.q(USER_APPS) .. "/*.desktop"):gmatch("[^\n]+") do
+         ids[f:match("([^/]+)$")] = true
+         os.remove(f)
+      end
+      os.execute("rm -rf --one-file-system -- " .. C.q(folder))
+      for _, list in ipairs({ C.HOME .. "/.config/goborefined/start-pins", C.HOME .. "/.config/goborefined/taskbar-pins" }) do
+         local text = C.read(list)
+         if text then
+            local out, changed = {}, false
+            for line in text:gmatch("[^\n]+") do
+               local id = line:match("^app\t(.+)$")
+               if id and ids[id] then changed = true else table.insert(out, line) end
             end
-            list_box:pack_start(row, false, false, 0)
+            if changed then
+               local f = io.open(list .. ".new", "w")
+               if f then f:write(table.concat(out, "\n") .. "\n"); f:close(); os.rename(list .. ".new", list) end
+            end
          end
       end
-      if n == 0 then list_box:pack_start(C.text("None yet.", "dim-label"), false, false, 0) end
-      list_box:show_all()
+      C.desktop("if spin_menu_reload then spin_menu_reload() end; if spin_start_pins_reload then spin_start_pins_reload() end; "
+         .. "if spin_taskbar_pins_refresh then spin_taskbar_pins_refresh() end")
+      refresh_list()
+   end
+
+   refresh_list = function()
+      C.clear(system_box)
+      C.clear(user_box)
+      local n = 0
+      for line in (C.read(LIST) or ""):gmatch("[^\n]+") do
+         local f = {}
+         for field in (line .. "\t"):gmatch("([^\t]*)\t") do table.insert(f, field) end
+         local name, version, date, by, kind = f[1], f[2], f[3] or "", f[4] or "", f[5] or ""
+         if name and version and name ~= "" then
+            n = n + 1
+            local title = name .. " " .. version
+            if kind ~= "" then   -- copied to /Programs by gobo-install-app: show its own name
+               local desk = C.trim(C.pread("grep -h -m1 '^Name=' /Programs/" .. C.q(name) .. "/" .. C.q(version) .. "/share/applications/*.desktop"))
+               if desk ~= "" then title = desk:sub(6) .. " " .. version end
+            end
+            system_box:pack_start(row_of(title, (KIND_WORDS[kind ~= "" and kind or "package"] or kind) .. ", added " .. date .. (by ~= "" and (" by " .. by) or ""),
+               admin and function()
+                  if not C.confirm("Remove " .. title .. " for everyone?\nSettings in the home folders are kept.", "Remove") then return end
+                  C.helper({ "app-remove", name, version }, nil, function(ok, out)
+                     if not ok then C.error(C.clean_error(out)) end
+                     C.desktop("if spin_menu_reload then spin_menu_reload() end; pcall(function() require('spin.launcher').refresh() end)")
+                     refresh_list()
+                  end)
+               end or nil), false, false, 0)
+         end
+      end
+      if n == 0 then system_box:pack_start(C.text("None yet.", "dim-label"), false, false, 0) end
+      local m = 0
+      for dir in C.pread("ls -1 -- " .. C.q(APPS_HOME)):gmatch("[^\n]+") do
+         local folder = APPS_HOME .. "/" .. dir
+         local manifest = C.read(folder .. "/.goborefined-app")
+         local name, version, kind
+         if manifest then
+            name = manifest:match("\nname=([^\n]*)") or dir
+            version = manifest:match("\nversion=([^\n]*)") or ""
+            kind = manifest:match("\nkind=([^\n]*)") or "folder"
+         elseif C.pread("ls -1 -- " .. C.q(folder) .. " | grep -i '\\.appimage$'") ~= "" then
+            name, version, kind = dir, "", "appimage"   -- installed by 0.10.6 / 0.10.7
+         end
+         if name then
+            m = m + 1
+            local size = C.trim(C.pread("du -sh -- " .. C.q(folder) .. " | cut -f 1"))
+            user_box:pack_start(row_of(name .. (version ~= "" and (" " .. version) or ""),
+               (KIND_WORDS[kind] or kind) .. (size ~= "" and (", " .. size) or "") .. ", in ~/Applications/" .. dir,
+               function() remove_own(folder, name) end), false, false, 0)
+         end
+      end
+      if m == 0 then user_box:pack_start(C.text("None yet.", "dim-label"), false, false, 0) end
+      system_box:show_all()
+      user_box:show_all()
    end
    refresh_list()
    return outer

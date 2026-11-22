@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Action
+Name=Extract to folder...
+Tooltip=Unpack this archive into a new folder you name
+Icon=folder-new
+TryExec=gobo-archive-gui
+Profiles=to;
+
+[X-Action-Profile to]
+Name=Extract to folder...
+Exec=gobo-archive-gui --to %f
+MimeTypes=application/zip;application/x-zip-compressed;application/x-compressed-tar;application/x-bzip-compressed-tar;application/x-bzip2-compressed-tar;application/x-xz-compressed-tar;application/x-zstd-compressed-tar;application/x-lzma-compressed-tar;application/x-tar;application/x-7z-compressed;application/vnd.rar;application/x-rar;application/x-rar-compressed;
+SelectionCount=1

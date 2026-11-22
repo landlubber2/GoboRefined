@@ -67,7 +67,7 @@ cp -r "$REPO/spin/ab" ab
 cp -r "$REPO/spin/firmware" firmware
 cp -r "$REPO/spin/settings" settings
 bash -n gobo-install
-bash -n settings/gobo-app-check && bash -n settings/gobo-devices-scan && sh -n settings/gobo-devices && bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent && sh -n settings/gobo-sound-profile && sh -n settings/gobo-menu-editor && sh -n settings/gobo-appimage-install && sh -n settings/gobo-boost-run && sh -n settings/gobo-gpu-env
+bash -n settings/gobo-app-check && bash -n settings/gobo-devices-scan && sh -n settings/gobo-devices && bash -n settings/gobo-settings-helper && bash -n settings/gobo-report && sh -n settings/gobo-settings && sh -n settings/gobo-askpass && sh -n settings/gobo-bt-agent && sh -n settings/gobo-sound-profile && sh -n settings/gobo-menu-editor && sh -n settings/gobo-appimage-install && sh -n settings/gobo-boost-run && sh -n settings/gobo-gpu-env && sh -n settings/gobo-install-app && bash -n settings/gobo-archive && sh -n settings/gobo-archive-gui
 for f in settings/*.lua settings/pages/*.lua; do luac -p $f; done
 sh -n ab/gobo-system-disk && bash -n ab/gobo-update && bash -n ab/gobo-make-system && bash -n ab/gobo-power-button && bash -n ab/dracut/90goboab/module-setup.sh
 bash -n ab/gobo-firewall && sh -n gobo11/apply.sh   # 0.9.1
@@ -227,11 +227,14 @@ install -m 644 ab/20-gobo-modesetting.conf ab/30-gobo-touchpad.conf $R/System/Se
 mkdir -p $P/1.0/lib/firmware
 install -m 644 firmware/wireless-regdb/regulatory.db firmware/wireless-regdb/regulatory.db.p7s $P/1.0/lib/firmware/
 # 0.8.2: Settings app (Lua + lgi + GTK 3), its root helper, askpass, system report
-install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check settings/gobo-pin-to-start settings/gobo-menu-editor settings/gobo-appimage-install settings/gobo-boost-run settings/gobo-gpu-env $P/1.0/bin/   # 0.9.6: + gobo-pin-to-start; 0.10.6: + start menu editor, AppImage install; 0.10.7: + boost mode, GPU session env
+install -m 755 settings/gobo-settings settings/gobo-settings-helper settings/gobo-askpass settings/gobo-report settings/gobo-bt-agent settings/gobo-sound-profile settings/gobo-devices settings/gobo-devices-scan settings/gobo-app-check settings/gobo-pin-to-start settings/gobo-menu-editor settings/gobo-appimage-install settings/gobo-boost-run settings/gobo-gpu-env settings/gobo-install-app settings/gobo-archive settings/gobo-archive-gui $P/1.0/bin/   # 0.9.6: + gobo-pin-to-start; 0.10.6: + start menu editor, AppImage install; 0.10.7: + boost mode, GPU session env; 0.10.8: + one installer, archives
 mkdir -p $P/1.0/share/gobo-settings/pages $P/1.0/share/applications
-install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua settings/menu-editor.lua settings/appimage-install.lua settings/appimage-meta.lua settings/appimage-fixicons.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher
+install -m 644 settings/main.lua settings/common.lua settings/bt-agent.lua settings/pactl.lua settings/sound-profile.lua settings/menu-editor.lua settings/install-app.lua settings/app-detect.lua settings/archive.lua settings/asar-file.py settings/appimage-meta.lua settings/appimage-fixicons.lua $P/1.0/share/gobo-settings/   # 0.8.4: + Bluetooth pairing agent, 0.8.5: + sound card watcher; 0.10.8: install-app.lua (replaces appimage-install.lua), app-detect, archive, asar-file.py
 install -m 644 settings/pages/*.lua $P/1.0/share/gobo-settings/pages/
 install -m 644 settings/gobo-settings.desktop $P/1.0/share/applications/
+# 0.10.8: the double click on AppImages and archives ("Install or just run once?", "Extract?"); the
+# defaults for those types are written into the system mimeapps.list by gobo-settings-helper
+install -m 644 settings/gobo-install-app.desktop $P/1.0/share/applications/
 # 0.9.2: Device Manager (detection library, what the project knows about some hardware, lookup URLs)
 install -m 644 settings/devices.lua settings/known-drivers.tsv settings/device-lookup.conf $P/1.0/share/gobo-settings/
 install -m 644 settings/gobo-devices.desktop $P/1.0/share/applications/

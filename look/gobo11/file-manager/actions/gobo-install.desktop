@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Action
+Name=Install
+Tooltip=Install this program (AppImage, GoboLinux package or program archive): start menu, taskbar, removable in Settings > Software
+Icon=system-software-install
+TryExec=gobo-install-app
+Profiles=install;
+
+[X-Action-Profile install]
+Name=Install
+Exec=gobo-install-app %f
+MimeTypes=all/allfiles;
+SelectionCount=1
+ShowIfTrue=gobo-install-app --offer %f

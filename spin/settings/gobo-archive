@@ -1,0 +1,198 @@
+#!/bin/bash
+# gobo-archive — GoboRefined 0.10.8: safe unpacking and packing of archives (zip, tar.gz/xz/bz2/zst,
+# 7z, and rar as far as libarchive reads it), shared by the file manager's "Extract here",
+# "Extract to folder...", "Compress..." (archive.lua, gobo-archive-gui) and the program installer
+# (gobo-install-app). Runs as the calling user; never needs root.
+#
+#   gobo-archive is FILE              exit 0 when libarchive (bsdtar) can read FILE as an archive
+#   gobo-archive size FILE            unpacked size in bytes (sum of the listed sizes)
+#   gobo-archive list FILE [MAX]      "MODE<TAB>SIZE<TAB>NAME" per entry (first MAX entries)
+#   gobo-archive extract FILE DEST    unpack into the new folder DEST (DEST must not exist yet)
+#   gobo-archive here FILE DIR        unpack into DIR: one top folder stays as it is, anything else
+#                                     goes into a new folder named after the archive; prints the
+#                                     new path ("name (2)" when the name is taken)
+#   gobo-archive create OUT FILE...   pack FILE... (relative to the current folder) into OUT;
+#                                     the format follows OUT's ending: .zip, .tar.xz, .tar.gz, .7z
+#
+# Safety (extract, here): the archive is unpacked by bsdtar into a new private folder next to the
+# target, without -P: names starting with "/" lose it, names with ".." are refused, nothing is
+# written through a link. Afterwards the folder is checked: device files, pipes and sockets, and
+# links that point outside the folder, make the whole unpack fail (the folder is removed);
+# set-user-ID/set-group-ID bits and write access for others are removed. The unpacked size must
+# fit into the free space of the target (with 5 % + 64 MB to spare).
+set -u
+export LC_ALL=C
+umask 022
+BSDTAR=$(command -v bsdtar) || { echo "gobo-archive: bsdtar is missing" >&2; exit 1; }
+
+die() { echo "gobo-archive: $*" >&2; exit 1; }
+human() { awk -v n="$1" 'BEGIN { if (n >= 1e9) printf "%.1f GB", n / 1e9; else if (n >= 1e6) printf "%.0f MB", n / 1e6; else printf "%.0f KB", n / 1e3 }'; }
+absolute() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd)" "$1" ;; esac; }
+
+# Only real archive formats by their first bytes: libarchive also reads plain text as an "mtree"
+# description (which can name other files on the disk), so text files must never reach bsdtar.
+# zip, gzip, bzip2, xz, zstd, 7z, rar, lzip, lz4, compress (.Z), tar (ustar at byte 257)
+archive_magic() {
+   local hex
+   hex=$(od -An -tx1 -N 262 -- "$1" 2>/dev/null | tr -d ' \n')
+   case "$hex" in
+      504b0304*|504b0506*|1f8b*|425a68*|fd377a585a00*|28b52ffd*|377abcaf271c*|526172211a07*|4c5a4950*|04224d18*|1f9d*) return 0 ;;
+   esac
+   [ "${hex:514:10}" = 7573746172 ]
+}
+
+readable_file() {
+   [ -f "$1" ] || die "no such file: $1"
+   [ -r "$1" ] || die "the file cannot be read: $1"
+}
+
+# list: mode, size and name from "bsdtar -tv" (ls -l style; links: "name -> target", hard links:
+# "name link to target")
+list() {   # list FILE [MAX]
+   local max="${2:-0}"
+   "$BSDTAR" -tvf "$1" 2>/dev/null | awk -v max="$max" '
+      { mode = $1; size = $5
+        # the name starts after the date (month, day, time or year): fields 6-8
+        line = $0; for (i = 1; i <= 8; i++) { sub(/^[ \t]*[^ \t]+/, "", line) } sub(/^[ \t]/, "", line)
+        if (substr(mode, 1, 1) == "l") sub(/ -> .*$/, "", line)
+        if (substr(mode, 1, 1) == "h" || index(line, " link to ")) sub(/ link to .*$/, "", line)
+        printf "%s\t%s\t%s\n", mode, size, line
+        if (max > 0 && ++n >= max) exit }'
+}
+
+size_of() { "$BSDTAR" -tvf "$1" 2>/dev/null | awk '{ s += $5 } END { printf "%.0f\n", s }'; }
+
+free_bytes() { df -P -B1 -- "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+
+check_space() {   # check_space FILE DIR (also: is it an archive at all; one listing only)
+   local need free
+   need=$(set -o pipefail; "$BSDTAR" -tvf "$1" 2>/dev/null | awk '{ s += $5 } END { printf "%.0f\n", s }') ||
+      die "this is not an archive that can be opened (or it is damaged)"
+   free=$(free_bytes "$2")
+   [ -n "$need" ] && [ -n "$free" ] || die "could not work out the space needed"
+   if awk -v n="$need" -v f="$free" 'BEGIN { exit !(n * 1.05 + 64 * 1048576 > f) }'
+   then die "not enough free space: the unpacked files need $(human "$need"), $(human "$free") are free"
+   fi
+}
+
+# unpack FILE into a new private folder in DIR (same disk, so it can be renamed); prints its path
+unpack() {   # unpack FILE DIR
+   local work bad link target real
+   archive_magic "$1" || die "this is not an archive that can be opened (zip, tar.gz, tar.xz, tar.bz2, tar.zst, 7z, rar)"
+   check_space "$1" "$2" || exit 1
+   work=$(mktemp -d "$2/.gobo-extract-XXXXXX") || die "could not make a folder in $2"
+   chmod 700 "$work"
+   if ! "$BSDTAR" -x -f "$1" -C "$work" --no-same-owner --no-xattrs --no-acls --no-fflags 2> "$work.err"
+   then
+      bad=$(grep -v '^$' "$work.err" | head -n 3 | sed 's/^bsdtar: //')
+      rm -rf --one-file-system -- "$work" "$work.err"
+      die "the archive could not be unpacked: ${bad:-unknown error}"
+   fi
+   rm -f -- "$work.err"
+   bad=$(find "$work" ! -type f ! -type d ! -type l -print -quit 2>/dev/null)
+   if [ -n "$bad" ]
+   then rm -rf --one-file-system -- "$work"; die "the archive contains device files, pipes or sockets; nothing was unpacked"
+   fi
+   real=$(realpath -e -- "$work") || { rm -rf --one-file-system -- "$work"; die "the unpacked folder is gone"; }
+   while IFS= read -r -d '' link
+   do
+      target=$(realpath -m -- "$link" 2>/dev/null)
+      case "$target" in
+         "$real"/*) ;;
+         *) bad=$(readlink -- "$link"); rm -rf --one-file-system -- "$work"
+            die "the archive contains a link pointing outside of it ($bad); nothing was unpacked" ;;
+      esac
+   done < <(find "$work" -type l -print0 2>/dev/null)
+   chmod -R u-s,g-s,o-w -- "$work" 2>/dev/null
+   chmod 755 "$work"
+   printf '%s\n' "$work"
+}
+
+unique() {   # unique DIR NAME: DIR/NAME, or DIR/NAME (2), ...
+   local n=2 p="$1/$2"
+   while [ -e "$p" ] || [ -L "$p" ]
+   do p="$1/$2 ($n)"; n=$((n + 1)); [ "$n" -lt 1000 ] || die "too many folders named $2"
+   done
+   printf '%s' "$p"
+}
+
+base_name() {   # the archive's name without its endings
+   local b="${1##*/}"
+   case "$b" in
+      *.tar.gz|*.tar.xz|*.tar.bz2|*.tar.zst|*.tar.lz|*.tar.lz4|*.tar.Z) b="${b%.*}"; b="${b%.tar}" ;;
+      *.tgz|*.txz|*.tbz|*.tbz2|*.tzst|*.tar|*.zip|*.7z|*.rar|*.cpio|*.iso|*.gz|*.xz|*.bz2|*.zst) b="${b%.*}" ;;
+   esac
+   [ -n "$b" ] || b=archive
+   printf '%s' "$b"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+   is)
+      [ $# -eq 1 ] || die "usage: gobo-archive is FILE"
+      [ -f "$1" ] || exit 1
+      archive_magic "$1" && "$BSDTAR" -tf "$1" > /dev/null 2>&1 ;;
+   size)
+      [ $# -eq 1 ] || die "usage: gobo-archive size FILE"
+      readable_file "$1"; archive_magic "$1" || exit 1; size_of "$1" ;;
+   list)
+      [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: gobo-archive list FILE [MAX]"
+      readable_file "$1"
+      [ -z "${2:-}" ] || [[ "$2" =~ ^[0-9]{1,7}$ ]] || die "MAX must be a number"
+      archive_magic "$1" || exit 1
+      list "$1" "${2:-0}" ;;
+   extract)
+      [ $# -eq 2 ] || die "usage: gobo-archive extract FILE DEST"
+      readable_file "$1"
+      src=$(absolute "$1"); dest=$(absolute "$2")
+      [ ! -e "$dest" ] && [ ! -L "$dest" ] || die "$dest already exists"
+      parent=$(dirname -- "$dest"); [ -d "$parent" ] && [ -w "$parent" ] || die "cannot write into $parent"
+      work=$(unpack "$src" "$parent") || exit 1
+      mv -T -- "$work" "$dest" || { rm -rf --one-file-system -- "$work"; die "could not rename the folder"; }
+      printf '%s\n' "$dest" ;;
+   here)
+      [ $# -eq 2 ] || die "usage: gobo-archive here FILE DIR"
+      readable_file "$1"
+      src=$(absolute "$1"); dir=$(realpath -m -- "$2")
+      [ -d "$dir" ] && [ -w "$dir" ] || die "cannot write into $dir"
+      work=$(unpack "$src" "$dir") || exit 1
+      mapfile -d '' top < <(find "$work" -mindepth 1 -maxdepth 1 -print0)
+      if [ "${#top[@]}" -eq 0 ]
+      then rmdir -- "$work"; die "the archive is empty"
+      elif [ "${#top[@]}" -eq 1 ] && [ -d "${top[0]}" ] && [ ! -L "${top[0]}" ]
+      then
+         new=$(unique "$dir" "${top[0]##*/}") || { rm -rf --one-file-system -- "$work"; exit 1; }
+         mv -T -- "${top[0]}" "$new" && rmdir -- "$work" || die "could not move the folder"
+      else
+         new=$(unique "$dir" "$(base_name "$src")") || { rm -rf --one-file-system -- "$work"; exit 1; }
+         mv -T -- "$work" "$new" || die "could not rename the folder"
+      fi
+      printf '%s\n' "$new" ;;
+   create)
+      [ $# -ge 2 ] || die "usage: gobo-archive create OUT FILE..."
+      out=$(absolute "$1"); shift
+      [ ! -e "$out" ] && [ ! -L "$out" ] || die "${out##*/} already exists"
+      [ -w "$(dirname -- "$out")" ] || die "cannot write into $(dirname -- "$out")"
+      case "$out" in
+         *.zip) fmt=(--format zip) ;;
+         *.tar.xz) fmt=(--format pax --xz) ;;
+         *.tar.gz) fmt=(--format pax --gzip) ;;
+         *.7z) fmt=(--format 7zip) ;;
+         *) die "choose a name ending in .zip, .tar.xz, .tar.gz or .7z" ;;
+      esac
+      for f in "$@"
+      do
+         case "$f" in /*|../*|*/../*|..) die "give the files relative to the current folder" ;; esac
+         [ -e "$f" ] || [ -L "$f" ] || die "no such file: $f"
+      done
+      tmp="$out.part"
+      [ ! -e "$tmp" ] || die "${tmp##*/} already exists"
+      if "$BSDTAR" -c "${fmt[@]}" -f "$tmp" -- "$@" 2> "$tmp.err"
+      then rm -f -- "$tmp.err"; mv -T -- "$tmp" "$out" && printf '%s\n' "$out"
+      else
+         bad=$(grep -v '^$' "$tmp.err" | head -n 3 | sed 's/^bsdtar: //')
+         rm -f -- "$tmp" "$tmp.err"
+         die "the archive could not be made: ${bad:-unknown error}"
+      fi ;;
+   *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

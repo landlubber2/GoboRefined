@@ -1,29 +1,5 @@
 #!/bin/sh
-# gobo-appimage-install — GoboRefined 0.10.6: "Install" for AppImages (file manager action
-# ~/.local/share/file-manager/actions/gobo-appimage-install.desktop), as the user, no password:
-#   gobo-appimage-install FILE.AppImage     move it to ~/Applications/<Name>/, then one dialog:
-#                                           start menu entry, pin, both or no shortcut
-#   gobo-appimage-install --offer FILE      prints "true" when the action should be offered
-#                                           (an AppImage that is not in ~/Applications yet)
-#   gobo-appimage-install --fix-icons       (0.10.7, .xinitrc at login) icons for the menu entries of
-#                                           AppImages installed before 0.10.7 (appimage-fixicons.lua)
-# The work is done by appimage-install.lua (Lua + lgi + GTK 3) next to the Settings app's files.
-export NO_AT_BRIDGE=1
-if [ "${1:-}" = "--fix-icons" ]
-then
-   exec lua /Programs/GoboSpin/Current/share/gobo-settings/appimage-fixicons.lua
-fi
-if [ "${1:-}" = "--offer" ]
-then
-   case " $(id -Gn 2>/dev/null) " in
-      *" simple "*) echo false; exit 0 ;;   # Simple accounts: no installing
-   esac
-   case "${2:-}" in
-      "$HOME/Applications/"*) echo false ;;
-      *.[Aa]pp[Ii]mage) echo true ;;
-      *) echo false ;;
-   esac
-   exit 0
-fi
-[ $# -eq 1 ] || { echo "usage: gobo-appimage-install FILE.AppImage" >&2; exit 2; }
-exec lua /Programs/GoboSpin/Current/share/gobo-settings/appimage-install.lua "$1"
+# gobo-appimage-install — the AppImage installer of 0.10.6/0.10.7, since 0.10.8 a name for gobo-install-app
+# (the one installer for AppImages, GoboLinux packages and program archives). Kept because .xinitrc
+# files of 0.10.7 call "gobo-appimage-install --fix-icons" and older file manager actions call it.
+exec /System/Index/bin/gobo-install-app "$@"

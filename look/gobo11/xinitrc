@@ -60,7 +60,7 @@ xset s 600 5
 
 # 0.10.7: icons for the start menu entries of AppImages installed before 0.10.7 (once per entry;
 # after the desktop has started, it reloads the menu when it changed something)
-[ -x /System/Index/bin/gobo-appimage-install ] && { sleep 8; gobo-appimage-install --fix-icons > /dev/null 2>&1; } &
+[ -x /System/Index/bin/gobo-install-app ] && { sleep 8; gobo-install-app --fix-icons > /dev/null 2>&1; } &
 
 # Shadows and fades
 [ -x /bin/picom ] && picom -b --config ~/.config/picom.conf

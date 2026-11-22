@@ -1,0 +1,27 @@
+#!/bin/sh
+# gobo-install-app — GoboRefined 0.10.8: the ONE installer for program files (install-app.lua: AppImages,
+# GoboLinux packages, archives of a ready program), as the calling user:
+#   gobo-install-app FILE           the install dialog (who gets it, start menu, taskbar, progress)
+#   gobo-install-app --ask FILE     a double click in the file manager: "Install or just run once?"
+#                                   (AppImages), "Install or extract?" (packages, program archives)
+#   gobo-install-app --offer FILE   prints "true" and exits 0 when the file manager's "Install" should be
+#                                   shown ("false", exit 1, otherwise: libfm's ShowIfTrue uses the exit status)
+#   gobo-install-app --fix-icons    (.xinitrc at login, 0.10.7) icons of AppImages installed before 0.10.7
+# Started by the file manager's actions and by Settings > Software.
+export NO_AT_BRIDGE=1
+share=/Programs/GoboSpin/Current/share/gobo-settings
+case "${1:-}" in
+   --fix-icons) exec lua "$share/appimage-fixicons.lua" ;;
+   --offer)
+      case " $(id -Gn 2>/dev/null) " in
+         *" simple "*) echo false; exit 1 ;;   # Simple accounts: no installing
+      esac
+      [ -n "${2:-}" ] && [ -f "$2" ] || { echo false; exit 1; }
+      exec lua "$share/app-detect.lua" offer "$2" ;;
+   --ask)
+      [ $# -eq 2 ] || { echo "usage: gobo-install-app --ask FILE" >&2; exit 2; }
+      exec lua "$share/install-app.lua" --ask "$2" ;;
+   -*) echo "usage: gobo-install-app [--ask|--offer] FILE | --fix-icons" >&2; exit 2 ;;
+esac
+[ $# -eq 1 ] || { echo "usage: gobo-install-app FILE" >&2; exit 2; }
+exec lua "$share/install-app.lua" "$1"

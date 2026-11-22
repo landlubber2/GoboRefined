@@ -33,7 +33,11 @@ AS() { local who="$1" ask="$2"; shift 2; S "cd /tmp; su $who -c 'SUDO_ASKPASS=$a
 CALLER() { local who="$1"; shift; S "cd /tmp; SUDO_USER=$who $HELPER $* < /dev/null 2>&1"; }
 
 if [ "${1:-}" = remove ]; then
+   # 0.10.8: leftovers OWNED by kid in /tmp go with the account; a file that only has kid's name stays
+   S 'su kid -s /bin/sh -c "touch /tmp/.pcmanfm-socket--9-kid"; touch /tmp/.acctest-decoy-kid' > /dev/null
    ok "remove kid with home" "$(H remove-user kid delete-home; S 'grep -c ^kid: /System/Settings/passwd; ls -d /Users/kid 2>&1')" "No such file"
+   ok "kid's own file in /tmp removed, a root file named like kid kept" "$(S 'ls -a /tmp | grep -c -x .pcmanfm-socket--9-kid; ls /tmp/.acctest-decoy-kid; rm -f /tmp/.acctest-decoy-kid' | tr '\n' ' ')" "^0 .*acctest-decoy-kid"
+   no "login list without kid" "$(S 'grep ^white= /System/Settings/lxdm/lxdm.conf | tr " =" "\n\n" | grep -x kid')" "kid"
    ok "kid out of group simple" "$(S 'grep ^simple: /System/Settings/group')" "^simple:[^:]*:970:$"
    ok "kid's program list removed" "$(S 'ls /Data/Variable/lib/gobo-settings/simple-apps/kid 2>&1')" "No such file"
    S "rm -rf $D /tmp/acctest.dir"
@@ -66,7 +70,7 @@ if [ "${1:-}" = session ]; then
    ok "session: no file pins for Simple" "$(S 'su kid -c "gobo-pin-to-start /Users/kid/Desktop" > /dev/null 2>&1; echo pin=$?')" "pin=1"
    # 0.10.6: no start menu editor and no "Install" for AppImages in a Simple account
    ok "session: no start menu editor for Simple" "$(S 'su kid -c "gobo-menu-editor" > /dev/null 2>&1; echo editor=$?')" "editor=1"
-   ok "session: no AppImage Install for Simple" "$(S 'su kid -c "gobo-appimage-install --offer /Users/kid/Downloads/x.AppImage"')" "false"
+   ok "session: no Install for Simple" "$(S 'su kid -c "gobo-install-app --offer /Users/kid/Downloads/x.AppImage"; echo rc=$?' | tr '\n' ' ')" "false rc=1"
    ok "session: own hotkeys ignored for Simple" "$(S 'su kid -c "mkdir -p ~/.config/goborefined && printf \"key\\tclipboard\\tMod4+x\\n\" > ~/.config/goborefined/hotkeys"'; L 'spin_hotkeys_reload() local n = 0 for _, k in ipairs(root.keys()) do if k.key == "x" then n = n + 1 end end return "x=" .. n')" "x=0"
    S 'rm -f /Users/kid/.config/goborefined/hotkeys'
    # the file manager: "/" and "/Programs" refused, a window starts at home
@@ -83,7 +87,11 @@ ok "refused: Simple password of 3 characters" "$(HIN "printf 'Kid\nabc\n'" add-u
 ok "refused: administrator password of 6 characters" "$(HIN "printf 'Adm\nabcdef\n'" add-user adm6 admin)" "too short: at least 8"
 ok "refused: standard password of 7 characters" "$(HIN "printf 'Std\nabcdefg\n'" add-user std7 standard)" "too short: at least 8"
 ok "refused: unknown kind" "$(HIN "printf 'X\nabcdefgh\n'" add-user xkind superuser)" "kind must be"
+# 0.10.8: a leftover of an earlier kid (owned by a uid nobody has) must not block the new kid's file manager
+S 'touch /Data/Variable/tmp/.pcmanfm-socket--0-kid && chown 59998:100 /Data/Variable/tmp/.pcmanfm-socket--0-kid' > /dev/null
 ok "add a Simple account (kid, larger text)" "$(HIN "printf 'Kid Test\n'; cat $D/kidpw; echo" add-user kid simple large-text)" "added kid"
+ok "orphaned leftover of an earlier kid removed" "$(S 'ls -a /Data/Variable/tmp | grep -c -x .pcmanfm-socket--0-kid')" "^0$"
+ok "login list has kid, lxdm list on" "$(S 'grep -E "^(white|disable)=" /System/Settings/lxdm/lxdm.conf | tr "\n" " "')" "disable=0 .*white=.*kid"
 ok "new Simple account: USB on, no internal disks, not in disk" "$(S 'id -Gn kid | tr " " "\n" | grep -x -e gobo-usb -e "gobo-disk-.*" -e disk | tr "\n" " "')" "^gobo-usb $"
 ok "kid is in simple, not in sys" "$(S 'id -Gn kid | tr " " "\n" | grep -x -e simple -e sys | tr "\n" " "')" "^simple $"
 ok "kid's home is private (700)" "$(S 'stat -c %a /Users/kid')" "^700$"

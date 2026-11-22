@@ -1,5 +1,5 @@
 -- GoboRefined 0.10.7: what an AppImage says about itself (name, icon, ...), read WITHOUT running it.
--- Used by appimage-install.lua ("Install", 0.10.6) and appimage-fixicons.lua (icons of AppImages
+-- Used by install-app.lua ("Install", 0.10.6/0.10.8) and appimage-fixicons.lua (icons of AppImages
 -- installed before 0.10.7). Needs lgi (GLib, Gio) and unsquashfs (4.6: gzip, xz, zstd); no GTK.
 --
 -- A type-2 AppImage is an ELF program (the runtime) with a SquashFS image appended. The image
@@ -82,14 +82,42 @@ end
 
 -- M.read(appimage): table { name, icon (Icon= value), comment, wmclass, categories, icon_file,
 -- icon_kind } or nil; call M.cleanup(meta) when the icon file has been copied
+-- 0.10.8: AppImages made with uruntime may carry a DwarFS image instead of SquashFS (Google Chrome's
+-- AppImage does); there is no DwarFS reader in the system, so for those the AppImage's own runtime is
+-- asked to copy out single files ("--appimage-extract PATTERN", in a private folder; the runtime
+-- only extracts, the program itself is not started). Needs the file to be executable (u+x is set).
+function M.dwarfs(path)
+   local f = io.open(path, "rb")
+   if not f then return false end
+   local h = f:read(12) or ""
+   if h:sub(1, 4) ~= "\127ELF" or h:sub(9, 11) ~= "AI\2" then f:close() return false end
+   local data = f:read(4 * 1024 * 1024) or ""
+   f:close()
+   return data:find("DWARFS_", 1, true) ~= nil and data:find("uruntime", 1, true) ~= nil
+end
+
 function M.read(src)
    local offset = M.offset(src)
-   if not offset then return nil end
+   local dwarfs = not offset and M.dwarfs(src)
+   if not offset and not dwarfs then return nil end
    local tmp = GLib.dir_make_tmp("gobo-appimage-XXXXXX")
    if not tmp then return nil end
    local root = tmp .. "/root"
    local meta = { tmp = tmp, categories = {} }
    local function extract(patterns)
+      if dwarfs then
+         sh("chmod u+x -- " .. q(src))
+         for _, p in ipairs(patterns) do
+            sh("cd " .. q(tmp) .. " && timeout 60 " .. q(src) .. " --appimage-extract " .. q(p))
+         end
+         -- uruntime extracts into AppDir/ (older runtimes: squashfs-root/)
+         for _, d in ipairs({ "AppDir", "squashfs-root" }) do
+            local g = Gio.File.new_for_path(tmp .. "/" .. d)
+            if g:query_exists(nil) and not Gio.File.new_for_path(root):query_exists(nil) then os.rename(tmp .. "/" .. d, root) end
+            if g:query_exists(nil) then sh("(cp -a " .. q(tmp .. "/" .. d) .. "/. " .. q(root) .. "/ && rm -rf -- " .. q(tmp .. "/" .. d) .. ")") end
+         end
+         return
+      end
       local cmd = "unsquashfs -q -n -no-xattrs -f -d " .. q(root) .. " -o " .. string.format("%d", offset) .. " " .. q(src)
       for _, p in ipairs(patterns) do cmd = cmd .. " " .. q(p) end
       sh(cmd)
@@ -115,6 +143,7 @@ function M.read(src)
          meta.comment = kf:get_string(G, "Comment")
          meta.wmclass = kf:get_string(G, "StartupWMClass")
          meta.categories = kf:get_string_list(G, "Categories") or {}
+         meta.version = kf:get_string(G, "X-AppImage-Version")   -- 0.10.8
       end
    end
    -- a path inside the image: follow links (relative, no "..") and extract what they point at

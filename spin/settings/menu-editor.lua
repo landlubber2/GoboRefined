@@ -12,7 +12,7 @@
 -- of its Categories=, an edited copy in every main category it names. After each change the
 -- desktop reads the list again (awesome-client 'spin_menu_reload()'): no logging out.
 --
--- AppImages installed with the file manager's "Install" (gobo-appimage-install) have a desktop
+-- Programs installed with the file manager's "Install" (gobo-install-app, 0.10.6/0.10.8) have a desktop
 -- file of their own (key X-GoboRefined-AppImage=<folder>); removing one from the start menu offers
 -- to delete its folder in ~/Applications too. Simple accounts have no editor (the wrapper and
 -- the dots button refuse it).
@@ -420,7 +420,7 @@ local function app_row(app, view)
    texts:pack_start(Gtk.Label { label = app.name, xalign = 0, ellipsize = "END" }, false, false, 0)
    local notes = {}
    if not view.special and #app.cats > 1 then table.insert(notes, "Also in " .. cat_names(app.cats, view.key)) end
-   if app.appimage then table.insert(notes, "AppImage in ~/Applications")
+   if app.appimage then table.insert(notes, "Installed in ~/Applications")
    elseif app.user and app.sys_path then table.insert(notes, "Changed by you")
    elseif app.user then table.insert(notes, "Your own entry") end
    if #notes > 0 then
