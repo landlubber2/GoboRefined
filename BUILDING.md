@@ -156,6 +156,25 @@ redistribution notes are in `docs/third-party.md`.
 - Before a build, look at what is already done: `ls $WORK/state` and `/Programs/Linux` in the build
   root. A step is redone only when its inputs changed (`step_inputs` in `build/build.sh`); do not use
   `REBUILD=linux` unless the kernel itself must change.
+- Build snapshot: **`repo-build-proof-16`** (2026-11-23). Same build environment as `-15`, with the two
+  build disks copied into compact files (`vm/GoboLinux-017.01/build-scratch-2.vdi`, label `SCRATCH091`;
+  `stage2-2.vdi`, label `STAGE2`); old release outputs removed from them.
+
+### The lab on another computer (or after the drive letter changed)
+
+The whole lab lives in this folder (since 2026-11-23 on an external SSD, `D:\dev`): the VM, its disks and
+snapshots, `dist/`, and the gitignored internal notes. To use it on another Windows computer:
+
+1. Install VirtualBox (7.2 or newer), Git for Windows (for `bash`) and Node.js (for `vm/serve.js`).
+2. Plug in and unlock the drive (BitLocker password). Never unplug it while the VM runs.
+3. If VirtualBox already lists `GoboLinux-017.01` from an old place: `VBoxManage unregistervm GoboLinux-017.01`
+   (**never** with `--delete`).
+4. `bash vm/register-vm.sh`: rewrites the disk and ISO paths in the VM's settings file to this folder and
+   registers the VM. It ends with "all disks found".
+5. If VirtualBox's own list (`%USERPROFILE%\.VirtualBox\VirtualBox.xml`, `<MediaRegistry>`) still holds disks
+   of this VM under an old path, registering fails with `E_INVALIDARG`: the VM's settings file already lists
+   every disk, so those global entries can be removed (keep a copy of the file; VirtualBox closed).
+6. The R2 upload tool (rclone) and its keys, and the git login, are set up per computer; they are not here.
 
 ### Stage 2 numbers (measured 2026-11-20, VirtualBox, 6 vCPU, 8 GB RAM)
 
