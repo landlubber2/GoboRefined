@@ -3,7 +3,7 @@
 #
 # Usage:
 #   tools/pipeline test    [--snapshot SNAP] [--update FILE] [--report FILE] [--skip-rollback] [--keep-running]
-#   tools/pipeline build   [--version VER] [--mode check|programs|image|all|kernel] [--build-snap SNAP]
+#   tools/pipeline build   [--version VER] [--mode check|kernel-check|programs|image|all|kernel] [--build-snap SNAP]
 #                          [--out DIR] [--rebuild "steps"] [--key FILE|auto] [--save-snap NAME]
 #   tools/pipeline release --version VER [--mode all|kernel] [--build-snap SNAP] [--test-snap SNAP]
 #                          [--out DIR] [--save-build-snap NAME]
@@ -518,8 +518,8 @@ cmd_build() {
    done
 
    case "$mode" in
-      check|programs|image|all|kernel) ;;
-      *) die "build: invalid --mode '$mode' (check|programs|image|all|kernel)" ;;
+      check|kernel-check|programs|image|all|kernel) ;;
+      *) die "build: invalid --mode '$mode' (check|kernel-check|programs|image|all|kernel)" ;;
    esac
 
    local needs_image=0
@@ -575,22 +575,47 @@ cmd_build() {
       mv /Mount/Scratch/goborefined.new /Mount/Scratch/goborefined
       ls -d /Mount/Scratch/goborefined/build/build.sh"
 
-   # Fail-fast GoboHide patch check in kernel mode
-   if [ "$mode" = "kernel" ]; then
-      say "Kernel mode: verifying GoboHide patch applies cleanly (dry-run)..."
+   # Fail-fast GoboHide patch check in kernel / kernel-check modes (fetches pinned kernel first if absent)
+   if [ "$mode" = "kernel" ] || [ "$mode" = "kernel-check" ]; then
+      say "Kernel mode: fetching pinned kernel tarball (if needed) and verifying GoboHide patch (dry-run)..."
       S "set -e
          cd /Mount/Scratch/goborefined
          kver=\$(head -n 1 spin/kernel-version)
          ktar=/Mount/Scratch/work/sources/linux-\$kver.tar.xz
-         if [ -f \"\$ktar\" ]; then
-            t=\$(mktemp -d /tmp/gobohide-dryrun.XXXXXX)
-            trap 'rm -rf \"\$t\"' EXIT
-            tar xf \"\$ktar\" -C \"\$t\"
-            patch --dry-run -p1 -d \"\$t/linux-\$kver\" < spin/patches/linux-6.12.16-gobohide.patch
-            echo 'GOBOHIDE-DRYRUN-OK'
-         else
-            echo 'NOTE: kernel tarball not cached yet; will be fetched and patched in programs step'
-         fi" > "$rundir/gobohide-dryrun.log" 2>&1 || die "GoboHide patch dry-run FAILED (see $rundir/gobohide-dryrun.log)"
+         if [ ! -f \"\$ktar\" ]; then
+            WORK=/Mount/Scratch/work STAGE2=/Mount/Stage2/stage2 bash build/build.sh fetch
+         fi
+         [ -f \"\$ktar\" ] || { echo 'missing kernel tarball after fetch'; exit 1; }
+         t=\$(mktemp -d /tmp/gobohide-dryrun.XXXXXX)
+         trap 'rm -rf \"\$t\"' EXIT
+         tar xf \"\$ktar\" -C \"\$t\"
+         patch --batch --forward -p1 -d \"\$t/linux-\$kver\" < spin/patches/linux-6.12.16-gobohide.patch
+         echo 'GOBOHIDE-DRYRUN-OK'" > "$rundir/gobohide-dryrun.log" 2>&1 || {
+            say "GoboHide patch dry-run FAILED (see $rundir/gobohide-dryrun.log)"
+            tail -n 30 "$rundir/gobohide-dryrun.log" || true
+            poweroff_vm
+            die "GoboHide patch dry-run FAILED (see $rundir/gobohide-dryrun.log)"
+         }
+      say "GoboHide patch dry-run PASSED!"
+      if [ "$mode" = "kernel-check" ]; then
+         cp "$rundir/gobohide-dryrun.log" "$rundir/build.log"
+         say "Unmounting and powering off build VM (kernel-check done)..."
+         S "sync; umount /Mount/Stage2 /Mount/Scratch 2>/dev/null || true" >/dev/null 2>&1 || true
+         poweroff_vm
+         end_ts=$(date +%s); elapsed=$((end_ts - start_ts))
+         {
+            echo "# GoboRefined Pipeline Build Report"
+            echo
+            echo "- **Date (UTC):** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- **Build snapshot:** \`$build_snap\`"
+            echo "- **Mode:** \`kernel-check\` (GoboHide patch dry-run)"
+            echo "- **Result:** **PASS** (${elapsed}s)"
+            echo "- **Log:** \`$rundir/gobohide-dryrun.log\`"
+         } > "$report_file"
+         say "Report written to: $report_file"
+         cat "$report_file"
+         return 0
+      fi
    fi
 
    # Stream signing key into guest RAM (/dev/shm) only when making an image
