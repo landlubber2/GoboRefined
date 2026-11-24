@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Wrapper for tools/watch-upstream.js (works from Git Bash on Windows or Linux).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE_WIN="$(cd "$HERE" && (pwd -W 2>/dev/null || pwd))"
+NODE="${NODE_BIN:-}"
+if [ -z "$NODE" ]; then
+   if command -v node >/dev/null 2>&1; then NODE=node
+   elif [ -x "/c/Program Files/nodejs/node.exe" ]; then NODE="/c/Program Files/nodejs/node.exe"
+   else echo "watch-upstream: node not found" >&2; exit 1; fi
+fi
+exec "$NODE" "$HERE_WIN/watch-upstream.js" "$@"

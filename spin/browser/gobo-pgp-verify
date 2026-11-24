@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""
+gobo-pgp-verify — Minimal RFC 4880 v4 RSA OpenPGP detached-signature verifier for GoboRefined (P3).
+Run with: python3 -I /System/Index/bin/gobo-pgp-verify ...
+
+Delegates all RSA PKCS#1 v1.5 signature verification to `openssl pkeyutl -verify` and hashing to
+Python's stdlib `hashlib`. Zero third-party Python packages; works on Python 3.8 through 3.13+.
+
+Verifies:
+  1. The pinned keyring's primary key v4 fingerprint matches --primary-fp exactly.
+  2. Every candidate signing subkey (from --key and optional --extra-key) has a valid,
+     non-revoked, non-expired RFC 4880 0x18 binding signature cryptographically verified
+     under the pinned primary key.
+  3. The detached signature (--sig) over --file verifies cryptographically under either the
+     pinned primary key or one of its verified active signing subkeys.
+"""
+import argparse
+import base64
+import hashlib
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+HASH_ALGS = {
+    2: ("sha1", hashlib.sha1),
+    8: ("sha256", hashlib.sha256),
+    9: ("sha384", hashlib.sha384),
+    10: ("sha512", hashlib.sha512),
+}
+
+
+def dearmor(text):
+    lines = text.splitlines()
+    in_body = False
+    after_blank = False
+    b64_lines = []
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("-----BEGIN PGP "):
+            in_body = True
+            after_blank = False
+            b64_lines = []
+            continue
+        if line.startswith("-----END PGP "):
+            break
+        if not in_body:
+            continue
+        if not after_blank:
+            if line == "":
+                after_blank = True
+            continue
+        if line.startswith("="):  # CRC24 footer
+            break
+        if line:
+            b64_lines.append(line)
+    if not b64_lines:
+        raise ValueError("no ASCII-armored PGP block found")
+    return base64.b64decode("".join(b64_lines))
+
+
+def parse_packets(data):
+    pkts = []
+    off = 0
+    n = len(data)
+    while off < n:
+        tag_byte = data[off]
+        off += 1
+        if not (tag_byte & 0x80):
+            raise ValueError("invalid OpenPGP packet tag")
+        if tag_byte & 0x40:  # new format
+            ptag = tag_byte & 0x3F
+            b0 = data[off]
+            off += 1
+            if b0 < 192:
+                plen = b0
+            elif b0 < 224:
+                plen = ((b0 - 192) << 8) + data[off] + 192
+                off += 1
+            elif b0 == 255:
+                plen = struct.unpack(">I", data[off:off + 4])[0]
+                off += 4
+            else:
+                raise ValueError("partial body lengths not supported")
+        else:  # old format
+            ptag = (tag_byte >> 2) & 0x0F
+            lt = tag_byte & 0x03
+            if lt == 0:
+                plen = data[off]
+                off += 1
+            elif lt == 1:
+                plen = struct.unpack(">H", data[off:off + 2])[0]
+                off += 2
+            elif lt == 2:
+                plen = struct.unpack(">I", data[off:off + 4])[0]
+                off += 4
+            else:
+                plen = n - off
+        if off + plen > n:
+            raise ValueError("truncated OpenPGP packet")
+        pkts.append((ptag, data[off:off + plen]))
+        off += plen
+    return pkts
+
+
+def read_mpi(buf, off):
+    if off + 2 > len(buf):
+        raise ValueError("truncated MPI")
+    bits = struct.unpack(">H", buf[off:off + 2])[0]
+    nbytes = (bits + 7) // 8
+    off += 2
+    if off + nbytes > len(buf):
+        raise ValueError("truncated MPI body")
+    return buf[off:off + nbytes], off + nbytes
+
+
+def parse_rsa_pubkey(body):
+    if len(body) < 8 or body[0] != 4:
+        return None
+    created = struct.unpack(">I", body[1:5])[0]
+    alg = body[5]
+    if alg not in (1, 3):  # RSA (Encrypt or Sign / Sign-Only)
+        return None
+    n_bytes, off = read_mpi(body, 6)
+    e_bytes, _ = read_mpi(body, off)
+    fp = hashlib.sha1(b"\x99" + struct.pack(">H", len(body)) + body).hexdigest().upper()
+    return {
+        "fp": fp,
+        "keyid": fp[-16:],
+        "created": created,
+        "n": n_bytes,
+        "e": e_bytes,
+        "n_len": len(n_bytes),
+        "body": body,
+    }
+
+
+def der_len(n):
+    if n < 0x80:
+        return bytes([n])
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(b)]) + b
+
+
+def der_int(raw):
+    raw = raw.lstrip(b"\x00") or b"\x00"
+    if raw[0] & 0x80:
+        raw = b"\x00" + raw
+    return b"\x02" + der_len(len(raw)) + raw
+
+
+def rsa_to_pem(pub):
+    # SubjectPublicKeyInfo for rsaEncryption (OID 1.2.840.113549.1.1.1)
+    rsa_pub = der_int(pub["n"]) + der_int(pub["e"])
+    rsa_seq = b"\x30" + der_len(len(rsa_pub)) + rsa_pub
+    bit_str = b"\x03" + der_len(len(rsa_seq) + 1) + b"\x00" + rsa_seq
+    alg_id = bytes.fromhex("300d06092a864886f70d0101010500")
+    spki = b"\x30" + der_len(len(alg_id) + len(bit_str)) + alg_id + bit_str
+    b64 = base64.encodebytes(spki).decode("ascii")
+    return "-----BEGIN PUBLIC KEY-----\n" + b64 + "-----END PUBLIC KEY-----\n"
+
+
+def parse_subpackets(buf):
+    subs = []
+    off = 0
+    n = len(buf)
+    while off < n:
+        b0 = buf[off]
+        off += 1
+        if b0 < 192:
+            slen = b0
+        elif b0 < 255:
+            slen = ((b0 - 192) << 8) + buf[off] + 192
+            off += 1
+        else:
+            slen = struct.unpack(">I", buf[off:off + 4])[0]
+            off += 4
+        if slen < 1 or off + slen > n:
+            raise ValueError("truncated subpacket")
+        stype = buf[off] & 0x7F
+        subs.append((stype, buf[off + 1:off + slen]))
+        off += slen
+    return subs
+
+
+def parse_v4_sig(body):
+    if len(body) < 10 or body[0] != 4:
+        return None
+    sigtype = body[1]
+    pubalg = body[2]
+    hashalg = body[3]
+    hlen = struct.unpack(">H", body[4:6])[0]
+    hashed_end = 6 + hlen
+    if hashed_end + 2 > len(body):
+        raise ValueError("truncated hashed subpackets")
+    hashed_subs = parse_subpackets(body[6:hashed_end])
+    ulen = struct.unpack(">H", body[hashed_end:hashed_end + 2])[0]
+    unhashed_start = hashed_end + 2
+    unhashed_end = unhashed_start + ulen
+    if unhashed_end + 2 > len(body):
+        raise ValueError("truncated unhashed subpackets")
+    unhashed_subs = parse_subpackets(body[unhashed_start:unhashed_end])
+    left16 = body[unhashed_end:unhashed_end + 2]
+    sig_mpi, _ = read_mpi(body, unhashed_end + 2)
+
+    created = None
+    key_expire = None
+    issuer_fp = None
+    issuer_keyid = None
+    for stype, sdata in hashed_subs:
+        if stype == 2 and len(sdata) == 4:
+            created = struct.unpack(">I", sdata)[0]
+        elif stype == 9 and len(sdata) == 4:
+            key_expire = struct.unpack(">I", sdata)[0]
+        elif stype == 33 and len(sdata) == 21 and sdata[0] == 4:
+            issuer_fp = sdata[1:].hex().upper()
+        elif stype == 16 and len(sdata) == 8:
+            issuer_keyid = sdata.hex().upper()
+    for stype, sdata in unhashed_subs:
+        if stype == 33 and len(sdata) == 21 and sdata[0] == 4 and not issuer_fp:
+            issuer_fp = sdata[1:].hex().upper()
+        elif stype == 16 and len(sdata) == 8 and not issuer_keyid:
+            issuer_keyid = sdata.hex().upper()
+
+    return {
+        "sigtype": sigtype,
+        "pubalg": pubalg,
+        "hashalg": hashalg,
+        "hashed_header": body[:hashed_end],
+        "left16": left16,
+        "sig_mpi": sig_mpi,
+        "created": created,
+        "key_expire": key_expire,
+        "issuer_fp": issuer_fp,
+        "issuer_keyid": issuer_keyid,
+    }
+
+
+def openssl_verify_rsa(pub, sig, payload_hash_fn, allow_sha1=False):
+    if sig["pubalg"] not in (1, 3):
+        return False
+    if sig["hashalg"] not in HASH_ALGS:
+        return False
+    if sig["hashalg"] == 2 and not allow_sha1:
+        return False
+    alg_name, hash_cls = HASH_ALGS[sig["hashalg"]]
+    h = hash_cls()
+    payload_hash_fn(h)
+    hdr = sig["hashed_header"]
+    h.update(hdr)
+    h.update(b"\x04\xff" + struct.pack(">I", len(hdr)))
+    digest = h.digest()
+    if digest[:2] != sig["left16"]:
+        return False
+    # Left-pad signature MPI to RSA modulus byte length
+    sig_bytes = sig["sig_mpi"]
+    if len(sig_bytes) > pub["n_len"]:
+        return False
+    sig_bytes = sig_bytes.rjust(pub["n_len"], b"\x00")
+
+    with tempfile.TemporaryDirectory(prefix="gobo-pgp-") as td:
+        pem_p = os.path.join(td, "pub.pem")
+        dig_p = os.path.join(td, "digest.bin")
+        sig_p = os.path.join(td, "sig.bin")
+        with open(pem_p, "w", encoding="ascii") as f:
+            f.write(rsa_to_pem(pub))
+        with open(dig_p, "wb") as f:
+            f.write(digest)
+        with open(sig_p, "wb") as f:
+            f.write(sig_bytes)
+        res = subprocess.run(
+            [
+                "openssl", "pkeyutl", "-verify",
+                "-pubin", "-inkey", pem_p,
+                "-pkeyopt", f"digest:{alg_name}",
+                "-in", dig_p,
+                "-sigfile", sig_p,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return res.returncode == 0
+
+
+def load_trusted_keys(key_paths, expected_primary_fp, now):
+    primary = None
+    subkeys = {}  # fp -> {pub, bound_created, expire_at, revoked}
+
+    for idx, kp in enumerate(key_paths):
+        with open(kp, "r", encoding="utf-8", errors="replace") as f:
+            raw = dearmor(f.read())
+        pkts = parse_packets(raw)
+        cur_primary = None
+        cur_sub = None
+        for ptag, body in pkts:
+            if ptag == 6:  # Public-Key (primary)
+                pub = parse_rsa_pubkey(body)
+                if not pub:
+                    continue
+                if pub["fp"] != expected_primary_fp:
+                    if idx == 0:
+                        raise ValueError(f"pinned key primary fp {pub['fp']} != expected {expected_primary_fp}")
+                    # Ignore extra key blocks that do not match the pinned primary key
+                    cur_primary = None
+                    cur_sub = None
+                    continue
+                cur_primary = pub
+                if primary is None:
+                    primary = pub
+                cur_sub = None
+            elif ptag == 14:  # Public-Subkey
+                if cur_primary is None:
+                    cur_sub = None
+                    continue
+                sub = parse_rsa_pubkey(body)
+                cur_sub = sub
+            elif ptag == 2 and cur_primary is not None and cur_sub is not None:
+                sig = parse_v4_sig(body)
+                if not sig or sig["sigtype"] not in (0x18, 0x28):
+                    continue
+                # Binding / revocation must verify cryptographically under the PINNED primary key
+                def feed_binding(h, p=primary, s=cur_sub):
+                    h.update(b"\x99" + struct.pack(">H", len(p["body"])) + p["body"])
+                    h.update(b"\x99" + struct.pack(">H", len(s["body"])) + s["body"])
+                if not openssl_verify_rsa(primary, sig, feed_binding, allow_sha1=False):
+                    continue
+                rec = subkeys.setdefault(cur_sub["fp"], {
+                    "pub": cur_sub,
+                    "bound_created": 0,
+                    "expire_at": None,
+                    "revoked": False,
+                })
+                if sig["sigtype"] == 0x28:
+                    rec["revoked"] = True
+                elif sig["sigtype"] == 0x18:
+                    sc = sig["created"] or 0
+                    if sc >= rec["bound_created"]:
+                        rec["bound_created"] = sc
+                        rec["expire_at"] = (cur_sub["created"] + sig["key_expire"]) if sig["key_expire"] else None
+
+    if primary is None:
+        raise ValueError(f"primary key {expected_primary_fp} not found in {key_paths[0]}")
+
+    active = [primary]
+    for rec in subkeys.values():
+        if rec["revoked"]:
+            continue
+        if rec["expire_at"] is not None and now > rec["expire_at"]:
+            continue
+        active.append(rec["pub"])
+    return primary, active
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Verify RFC 4880 v4 RSA detached signature against a pinned primary key")
+    ap.add_argument("--primary-fp", required=True, help="40-hex-char pinned primary key v4 fingerprint")
+    ap.add_argument("--key", required=True, help="Pinned armored OpenPGP public key file")
+    ap.add_argument("--extra-key", action="append", default=[], help="Optional extra armored key file (subkeys must bind to pinned primary)")
+    ap.add_argument("--sig", required=True, help="Armored detached signature (.asc)")
+    ap.add_argument("--file", required=True, help="Signed file to verify")
+    args = ap.parse_args()
+
+    primary_fp = args.primary_fp.strip().upper().replace(" ", "")
+    if len(primary_fp) != 40 or any(c not in "0123456789ABCDEF" for c in primary_fp):
+        sys.stderr.write("gobo-pgp-verify: --primary-fp must be 40 hex characters\n")
+        return 2
+
+    now = int(time.time())
+    key_paths = [args.key] + [p for p in args.extra_key if p and os.path.isfile(p)]
+    try:
+        primary, candidates = load_trusted_keys(key_paths, primary_fp, now)
+        with open(args.sig, "r", encoding="utf-8", errors="replace") as f:
+            sig_pkts = parse_packets(dearmor(f.read()))
+    except Exception as e:
+        sys.stderr.write(f"gobo-pgp-verify: parse error: {e}\n")
+        return 1
+
+    sigs = [parse_v4_sig(body) for ptag, body in sig_pkts if ptag == 2]
+    sigs = [s for s in sigs if s and s["sigtype"] == 0x00]
+    if not sigs:
+        sys.stderr.write("gobo-pgp-verify: no v4 binary document signature packet found\n")
+        return 1
+
+    for sig in sigs:
+        if sig["hashalg"] not in (8, 9, 10):  # require SHA-256/384/512 for document signatures
+            continue
+        for pub in candidates:
+            if sig["issuer_fp"] and sig["issuer_fp"] != pub["fp"]:
+                continue
+            if sig["issuer_keyid"] and sig["issuer_keyid"] != pub["keyid"]:
+                continue
+            def feed_file(h):
+                with open(args.file, "rb") as fp:
+                    while True:
+                        chunk = fp.read(65536)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+            if openssl_verify_rsa(pub, sig, feed_file, allow_sha1=False):
+                alg_name = HASH_ALGS[sig["hashalg"]][0]
+                print(f"VERIFIED-OK primary={primary['fp']} signer={pub['fp']} hash={alg_name}")
+                return 0
+
+    sys.stderr.write("gobo-pgp-verify: signature verification FAILED\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

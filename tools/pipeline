@@ -1,0 +1,732 @@
+#!/usr/bin/env bash
+# tools/pipeline — unattended build and test pipeline for GoboRefined (P2).
+#
+# Usage:
+#   tools/pipeline test    [--snapshot SNAP] [--update FILE] [--report FILE] [--skip-rollback] [--keep-running]
+#   tools/pipeline build   [--version VER] [--mode check|programs|image|all|kernel] [--build-snap SNAP]
+#                          [--out DIR] [--rebuild "steps"] [--key FILE|auto] [--save-snap NAME]
+#   tools/pipeline release --version VER [--mode all|kernel] [--build-snap SNAP] [--test-snap SNAP]
+#                          [--out DIR] [--save-build-snap NAME]
+#
+# Hard rules enforced here:
+#   - Refuses to start if the VM is already running.
+#   - Never snapshots a running VM (always verifies VMState=poweroff first).
+#   - Never prints or logs passwords or private keys; signing key is streamed into guest /dev/shm only.
+#   - Never commits, tags, pushes, uploads to R2, or deletes snapshots/ISOs/disks.
+set -euo pipefail
+
+# Do NOT export MSYS_NO_PATHCONV=1 globally: Windows git.exe/node.exe need MSYS path conversion
+# (e.g. GIT_INDEX_FILE=/tmp/... inside vm/push-repo.sh). Scope it to VBoxManage keyboardputstring only.
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+REPO_WIN="$(cd "$REPO" && (pwd -W 2>/dev/null || pwd))"
+VM="${VM:-GoboLinux-017.01}"
+
+# Avoid Git dubious-ownership errors on external drives without modifying global config
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0='*'
+
+VB="${VBOXMANAGE:-}"
+if [ -z "$VB" ]; then
+   if command -v VBoxManage >/dev/null 2>&1; then VB=VBoxManage
+   elif [ -x "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" ]; then VB="/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"
+   else echo "pipeline: VBoxManage not found" >&2; exit 1; fi
+fi
+
+NODE="${NODE_BIN:-}"
+if [ -z "$NODE" ]; then
+   if command -v node >/dev/null 2>&1; then NODE=node
+   elif [ -x "/c/Program Files/nodejs/node.exe" ]; then NODE="/c/Program Files/nodejs/node.exe"
+   else echo "pipeline: node not found" >&2; exit 1; fi
+fi
+
+DEFAULT_TEST_SNAP="${TEST_SNAP:-iso-0.10.8-labssh}"
+DEFAULT_BUILD_SNAP="${BUILD_SNAP:-repo-build-proof-16}"
+SERVE_PID=""
+
+say()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+die()  { printf 'pipeline: ERROR: %s\n' "$*" >&2; exit 1; }
+S()    { "$REPO/vm/ssh.sh" "$1"; }
+L()    { "$REPO/vm/lua.sh" "$1"; }
+
+cleanup() {
+   if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
+      kill "$SERVE_PID" 2>/dev/null || true
+      wait "$SERVE_PID" 2>/dev/null || true
+   fi
+}
+trap cleanup EXIT
+
+vm_state() {
+   "$VB" showvminfo "$VM" --machinereadable 2>/dev/null | sed -n 's/^VMState="\([^"]*\)"/\1/p' | tr -d '\r' || true
+}
+
+require_vm_off() {
+   local st
+   st="$(vm_state)"
+   [ "$st" = "poweroff" ] || [ "$st" = "saved" ] || die "VM '$VM' is currently '$st' — power it off first"
+}
+
+wait_vm_off() {
+   local max="${1:-60}" i st
+   for ((i=0; i<max; i++)); do
+      st="$(vm_state)"
+      [ "$st" = "poweroff" ] && return 0
+      sleep 2
+   done
+   die "VM did not reach poweroff within $((max * 2))s (state: $(vm_state))"
+}
+
+poweroff_vm() {
+   local st
+   st="$(vm_state)"
+   [ "$st" = "poweroff" ] && return 0
+   say "Powering off VM cleanly..."
+   S "sync; poweroff" >/dev/null 2>&1 || "$VB" controlvm "$VM" acpipowerbutton >/dev/null 2>&1 || true
+   wait_vm_off 45
+}
+
+wait_ssh() {
+   local max="${1:-60}" i
+   for ((i=0; i<max; i++)); do
+      if S "true" >/dev/null 2>&1; then return 0; fi
+      sleep 2
+   done
+   return 1
+}
+
+wait_ssh_drop_and_return() {
+   local i
+   for ((i=0; i<20; i++)); do
+      S "true" >/dev/null 2>&1 || break
+      sleep 2
+   done
+   sleep 4
+   wait_ssh 75 || die "SSH did not come back after reboot"
+}
+
+check_host_space_gb() {
+   local min_gb="$1" avail_gb
+   avail_gb=$(df -BG "$REPO" | awk 'NR==2 { gsub(/G/,"",$4); print $4 }')
+   say "Host free space on $REPO: ${avail_gb} GiB (need >= ${min_gb} GiB)"
+   [ "${avail_gb:-0}" -ge "$min_gb" ] || die "Insufficient host disk space (${avail_gb} GiB < ${min_gb} GiB)"
+}
+
+start_file_server() {
+   if "$NODE" -e "const n=require('net');const s=n.connect(8766,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));" 2>/dev/null; then
+      say "Host file server already listening on 127.0.0.1:8766"
+      return 0
+   fi
+   say "Starting host file server (vm/serve.js) on 127.0.0.1:8766..."
+   "$NODE" "$REPO_WIN/vm/serve.js" >/dev/null 2>&1 &
+   SERVE_PID=$!
+   local i
+   for ((i=0; i<15; i++)); do
+      if "$NODE" -e "const n=require('net');const s=n.connect(8766,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));" 2>/dev/null; then
+         return 0
+      fi
+      sleep 1
+   done
+   die "Failed to start vm/serve.js on port 8766"
+}
+
+login_user() {
+   local user="$1"
+   say "Logging '$user' into LXDM desktop (temporary autologin, no password typed)..."
+   S "sed -i -E 's/^#? *autologin=.*\$/autologin=$user/' /System/Settings/lxdm/lxdm.conf
+      pkill -x lxdm-binary || true
+      ok=0
+      for i in \$(seq 1 25); do
+         if pgrep -u '$user' -x awesome >/dev/null 2>&1; then ok=1; break; fi
+         sleep 1
+      done
+      sed -i -E 's/^autologin=.*\$/# autologin=/' /System/Settings/lxdm/lxdm.conf
+      [ \"\$ok\" = 1 ] || { echo 'awesome did not start for $user' >&2; exit 1; }"
+   sleep 2
+   # Prevent screen saver / xsecurelock from locking mid-test
+   S "pid=\$(pgrep -u '$user' -x awesome | head -n 1); disp=\$(tr '\\0' '\\n' < /proc/\$pid/environ | sed -n 's/^DISPLAY=//p'); su '$user' -c \"DISPLAY=\$disp xset s off -dpms\" 2>/dev/null || true"
+}
+
+upload_lab_helpers() {
+   tr -d '\r' < "$REPO/vm/serve/lab-desktop.sh" | S 'cat > /tmp/lab-desktop.sh && chmod 644 /tmp/lab-desktop.sh'
+   tr -d '\r' < "$REPO/vm/serve/pages-render.lua" | S 'cat > /tmp/pages-render.lua && chmod 644 /tmp/pages-render.lua'
+}
+
+reconcile_lab_bootup() {
+   # HANDOFF.md caveat: iso-0.10.8-labssh has a lab BootUp in System-Overlay/upper.
+   # After an update, compare upper BootUp (minus the lab line) against the new slot's BootUp.
+   # If the new image changed BootUp, copy the slot's version into upper and re-append the lab line.
+   local changed
+   changed=$(S '
+      upper=/System/Data/System-Overlay/upper/Programs/BootScripts/Settings/BootScripts/BootUp
+      slot=/System/Slot/Programs/BootScripts/Settings/BootScripts/BootUp
+      [ -f "$upper" ] && [ -f "$slot" ] || { echo skip; exit 0; }
+      labline=$(grep "lab-ssh-boot" "$upper" | tail -n 1 || true)
+      [ -n "$labline" ] || { echo skip; exit 0; }
+      if diff -q <(grep -v "lab-ssh-boot" "$upper" | grep -v "LAB ONLY") "$slot" >/dev/null 2>&1; then
+         echo same
+      else
+         cp "$slot" "$upper"
+         printf "\n# LAB ONLY: auto-start lab root SSH (merged by tools/pipeline)\n%s\n" "$labline" >> "$upper"
+         echo merged
+      fi
+   ' | tr -d '\r')
+   say "BootUp overlay reconciliation: $changed"
+   if [ "$changed" = "merged" ]; then
+      say "New image changed BootUp — rebooting once so the merged BootUp runs..."
+      S "sync; reboot" >/dev/null 2>&1 || true
+      wait_ssh_drop_and_return
+   fi
+}
+
+# Parse standard "passed N, failed M" line from vm/*-test.sh output
+parse_suite_result() {
+   local logfile="$1" line p f
+   line=$(grep -E 'passed [0-9]+, failed [0-9]+' "$logfile" | tail -n 1 || true)
+   if [ -z "$line" ]; then
+      echo "ERROR 0 1"
+      return
+   fi
+   p=$(echo "$line" | sed -E 's/.*passed ([0-9]+), failed ([0-9]+).*/\1/')
+   f=$(echo "$line" | sed -E 's/.*passed ([0-9]+), failed ([0-9]+).*/\2/')
+   if [ "$f" = "0" ] && [ "$p" -gt 0 ]; then
+      echo "PASS $p $f"
+   else
+      echo "FAIL $p $f"
+   fi
+}
+
+###############################################################################
+# Subcommand: test
+###############################################################################
+cmd_test() {
+   local snap="$DEFAULT_TEST_SNAP"
+   local update_file=""
+   local report_file=""
+   local only_suites=""
+   local skip_rollback=0
+   local keep_running=0
+
+   while [ $# -gt 0 ]; do
+      case "$1" in
+         --snapshot)      snap="$2"; shift 2 ;;
+         --update)        update_file="$2"; shift 2 ;;
+         --report)        report_file="$2"; shift 2 ;;
+         --only)          only_suites="$2"; shift 2 ;;
+         --skip-rollback) skip_rollback=1; shift ;;
+         --keep-running)  keep_running=1; shift ;;
+         -h|--help)       sed -n '2,15p' "$0"; exit 0 ;;
+         *)               die "test: unknown option '$1'" ;;
+      esac
+   done
+   want_suite() { [ -z "$only_suites" ] || [[ ",$only_suites," == *",$1,"* ]]; }
+
+   local ts rundir start_ts end_ts elapsed
+   ts="$(date -u +%Y%m%d-%H%M%S)"
+   rundir="$REPO/vm/scratch/pipeline/${ts}-test"
+   mkdir -p "$rundir"
+   [ -n "$report_file" ] || report_file="$rundir/report.md"
+   start_ts=$(date +%s)
+
+   if [ -n "$update_file" ]; then
+      [ -f "$update_file" ] || die "update file not found: $update_file"
+      if [ -f "${update_file}.sha256" ]; then
+         say "Verifying host sha256 of $(basename "$update_file")..."
+         (cd "$(dirname "$update_file")" && sha256sum -c "$(basename "${update_file}.sha256")")
+      fi
+   fi
+
+   require_vm_off
+   say "Restoring test snapshot '$snap'..."
+   "$VB" snapshot "$VM" restore "$snap"
+   say "Starting VM headless..."
+   "$VB" startvm "$VM" --type headless
+   say "Waiting for root SSH..."
+   wait_ssh 75 || die "Timed out waiting for SSH on snapshot '$snap'"
+
+   local before_ver before_slot after_ver after_slot update_status="n/a" rollback_status="n/a"
+   before_ver=$(S 'cat /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo unknown' | tr -d '\r')
+   before_slot=$(S 'gobo-update --status 2>/dev/null | grep -m1 "running" || echo unknown' | tr -d '\r')
+   say "Booted GoboRefined $before_ver ($before_slot)"
+
+   if [ -n "$update_file" ]; then
+      local ubase host_sha guest_sha
+      ubase="$(basename "$update_file")"
+      host_sha=$(sha256sum "$update_file" | awk '{print $1}')
+      say "Streaming $ubase into guest /Data/Variable/tmp/..."
+      S "cat > '/Data/Variable/tmp/$ubase'" < "$update_file"
+      guest_sha=$(S "sha256sum '/Data/Variable/tmp/$ubase'" | awk '{print $1}' | tr -d '\r')
+      [ "$host_sha" = "$guest_sha" ] || die "Guest sha256 mismatch ($guest_sha != $host_sha)"
+      say "Guest sha256 verified ($guest_sha). Applying gobo-update..."
+      if S "gobo-update '/Data/Variable/tmp/$ubase'" > "$rundir/update.log" 2>&1; then
+         update_status="PASS"
+      else
+         update_status="FAIL"
+         die "gobo-update failed (see $rundir/update.log)"
+      fi
+      say "Rebooting into updated system..."
+      S "sync; reboot" >/dev/null 2>&1 || true
+      wait_ssh_drop_and_return
+      reconcile_lab_bootup
+   fi
+
+   after_ver=$(S 'cat /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo unknown' | tr -d '\r')
+   after_slot=$(S 'gobo-update --status 2>/dev/null | grep -m1 "running" || echo unknown' | tr -d '\r')
+   local kernel_ver
+   kernel_ver=$(S 'uname -r' | tr -d '\r')
+   say "Testing GoboRefined $after_ver, kernel $kernel_ver ($after_slot)"
+
+   upload_lab_helpers
+   login_user lab
+
+   # Suite runner helper
+   local -a r_name=() r_status=() r_pass=() r_fail=() r_time=()
+   local overall_fail=0
+
+   record_suite() {
+      local name="$1" st="$2" p="$3" f="$4" secs="$5"
+      r_name+=("$name"); r_status+=("$st"); r_pass+=("$p"); r_fail+=("$f"); r_time+=("$secs")
+      [ "$st" = "PASS" ] || overall_fail=1
+      say "Suite '$name': $st ($p passed, $f failed, ${secs}s)"
+   }
+
+   # 1. Settings pages (16/16 offscreen render as lab)
+   local t0 t1 log st p f
+   if want_suite "settings-pages"; then
+      t0=$(date +%s); log="$rundir/settings-pages.log"
+      S 'pid=$(pgrep -u lab -x awesome | head -n 1); disp=$(tr "\0" "\n" < /proc/$pid/environ | sed -n "s/^DISPLAY=//p"); su lab -c "DISPLAY=$disp lua /tmp/pages-render.lua" 2>&1' > "$log" || true
+      t1=$(date +%s)
+      p=$(grep -cE ' +ok$' "$log" || true)
+      f=$(grep -cE ' +FAIL ' "$log" || true)
+      if [ "$f" = "0" ] && [ "$p" -ge 16 ]; then st="PASS"; else st="FAIL"; fi
+      record_suite "settings-pages" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 2. GoboHide test
+   if want_suite "gobohide"; then
+      t0=$(date +%s); log="$rundir/gobohide.log"
+      bash "$REPO/vm/gobohide-test.sh" > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "gobohide" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 2b. Browser updater test (P3; runs automatically once gobo-browser-update is in the image)
+   if want_suite "browser-update" && S 'command -v gobo-browser-update >/dev/null 2>&1'; then
+      t0=$(date +%s); log="$rundir/browser-update.log"
+      bash "$REPO/vm/browser-update-test.sh" > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "browser-update" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 3. Input focus regression test
+   if want_suite "input"; then
+      t0=$(date +%s); log="$rundir/input.log"
+      bash "$REPO/vm/input-test.sh" > "$log" 2>&1 || true
+      L 'return T.close_strays()' >/dev/null 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "input" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 4. Network menu test
+   if want_suite "net"; then
+      t0=$(date +%s); log="$rundir/net.log"
+      bash "$REPO/vm/net-test.sh" > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "net" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 5. Sound profile test (retry once on known PulseAudio auto_null startup timing flake)
+   if want_suite "sound"; then
+      t0=$(date +%s); log="$rundir/sound.log"
+      bash "$REPO/vm/sound-test.sh" > "$log" 2>&1 || true
+      read -r st p f < <(parse_suite_result "$log")
+      if [ "$st" != "PASS" ]; then
+         say "Sound test had failures ($p passed, $f failed) — retrying once for PulseAudio timing..."
+         bash "$REPO/vm/sound-test.sh" > "$log" 2>&1 || true
+         read -r st p f < <(parse_suite_result "$log")
+      fi
+      t1=$(date +%s)
+      record_suite "sound" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 6. Settings helper test (clean leftover tester from snapshot first if present)
+   if want_suite "settings"; then
+      t0=$(date +%s); log="$rundir/settings.log"
+      if S 'id tester >/dev/null 2>&1'; then
+         say "Removing leftover 'tester' account before settings-test..."
+         bash "$REPO/vm/settings-test.sh" remove > "$rundir/settings-preclean.log" 2>&1 || true
+      fi
+      bash "$REPO/vm/settings-test.sh" > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "settings" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 7. Accounts helper test (clean leftover kid from snapshot first if present)
+   if want_suite "accounts"; then
+      t0=$(date +%s); log="$rundir/accounts.log"
+      if S 'id kid >/dev/null 2>&1'; then
+         say "Removing leftover 'kid' account before accounts-test..."
+         S 'SUDO_USER=lab /System/Index/bin/gobo-settings-helper remove-user kid delete-home' > "$rundir/accounts-preclean.log" 2>&1 || true
+      fi
+      bash "$REPO/vm/accounts-test.sh" > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "accounts" "$st" "$p" "$f" "$((t1 - t0))"
+   fi
+
+   # 8. Simple-account desktop session test (login kid, test, then cleanup)
+   if want_suite "accounts-session"; then
+      t0=$(date +%s); log="$rundir/accounts-session.log"
+      login_user kid
+      bash "$REPO/vm/accounts-test.sh" session > "$log" 2>&1 || true
+      t1=$(date +%s)
+      read -r st p f < <(parse_suite_result "$log")
+      record_suite "accounts-session" "$st" "$p" "$f" "$((t1 - t0))"
+
+      # Cleanup test accounts
+      login_user lab
+      bash "$REPO/vm/accounts-test.sh" remove > "$rundir/accounts-remove.log" 2>&1 || true
+      bash "$REPO/vm/settings-test.sh" remove > "$rundir/settings-remove.log" 2>&1 || true
+   fi
+
+   # Optional rollback + forward verification when testing an update
+   if [ -n "$update_file" ] && [ "$skip_rollback" = "0" ]; then
+      say "Testing rollback to $before_ver and forward back to $after_ver..."
+      local rb_ver fwd_ver
+      S "gobo-update --rollback && sync && reboot" > "$rundir/rollback.log" 2>&1 || true
+      wait_ssh_drop_and_return
+      rb_ver=$(S 'cat /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo unknown' | tr -d '\r')
+      S "gobo-update --rollback && sync && reboot" >> "$rundir/rollback.log" 2>&1 || true
+      wait_ssh_drop_and_return
+      fwd_ver=$(S 'cat /Programs/GoboSpin/Current/share/spin-version 2>/dev/null || echo unknown' | tr -d '\r')
+      if [ "$rb_ver" = "$before_ver" ] && [ "$fwd_ver" = "$after_ver" ]; then
+         rollback_status="PASS ($after_ver -> $rb_ver -> $fwd_ver)"
+      else
+         rollback_status="FAIL (got rollback=$rb_ver, forward=$fwd_ver)"
+         overall_fail=1
+      fi
+      say "Rollback check: $rollback_status"
+   fi
+
+   if [ "$keep_running" = "0" ]; then
+      poweroff_vm
+   fi
+
+   end_ts=$(date +%s)
+   elapsed=$((end_ts - start_ts))
+
+   # Emit 1-page report.md
+   {
+      echo "# GoboRefined Pipeline Test Report"
+      echo
+      echo "- **Date (UTC):** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "- **Snapshot:** \`$snap\`"
+      echo "- **Version:** \`$after_ver\` (kernel \`$kernel_ver\`)"
+      echo "- **Slot:** \`$after_slot\`"
+      if [ -n "$update_file" ]; then
+         echo "- **Update tested:** \`$(basename "$update_file")\` (\`$before_ver\` -> \`$after_ver\`): **$update_status**"
+         echo "- **Rollback / forward:** **$rollback_status**"
+      fi
+      echo "- **Total time:** ${elapsed}s"
+      echo "- **Overall result:** **$([ "$overall_fail" = "0" ] && echo PASS || echo FAIL)**"
+      echo "- **Logs:** \`$rundir\`"
+      echo
+      echo "| Suite | Result | Passed | Failed | Time |"
+      echo "|---|---|---:|---:|---:|"
+      local i
+      for ((i=0; i<${#r_name[@]}; i++)); do
+         printf '| %s | **%s** | %s | %s | %ss |\n' \
+            "${r_name[$i]}" "${r_status[$i]}" "${r_pass[$i]}" "${r_fail[$i]}" "${r_time[$i]}"
+      done
+   } > "$report_file"
+
+   say "Report written to: $report_file"
+   cat "$report_file"
+   return "$overall_fail"
+}
+
+###############################################################################
+# Live-session bootstrap for repo-build-proof-* BIOS snapshots (no passwords)
+###############################################################################
+bootstrap_build_live_session() {
+   local rundir="$1"
+   # If SSH already works (e.g. a future build snapshot with auto-SSH), skip keystrokes
+   if wait_ssh 1; then
+      say "Build VM SSH already reachable."
+      return 0
+   fi
+   say "Bootstrapping stock 017.01 BIOS live session (passwordless)..."
+   # Wait for isolinux boot menu, press Enter to boot default live entry
+   sleep 6
+   "$VB" controlvm "$VM" keyboardputscancode 1c 9c
+   # Wait for live session language / keymap prompts or Awesome desktop
+   # On stock 017.01 live ISO: after kernel boot (~25s), Awesome desktop starts directly as root.
+   # Send Enter once after 20s in case a console prompt is waiting, then open terminal via tty2 or Win+Enter.
+   sleep 30
+   "$VB" controlvm "$VM" screenshotpng "$(cygpath -w "$rundir")\\live-before-keys.png" >/dev/null 2>&1 || true
+   # Switch to tty2 (root shell on live ISO needs no password, or try Win+Enter in Awesome)
+   # Actually on 017.01 live session: Win+Enter opens urxvt as root directly!
+   "$VB" controlvm "$VM" keyboardputscancode e0 5b 1c 9c e0 db
+   sleep 3
+   MSYS_NO_PATHCONV=1 "$VB" controlvm "$VM" keyboardputstring "dhcpcd -b enp0s3; sleep 5; wget -qO- http://10.0.2.2:8766/lab-ssh.sh | sh"
+   "$VB" controlvm "$VM" keyboardputscancode 1c 9c
+   if wait_ssh 35; then
+      say "Build VM SSH is up!"
+      return 0
+   fi
+   "$VB" controlvm "$VM" screenshotpng "$(cygpath -w "$rundir")\\live-ssh-retry.png" >/dev/null 2>&1 || true
+   # Fallback: try eth0 in case interface name differs
+   MSYS_NO_PATHCONV=1 "$VB" controlvm "$VM" keyboardputstring "dhcpcd -b eth0; sleep 4; wget -qO- http://10.0.2.2:8766/lab-ssh.sh | sh"
+   "$VB" controlvm "$VM" keyboardputscancode 1c 9c
+   wait_ssh 30 || die "Build VM SSH did not come up (inspect $rundir/live-*.png)"
+   say "Build VM SSH is up!"
+}
+
+###############################################################################
+# Subcommand: build
+###############################################################################
+cmd_build() {
+   local version=""
+   local mode="all"
+   local build_snap="$DEFAULT_BUILD_SNAP"
+   local out_dir="$REPO/dist"
+   local rebuild=""
+   local key_file="$REPO/vm/keys/update-signing.pem"
+   local save_snap=""
+   local report_file=""
+
+   while [ $# -gt 0 ]; do
+      case "$1" in
+         --version)    version="$2"; shift 2 ;;
+         --mode)       mode="$2"; shift 2 ;;
+         --build-snap) build_snap="$2"; shift 2 ;;
+         --out)        out_dir="$2"; shift 2 ;;
+         --rebuild)    rebuild="$2"; shift 2 ;;
+         --key)        key_file="$2"; shift 2 ;;
+         --save-snap)  save_snap="$2"; shift 2 ;;
+         --report)     report_file="$2"; shift 2 ;;
+         -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
+         *)            die "build: unknown option '$1'" ;;
+      esac
+   done
+
+   case "$mode" in
+      check|programs|image|all|kernel) ;;
+      *) die "build: invalid --mode '$mode' (check|programs|image|all|kernel)" ;;
+   esac
+
+   local needs_image=0
+   case "$mode" in image|all|kernel) needs_image=1 ;; esac
+
+   if [ "$needs_image" = "1" ]; then
+      [ -n "$version" ] || die "build: --version is required for mode '$mode'"
+      if [ "$key_file" != "auto" ]; then
+         [ -r "$key_file" ] || die "signing key not found: $key_file (pass --key auto for a dev key)"
+      fi
+      check_host_space_gb 15
+   else
+      check_host_space_gb 2
+   fi
+
+   local ts rundir start_ts end_ts elapsed
+   ts="$(date -u +%Y%m%d-%H%M%S)"
+   rundir="$REPO/vm/scratch/pipeline/${ts}-build-${mode}"
+   mkdir -p "$rundir" "$out_dir"
+   [ -n "$report_file" ] || report_file="$rundir/report.md"
+   start_ts=$(date +%s)
+
+   require_vm_off
+   start_file_server
+
+   say "Packing fresh repository tarball (vm/push-repo.sh --tarball)..."
+   bash "$REPO/vm/push-repo.sh" --tarball > "$rundir/tarball.log" 2>&1
+
+   say "Restoring build snapshot '$build_snap'..."
+   "$VB" snapshot "$VM" restore "$build_snap"
+   say "Starting build VM headless..."
+   "$VB" startvm "$VM" --type headless
+
+   bootstrap_build_live_session "$rundir"
+
+   # Sync clock and mount SCRATCH091 + STAGE2
+   local utc_now
+   utc_now="$(date -u '+%Y-%m-%d %H:%M:%S')"
+   say "Syncing guest clock ($utc_now UTC) and mounting SCRATCH091 + STAGE2..."
+   S "set -e
+      date -u -s '$utc_now' >/dev/null
+      mkdir -p /Mount/Scratch /Mount/Stage2
+      mountpoint -q /Mount/Scratch || mount LABEL=SCRATCH091 /Mount/Scratch
+      mountpoint -q /Mount/Stage2  || mount LABEL=STAGE2 /Mount/Stage2
+      df -h /Mount/Scratch /Mount/Stage2" | tee "$rundir/mounts.log"
+
+   say "Unpacking fresh repository checkout into /Mount/Scratch/goborefined..."
+   S "set -e
+      rm -rf /Mount/Scratch/goborefined.new
+      mkdir -p /Mount/Scratch/goborefined.new
+      wget -qO- http://10.0.2.2:8766/goborefined-src.tgz | tar xzf - --strip-components=1 -C /Mount/Scratch/goborefined.new
+      rm -rf /Mount/Scratch/goborefined
+      mv /Mount/Scratch/goborefined.new /Mount/Scratch/goborefined
+      ls -d /Mount/Scratch/goborefined/build/build.sh"
+
+   # Fail-fast GoboHide patch check in kernel mode
+   if [ "$mode" = "kernel" ]; then
+      say "Kernel mode: verifying GoboHide patch applies cleanly (dry-run)..."
+      S "set -e
+         cd /Mount/Scratch/goborefined
+         kver=\$(head -n 1 spin/kernel-version)
+         ktar=/Mount/Scratch/work/sources/linux-\$kver.tar.xz
+         if [ -f \"\$ktar\" ]; then
+            t=\$(mktemp -d /tmp/gobohide-dryrun.XXXXXX)
+            trap 'rm -rf \"\$t\"' EXIT
+            tar xf \"\$ktar\" -C \"\$t\"
+            patch --dry-run -p1 -d \"\$t/linux-\$kver\" < spin/patches/linux-6.12.16-gobohide.patch
+            echo 'GOBOHIDE-DRYRUN-OK'
+         else
+            echo 'NOTE: kernel tarball not cached yet; will be fetched and patched in programs step'
+         fi" > "$rundir/gobohide-dryrun.log" 2>&1 || die "GoboHide patch dry-run FAILED (see $rundir/gobohide-dryrun.log)"
+   fi
+
+   # Stream signing key into guest RAM (/dev/shm) only when making an image
+   local key_env=""
+   if [ "$needs_image" = "1" ] && [ "$key_file" != "auto" ]; then
+      say "Streaming signing key into guest /dev/shm (RAM only, mode 600)..."
+      S "umask 077; cat > /dev/shm/gobo-update-signing.pem; chmod 600 /dev/shm/gobo-update-signing.pem" < "$key_file"
+      key_env="GOBO_SIGNING_KEY=/dev/shm/gobo-update-signing.pem"
+   fi
+
+   local build_cmd="$mode"
+   local extra_env=""
+   [ -n "$version" ] && extra_env="VERSION=$version"
+   if [ "$mode" = "kernel" ]; then
+      build_cmd="all"
+      rebuild="linux rtl8852au"
+   fi
+   [ -n "$rebuild" ] && extra_env="$extra_env REBUILD='$rebuild'"
+
+   say "Running build/build.sh $build_cmd (logging to $rundir/build.log)..."
+   local build_rc=0
+   S "cd /Mount/Scratch/goborefined && WORK=/Mount/Scratch/work STAGE2=/Mount/Stage2/stage2 $extra_env $key_env bash build/build.sh $build_cmd" \
+      > "$rundir/build.log" 2>&1 || build_rc=$?
+
+   # Belt-and-suspenders check: ensure signing key is gone from guest RAM
+   S "rm -f /dev/shm/gobo-update-signing.pem" >/dev/null 2>&1 || true
+
+   if [ "$build_rc" != "0" ]; then
+      say "Build failed with exit code $build_rc (tail of log):"
+      tail -n 30 "$rundir/build.log" || true
+      S "cd /Mount/Scratch/goborefined && WORK=/Mount/Scratch/work STAGE2=/Mount/Stage2/stage2 bash build/build.sh unmount" >/dev/null 2>&1 || true
+      poweroff_vm
+      die "build/build.sh $build_cmd failed (rc=$build_rc; see $rundir/build.log)"
+   fi
+
+   local iso_sha="-" upd_sha="-"
+   if [ "$needs_image" = "1" ]; then
+      say "Copying outputs to $out_dir and verifying sha256 checksums..."
+      local f
+      for f in \
+         "GoboRefined-${version}.iso" \
+         "GoboRefined-${version}.iso.sha256" \
+         "GoboRefined-${version}.update" \
+         "GoboRefined-${version}.update.sha256" \
+         "GoboRefined-${version}.build.log"
+      do
+         S "cat '/Mount/Scratch/work/output/$f'" > "$out_dir/$f"
+      done
+      (cd "$out_dir" && sha256sum -c "GoboRefined-${version}.iso.sha256" && sha256sum -c "GoboRefined-${version}.update.sha256") \
+         | tee "$rundir/checksums.log"
+      iso_sha=$(awk '{print $1}' "$out_dir/GoboRefined-${version}.iso.sha256")
+      upd_sha=$(awk '{print $1}' "$out_dir/GoboRefined-${version}.update.sha256")
+   fi
+
+   say "Unmounting build roots and powering off build VM..."
+   S "cd /Mount/Scratch/goborefined && WORK=/Mount/Scratch/work STAGE2=/Mount/Stage2/stage2 bash build/build.sh unmount; sync; umount /Mount/Stage2 /Mount/Scratch 2>/dev/null || true" >/dev/null 2>&1 || true
+   poweroff_vm
+
+   if [ -n "$save_snap" ]; then
+      [ "$(vm_state)" = "poweroff" ] || die "Refusing to snapshot non-powered-off VM"
+      say "Taking powered-off build snapshot '$save_snap'..."
+      "$VB" snapshot "$VM" take "$save_snap" --description "pipeline build mode=$mode version=${version:-none} $(date -u +%Y-%m-%d)"
+   fi
+
+   end_ts=$(date +%s)
+   elapsed=$((end_ts - start_ts))
+
+   {
+      echo "# GoboRefined Pipeline Build Report"
+      echo
+      echo "- **Date (UTC):** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "- **Build snapshot:** \`$build_snap\`${save_snap:+ -> saved \`$save_snap\`}"
+      echo "- **Mode:** \`$mode\`${rebuild:+ (REBUILD=\`$rebuild\`)}"
+      echo "- **Version:** \`${version:-n/a}\`"
+      echo "- **Result:** **PASS** (${elapsed}s)"
+      if [ "$needs_image" = "1" ]; then
+         echo "- **ISO sha256:** \`$iso_sha\` (\`$out_dir/GoboRefined-${version}.iso\`)"
+         echo "- **Update sha256:** \`$upd_sha\` (\`$out_dir/GoboRefined-${version}.update\`)"
+      fi
+      echo "- **Build log:** \`$rundir/build.log\`"
+   } > "$report_file"
+
+   say "Report written to: $report_file"
+   cat "$report_file"
+}
+
+###############################################################################
+# Subcommand: release (build + test)
+###############################################################################
+cmd_release() {
+   local version="" mode="all" build_snap="$DEFAULT_BUILD_SNAP" test_snap="$DEFAULT_TEST_SNAP"
+   local out_dir="$REPO/dist" save_build_snap=""
+   while [ $# -gt 0 ]; do
+      case "$1" in
+         --version)         version="$2"; shift 2 ;;
+         --mode)            mode="$2"; shift 2 ;;
+         --build-snap)      build_snap="$2"; shift 2 ;;
+         --test-snap)       test_snap="$2"; shift 2 ;;
+         --out)             out_dir="$2"; shift 2 ;;
+         --save-build-snap) save_build_snap="$2"; shift 2 ;;
+         -h|--help)         sed -n '2,15p' "$0"; exit 0 ;;
+         *)                 die "release: unknown option '$1'" ;;
+      esac
+   done
+   [ -n "$version" ] || die "release: --version is required"
+
+   local ts rundir
+   ts="$(date -u +%Y%m%d-%H%M%S)"
+   rundir="$REPO/vm/scratch/pipeline/${ts}-release-${version}"
+   mkdir -p "$rundir"
+
+   local -a bargs=(--version "$version" --mode "$mode" --build-snap "$build_snap" --out "$out_dir" --report "$rundir/build-report.md")
+   [ -n "$save_build_snap" ] && bargs+=(--save-snap "$save_build_snap")
+   cmd_build "${bargs[@]}"
+
+   cmd_test --snapshot "$test_snap" --update "$out_dir/GoboRefined-${version}.update" --report "$rundir/test-report.md"
+
+   {
+      cat "$rundir/build-report.md"
+      echo
+      echo "---"
+      echo
+      cat "$rundir/test-report.md"
+   } > "$rundir/report.md"
+   say "Combined release report: $rundir/report.md"
+}
+
+###############################################################################
+# Dispatch
+###############################################################################
+[ $# -ge 1 ] || { sed -n '2,15p' "$0"; exit 1; }
+SUB="$1"; shift
+case "$SUB" in
+   test)      cmd_test "$@" ;;
+   build)     cmd_build "$@" ;;
+   release)   cmd_release "$@" ;;
+   -h|--help) sed -n '2,15p' "$0" ;;
+   *)         die "unknown command '$SUB' (expected: test | build | release)" ;;
+esac

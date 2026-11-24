@@ -30,3 +30,4 @@
 /vm/serve/run-*.sh
 /vm/lab-ssh-cmd.sh
 /vm/scratch/
+/watch/

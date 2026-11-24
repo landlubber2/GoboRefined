@@ -1354,7 +1354,34 @@ case "$cmd" in
       apps_list_prune
       apps_mime_refresh
       lxdm_userlist || echo "gobo-settings-helper: note: the login screen's list of accounts was not updated" >&2   # 0.10.8
+      # P3: keep newest valid Firefox ESR active across A/B updates, and run daily auto-update check
+      if [ -x /System/Index/bin/gobo-browser-update ]
+      then
+         /System/Index/bin/gobo-browser-update reconcile > /dev/null 2>&1 || true
+         ( sleep 45; /System/Index/bin/gobo-browser-update auto-run ) > /dev/null 2>&1 < /dev/null &
+      fi
       ;;
+
+   # --- P3: Browser lane (Firefox ESR updates) ---------------------------------------------
+   browser-update)
+      nargs 0 "$@"; need_admin_caller
+      [ -x /System/Index/bin/gobo-browser-update ] || die "gobo-browser-update is not installed"
+      log "browser update requested by $caller"
+      /System/Index/bin/gobo-browser-update update ;;
+
+   browser-undo)
+      nargs 0 "$@"; need_admin_caller
+      [ -x /System/Index/bin/gobo-browser-update ] || die "gobo-browser-update is not installed"
+      log "browser undo requested by $caller"
+      /System/Index/bin/gobo-browser-update undo ;;
+
+   browser-auto)
+      nargs 1 "$@"; need_admin_caller
+      [ -x /System/Index/bin/gobo-browser-update ] || die "gobo-browser-update is not installed"
+      case "$1" in
+         on|off) /System/Index/bin/gobo-browser-update auto "$1"; log "browser auto-update set to $1 by $caller" ;;
+         *) die "say on or off" ;;
+      esac ;;
 
    # --- 0.10.2: disks and USB drives per account ------------------------------------------
    boot-disks)   # (boot scripts) groups of the disks, mounts, /Mount/Disks, the list for Settings

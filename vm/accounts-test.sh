@@ -46,7 +46,7 @@ fi
 
 if [ "${1:-}" = session ]; then
    L() { S "sh /tmp/lab-desktop.sh kid '$1'"; }
-   S 'wget -qO /tmp/lab-desktop.sh http://10.0.2.2:8766/lab-desktop.sh'
+   S '[ -s /tmp/lab-desktop.sh ] || wget -qO /tmp/lab-desktop.sh http://10.0.2.2:8766/lab-desktop.sh'
    ok "session: kid's desktop knows it is Simple" "$(L 'return tostring(spin_simple.is_simple)')" "true"
    items=$(L 'local t = {} for _, i in ipairs(spin_debug.mainmenu.items) do table.insert(t, i.label and i.label.text or "?") end return table.concat(t, "|")')
    no "session: no Terminal in the menu" "$items" "Terminal"
